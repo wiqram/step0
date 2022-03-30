@@ -45,8 +45,8 @@ fi
 kubectl apply -f $HOME/Ideaprojects/jenkins/compiled.yaml
 
 #################container-registry#############################
-#create k8s components for private container registry
-kubectl apply -f $HOME/Ideaprojects/container-registry/private-registry.yaml
+#create k8s components for private container registry - NOT USED BCOZ USING MINIKUBE REGISTRY
+#kubectl apply -f $HOME/Ideaprojects/container-registry/private-registry.yaml
 
 #################qcguy#############################
 #create k8s namespace for qcguy
