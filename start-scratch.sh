@@ -23,7 +23,7 @@ if kubectl version; then
   else
     echo "Minikube NOT running - Creating one now"
     #minikube start --cpus 4 --memory 16384 --nodes 2 #--driver=none--driver=docker --alsologtostderr -v=4
-    minikube start --cpus 6 --memory 16384 --network 5million --mount-string="/home/cloud/Ideaprojects/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000"
+    minikube start --cpus 6 --memory 16384 --network 5million --mount-string="/home/cloud/Ideaprojects/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.housekeeping-interval=10s
     #minikube start
     #set strictARP to true to allow for MetalLB loadbalancer
     #kubectl get configmap kube-proxy -n kube-system -o yaml | sed -e "s/strictARP: false/strictARP: false/" | kubectl apply -f - -n kube-system
@@ -36,11 +36,17 @@ if kubectl version; then
 
     #to install docker container registry
     minikube addons enable registry
+
+    #setup metrics server for minikube
+    minikube addons enable metrics-server
 fi
 
 #allow minikube to connect to local docker images
 #eval $(minikube -p minikube docker-env)
 #################jenkins###########################
+#create a customer jenkins/inbound-agent with k8s and curl and wget pre-installed and pushed to private repo
+docker build -t container-registry.traderyolo.com/jenkins-inbound-agent-vik:cloud .
+docker push container-registry.traderyolo.com/jenkins-inbound-agent-vik:cloud
 #create k8s components for jenkins
 kubectl apply -f $HOME/Ideaprojects/jenkins/compiled.yaml
 
