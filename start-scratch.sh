@@ -45,7 +45,14 @@ fi
 #eval $(minikube -p minikube docker-env)
 #################jenkins###########################
 #create a customer jenkins/inbound-agent with k8s and curl and wget pre-installed and pushed to private repo
-docker build -t container-registry.traderyolo.com/jenkins-inbound-agent-vik:cloud .
+#if [[ "$(docker image inspect 172.16.238.2:5000/jenkins-inbound-agent-vik:cloud 2> /dev/null)" == "" ]]; then
+if docker image inspect container-registry.traderyolo.com/jenkins-inbound-agent-vik:cloud; then
+  # docker image for inbound agent doesnt exist. create one
+  echo "custom jenkins/inbound-agent image does exist - No need to create one"
+  else
+    echo "custom jenkins/inbound-agent DOES NOT exist - Creating one now"
+    docker build -t container-registry.traderyolo.com/jenkins-inbound-agent-vik:cloud $HOME/Ideaprojects/jenkins/inbound-agent/.
+fi
 docker push container-registry.traderyolo.com/jenkins-inbound-agent-vik:cloud
 #create k8s components for jenkins
 kubectl apply -f $HOME/Ideaprojects/jenkins/compiled.yaml
