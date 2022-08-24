@@ -7,6 +7,7 @@
 
 # What to backup. 
 backup_files="/home/cloud/Ideaprojects/minikube-mnt"
+backup_files2="/home/cloud/Ideaprojects/nginx"
 
 # Where to backup to.
 dest="/media/cloud/backup/minikube-mnt-backups"
@@ -17,12 +18,12 @@ hostname=$(hostname -s)
 archive_file="$hostname-$day.tgz"
 
 # Print start status message.
-echo "Backing up $backup_files to $dest/$archive_file"
+echo "Backing up $backup_files and $backup_files2 to $dest/$archive_file"
 date
 echo
 
 # Backup the files using tar.
-tar czf $dest/$archive_file $backup_files
+tar -czf $dest/$archive_file $backup_files $backup_files2
 
 # Print end status message.
 echo
