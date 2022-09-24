@@ -10,7 +10,7 @@ backup_files="/home/cloud/Ideaprojects/minikube-mnt"
 backup_files2="/home/cloud/Ideaprojects/nginx"
 
 # Where to backup to.
-dest="/media/cloud/backup/minikube-mnt-backups"
+dest="/mnt/backup/minikube-mnt-backups/"
 
 # Create archive filename.
 day=$(date +%m-%d-%y)
