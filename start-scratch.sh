@@ -47,7 +47,6 @@ fi
 echo "deploying vault"
 cd $HOME/Ideaprojects/vault/
 bash start-vault.sh
-#################vault###########################
 #################jenkins###########################
 #create a customer jenkins/inbound-agent with k8s and curl and wget pre-installed and pushed to private repo
 #if [[ "$(docker image inspect 172.16.238.2:5000/jenkins-inbound-agent-vik:cloud 2> /dev/null)" == "" ]]; then
@@ -73,6 +72,14 @@ kubectl create namespace qcguy --dry-run=client -o yaml | kubectl apply -f -
 kubectl create configmap qcguy-configmap --from-file=$HOME/Ideaprojects/qcguy-ghost/config -n qcguy --dry-run=true -o yaml | kubectl apply -f -
 #create k8s components for qcguy
 kubectl apply -f $HOME/Ideaprojects/qcguy-ghost/compiled.yaml
+
+#################tatesremedies#############################
+#create k8s namespace for tatesremedies
+#kubectl create namespace tatesremedies --dry-run=client -o yaml | kubectl apply -f -
+#create configmap for tatesremedies
+#kubectl create configmap tatesremedies-configmap --from-file=$HOME/Ideaprojects/tatesremedies/config -n tatesremedies --dry-run=true -o yaml | kubectl apply -f -
+#create k8s components for tatesremedies
+#kubectl apply -f $HOME/Ideaprojects/tatesremedies/compiled.yaml
 
 #################################build yolo jenkins pipeline remotely##########################
 #wget --auth-no-challenge --user=admin --password=5ad344f0518640f62d0483084bb889bc http://13.126.143.49:8080/job/ANT//build?token=iFBDOBhNhaxL4T9ass93HRXun2JF161Z
