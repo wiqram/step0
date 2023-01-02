@@ -23,7 +23,8 @@ if kubectl version; then
 else
   echo "Minikube NOT running - Creating one now"
   #minikube start --cpus 4 --memory 16384 --nodes 2 #--driver=none--driver=docker --alsologtostderr -v=4
-  minikube start --cpus 6 --memory 16384 --network 5million --mount-string="/home/cloud/Ideaprojects/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.housekeeping-interval=10s
+  #minikube start --cpus 6 --memory 16384 --disk-size 25g --driver=kvm2 --kvm-gpu --network 5million --mount-string="/home/cloud/Ideaprojects/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.housekeeping-interval=10s
+  minikube start --cpus 6 --memory 16384 --disk-size 25g --driver=kvm2 --kvm-gpu --network="5million" --mount-string="/home/cloud/Ideaprojects/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.housekeeping-interval=10s
   #minikube start
   #set strictARP to true to allow for MetalLB loadbalancer
   #kubectl get configmap kube-proxy -n kube-system -o yaml | sed -e "s/strictARP: false/strictARP: false/" | kubectl apply -f - -n kube-system
@@ -40,7 +41,7 @@ else
   #setup metrics server for minikube
   minikube addons enable metrics-server
 fi
-
+MINIKUBEIP=$(minikube ip)
 #allow minikube to connect to local docker images
 #eval $(minikube -p minikube docker-env)
 #################vault###########################
@@ -51,13 +52,16 @@ bash start-vault.sh
 #create a customer jenkins/inbound-agent with k8s and curl and wget pre-installed and pushed to private repo
 #if [[ "$(docker image inspect 172.16.238.2:5000/jenkins-inbound-agent-vik:cloud 2> /dev/null)" == "" ]]; then
 if docker image inspect container-registry.traderyolo.com/jenkins-inbound-agent-vik:cloud; then
+#if docker image inspect $MINIKUBEIP:5000/jenkins-inbound-agent-vik:cloud; then
   # docker image for inbound agent doesnt exist. create one
   echo "custom jenkins/inbound-agent image does exist - No need to create one"
 else
   echo "custom jenkins/inbound-agent DOES NOT exist - Creating one now"
   docker build -t container-registry.traderyolo.com/jenkins-inbound-agent-vik:cloud $HOME/Ideaprojects/jenkins/inbound-agent/.
+  #docker build -t $MINIKUBEIP:5000/jenkins-inbound-agent-vik:cloud $HOME/Ideaprojects/jenkins/inbound-agent/.
 fi
 docker push container-registry.traderyolo.com/jenkins-inbound-agent-vik:cloud
+#docker push $MINIKUBEIP:5000/jenkins-inbound-agent-vik:cloud
 #create k8s components for jenkins
 kubectl apply -f $HOME/Ideaprojects/jenkins/compiled.yaml
 
