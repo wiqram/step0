@@ -34,13 +34,19 @@ else
   #This will deploy MetalLB to your cluster, under the metallb-system namespace
   #now install metallb config
   #kubectl apply -f metallb-config.yaml
-
-  #to install docker container registry
-  minikube addons enable registry
-
-  #setup metrics server for minikube
-  minikube addons enable metrics-server
+  #sleep to allow for nginx to be updted with latest minikube kvm ip
+  echo "now sleeping for 3 minutes to allow for nginx to be updted with latest minikube kvm ip"
+  sleep 3m
 fi
+#to install docker container registry
+minikube addons enable registry
+#setup metrics server for minikube
+minikube addons enable metrics-server
+minikube addons enable ingress
+minikube addons enable dashboard
+minikube addons enable metrics-server
+minikube addons enable nvidia-gpu-device-plugin
+minikube addons enable nvidia-driver-installer
 #MINIKUBEIP=$(minikube ip)
 #allow minikube to connect to local docker images
 #eval $(minikube -p minikube docker-env)

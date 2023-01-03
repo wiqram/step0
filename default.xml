@@ -1,0 +1,27 @@
+<network>
+    <name>default</name>
+    <uuid>9a05da11-e96b-47f3-8253-a3a482e445f5</uuid>
+    <forward mode='nat'/>
+    <bridge name='virbr0' stp='on' delay='0'/>
+    <mac address='52:54:00:fb:3e:03'/>
+    <ip address='192.168.122.1' netmask='255.255.255.0'>
+        <dhcp>
+            <!--<range start='192.168.122.2' end='192.168.122.254'/>-->
+            <range start='192.168.122.100' end='192.168.122.254'/>
+            <host mac='52:54:00:6c:3c:01' name='vm1' ip='192.168.122.11'/>
+            <host mac='52:54:00:6c:3c:02' name='vm2' ip='192.168.122.12'/>
+            <host mac='52:54:00:6c:3c:03' name='vm3' ip='192.168.122.12'/>
+        </dhcp>
+    </ip>
+</network>
+
+<!--        Now to add that network permanently to our KVM host, run the following:
+
+        sudo virsh net-define &#45;&#45;file default.xml
+        Stage 2 - Start and autostart the network
+        To manually start the network run:
+
+        sudo virsh net-start default
+        To have the network automatically start up in future run:
+
+        sudo virsh net-autostart &#45;&#45;network default-->
