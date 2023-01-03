@@ -41,7 +41,7 @@ else
   #setup metrics server for minikube
   minikube addons enable metrics-server
 fi
-MINIKUBEIP=$(minikube ip)
+#MINIKUBEIP=$(minikube ip)
 #allow minikube to connect to local docker images
 #eval $(minikube -p minikube docker-env)
 #################vault###########################
