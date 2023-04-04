@@ -3,8 +3,7 @@
 # Minikube update script file
 
 minikube delete && \
-sudo rm -rf /usr/local/bin/minikube && sudo rm -r ${HOME}/.minikube \
-sudo curl -Lo minikube https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64 && \
+sudo rm -rf /usr/local/bin/minikube && sudo rm -r ${HOME}/.minikube && sudo curl -Lo minikube https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64 && \
 sudo chmod +x minikube && \
 sudo cp minikube /usr/local/bin/ && \
 sudo rm minikube && \
