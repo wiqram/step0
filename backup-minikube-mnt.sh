@@ -9,6 +9,10 @@
 backup_files="/home/cloud/Ideaprojects/minikube-mnt"
 backup_files2="/home/cloud/Ideaprojects/nginx"
 
+#First get the vault config files for yolo and helpmepdf to minikube-mnt
+cp /home/cloud/Ideaprojects/vault/helpmepdf-env-variables.sh $backup_files
+cp /home/cloud/Ideaprojects/vault/yolo-env-variables.sh $backup_files
+
 # Where to backup to.
 dest="/mnt/backup/minikube-mnt-backups/"
 
