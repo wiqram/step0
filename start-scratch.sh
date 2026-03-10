@@ -23,7 +23,8 @@ if kubectl version; then
 else
   echo "Minikube NOT running - Creating one now"
   #minikube start --cpus 4 --memory 16384 --nodes 2 #--driver=none--driver=docker --alsologtostderr -v=4
-  minikube start --cpus 6 --memory 16384 --disk-size 40g --driver=docker --network 5million --mount-string="/home/cloud/Ideaprojects/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
+  minikube start --cpus 12 --memory 32768 --disk-size 40g --driver=docker --network 5million --mount-string="/mnt/minikube-backups/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
+  #minikube start --cpus 12 --memory 32768 --disk-size 40g --driver=docker --network 5million --mount-string="/home/cloud/Ideaprojects/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
   #minikube start --cpus 6 --memory 16384 --disk-size 50g --driver=kvm2 --kvm-gpu --network="5million" --mount-string="/home/cloud/Ideaprojects/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
   #minikube start
   #set strictARP to true to allow for MetalLB loadbalancer
@@ -50,7 +51,7 @@ minikube addons enable registry
 #MINIKUBEIP=$(minikube ip)
 #allow minikube to connect to local docker images
 #eval $(minikube -p minikube docker-env)
-#################grafana-prometheus###########################
+###########x`######grafana-prometheus###########################
 echo "deploying grafana prometheus"
 cd $HOME/Ideaprojects/kube-prometheus/
 kubectl apply --server-side -f manifests/setup
@@ -91,6 +92,35 @@ kubectl create namespace qcguy --dry-run=client -o yaml | kubectl apply -f -
 kubectl create configmap qcguy-configmap --from-file=$HOME/Ideaprojects/qcguy-ghost/config -n qcguy --dry-run=client -o yaml | kubectl apply -f -
 #create k8s components for qcguy
 kubectl apply -f $HOME/Ideaprojects/qcguy-ghost/compiled.yaml
+
+#################Ollama#############################
+#create k8s namespace for ollama
+#kubectl create namespace ollama --dry-run=client -o yaml | kubectl apply -f -
+#create k8s components for ollama
+#kubectl apply -f $HOME/Ideaprojects/ollama/ollama-namespace.yaml
+#if docker image inspect container-registry.traderyolo.com/optionsollama:cloud; then
+  # docker image for optionsOllama doesnt exist. create one
+#  echo " optionsOllama image does exist - No need to create one"
+#else
+#  echo "optionsOllama DOES NOT exist - Creating one now"
+#  docker build -t container-registry.traderyolo.com/optionsollama:cloud $HOME/IdeaProjects/ollama/optionsOllama/.
+#fi
+#docker push container-registry.traderyolo.com/optionsollama:cloud
+
+#if docker image inspect container-registry.traderyolo.com/optionsapi:cloud; then
+  # docker image for optionsAPI doesnt exist. create one
+#  echo " optionsAPI image does exist - No need to create one"
+#else
+#  echo "optionsAPI DOES NOT exist - Creating one now"
+#  docker build -t container-registry.traderyolo.com/optionsapi:cloud $HOME/IdeaProjects/ollama/optionsAPI/.
+  #docker build -t $MINIKUBEIP:5000/jenkins-inbound-agent-vik:cloud $HOME/Ideaprojects/jenkins/inbound-agent/.
+#fi
+#docker push container-registry.traderyolo.com/optionsapi:cloud
+#create k8s components for ollama
+
+#kubectl apply -f $HOME/Ideaprojects/ollama/ollama-deployment.yaml
+#kubectl apply -f $HOME/Ideaprojects/ollama/api-deployment.yaml
+#kubectl apply -f $HOME/Ideaprojects/ollama/ingress.yaml
 
 #################tatesremedies#############################
 #create k8s namespace for tatesremedies
