@@ -93,6 +93,15 @@ kubectl create configmap qcguy-configmap --from-file=$HOME/Ideaprojects/qcguy-gh
 #create k8s components for qcguy
 kubectl apply -f $HOME/Ideaprojects/qcguy-ghost/compiled.yaml
 
+##################qcx#############################
+##create k8s namespace for qcx
+#kubectl create namespace qcx --dry-run=client -o yaml | kubectl apply -f -
+##create configmap for qcx
+#kubectl create configmap qcguy-configmap --from-file=$HOME/Ideaprojects/qcguy-ghost/config -n qcguy --dry-run=client -o yaml | kubectl apply -f -
+##create k8s components for qcguy
+#kubectl apply -f $HOME/IdeaProjects/qcx/k8s/deployment.yaml
+curl -X POST https://jenkins.traderyolo.com/job/QCX/build?token=qcx
+
 #################Ollama#############################
 #create k8s namespace for ollama
 #kubectl create namespace ollama --dry-run=client -o yaml | kubectl apply -f -

@@ -8,13 +8,15 @@
 # What to backup. 
 backup_files="/home/cloud/Ideaprojects/minikube-mnt"
 backup_files2="/home/cloud/Ideaprojects/nginx"
+backup_files3="/home/cloud/Ideaprojects/STEP0"
+backup_files4="/home/cloud/Ideaprojects/qcguy-ghost"
 
 #First get the vault config files for yolo and helpmepdf to minikube-mnt
 cp /home/cloud/Ideaprojects/vault/helpmepdf-env-variables.sh $backup_files
 cp /home/cloud/Ideaprojects/vault/yolo-env-variables.sh $backup_files
 
 # Where to backup to.
-dest="/mnt/backup/minikube-mnt-backups/"
+dest="/mnt/minikube-backups"
 
 # Create archive filename.
 day=$(date +%m-%d-%y)
@@ -22,12 +24,12 @@ hostname=$(hostname -s)
 archive_file="$hostname-$day.tgz"
 
 # Print start status message.
-echo "Backing up $backup_files and $backup_files2 to $dest/$archive_file"
+echo "Backing up $backup_files and $backup_files2 and $backup_files3 and $backup_files4 to $dest/$archive_file"
 date
 echo
 
 # Backup the files using tar.
-tar -czf $dest/$archive_file $backup_files $backup_files2
+tar -czf $dest/$archive_file $backup_files $backup_files2 $backup_files3 $backup_files4
 
 # Print end status message.
 echo
