@@ -23,7 +23,19 @@ if kubectl version; then
 else
   echo "Minikube NOT running - Creating one now"
   #minikube start --cpus 4 --memory 16384 --nodes 2 #--driver=none--driver=docker --alsologtostderr -v=4
-  minikube start --cpus 12 --memory 32768 --disk-size 40g --driver=docker --network 5million --gpus all --mount-string="/mnt/minikube-backups/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
+  #---------------------------------------------------------------------------------------------------------
+  # Resource-efficient start (see plan.md "Cluster resource efficiency" section). Key changes vs the old line:
+  #   --cpus 16            : CPU is compressible (throttles, never OOM-kills) so we give burst headroom while
+  #                          still leaving ~8 threads for the host (IntelliJ + Chrome). Mem is the hard limit, not CPU.
+  #   --memory 32768       : unchanged 32G envelope; reserves ~14G for OS/Docker/nginx-proxy-manager/IntelliJ/Chrome.
+  #   kubelet system/kube-reserved + eviction-hard : the docker driver reports the FULL host (24CPU/49G) as node
+  #                          capacity while Docker hard-caps the container at 12-16CPU/32G via cgroups. Without these
+  #                          the scheduler silently over-commits past 32G and the host kernel OOM-kills inside the
+  #                          cgroup (no swap = abrupt pod/node death). These flags make the kubelet reserve headroom
+  #                          and evict BEFORE the cgroup limit is hit. NOTE: also add zram swap on the host (see plan.md).
+  minikube start --cpus 16 --memory 32768 --disk-size 40g --driver=docker --network 5million --gpus all --mount-string="/mnt/minikube-backups/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.system-reserved=cpu=1,memory=2Gi --extra-config=kubelet.kube-reserved=cpu=1,memory=2Gi --extra-config=kubelet.eviction-hard="memory.available<1Gi,nodefs.available<10%" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
+  # Previous line (kept for reference): no kubelet reservations/eviction -> scheduler over-commits the 32G cgroup cap.
+  #minikube start --cpus 12 --memory 32768 --disk-size 40g --driver=docker --network 5million --gpus all --mount-string="/mnt/minikube-backups/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
   #minikube start --cpus 12 --memory 32768 --disk-size 40g --driver=docker --network 5million --mount-string="/home/cloud/Ideaprojects/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
   #minikube start --cpus 6 --memory 16384 --disk-size 50g --driver=kvm2 --kvm-gpu --network="5million" --mount-string="/home/cloud/Ideaprojects/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
   #minikube start
@@ -102,8 +114,9 @@ kubectl apply -f $HOME/Ideaprojects/qcguy-ghost/compiled.yaml
 #kubectl apply -f $HOME/IdeaProjects/qcx/k8s/deployment.yaml
 #curl -X POST https://jenkins.traderyolo.com/job/QCX/build?token=qcx
 #curl -X POST https://jenkins.traderyolo.com/job/predictonomy/build?token=predict
+echo "building predictonomy"
 curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/predictonomy/build?token=predict
-curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/QCX/build?token=qcx
+#curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/QCX/build?token=qcx
 
 #################Ollama#############################
 #create k8s namespace for ollama
@@ -149,16 +162,16 @@ sleep 1m
 curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/trading-microservices/build?token=yolobuildstep_0
 #curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/delete_mem_leak_java/build?token=delete_mem_leak_java
 ##################### ONLY FOR HSBC splunk-for-hsbc-demo - the lines with only one # can be dehashed to deploy splunk#############################
-echo "deploying splunk"
-cd $HOME/IdeaProjects/splunk-hsbc-demo/
-kubectl apply -f splunk-namespace.yaml
-kubectl apply -f compiled.yaml
-echo "splunk deployment done. now sleeping for 2 min before setting up splunk infra."
-sleep 3m
-cd $HOME/IdeaProjects/splunk-hsbc-demo/Automation/splunk-monitor/
+echo "End - NOT deploying splunk"
+#cd $HOME/IdeaProjects/splunk-hsbc-demo/
+#kubectl apply -f splunk-namespace.yaml
+#kubectl apply -f compiled.yaml
+#echo "splunk deployment done. now sleeping for 2 min before setting up splunk infra."
+#sleep 3m
+#cd $HOME/IdeaProjects/splunk-hsbc-demo/Automation/splunk-monitor/
 ##the below command can only run in bash
 ##export MONITORING_MACHINE='splunk.splunk.svc.cluster.local' && export HEC_TOKEN='25577715-5282-4f8b-ab9c-c8aa95a75bea' && export HEC_PORT='8088' && export GLOBAL_HEC_INSECURE_SSL='true' && export OBJECTS_INSECURE_SSL='true' && export METRICS_INSECURE_SSL='true' && export JOURNALD_PATH='/run/log/journal' && export KUBELET_PROTOCOL='http' && export METRICS_INDEX='em_metrics' && export LOG_INDEX='main' && export META_INDEX='em_meta' && export CLUSTER_NAME='minikube' && export SCK_DOWNLOAD_ONLY='false' && export HELM_RELEASE_NAME='helm' && export KUBERNETES_NAMESPACE='splunk-connect' && export CORE_OBJ='pods,nodes,component_statuses,config_maps,namespaces,persistent_volumes,persistent_volume_claims,resource_quotas,services,service_accounts,events' && export APPS_OBJ='daemon_sets,deployments,replica_sets,stateful_sets' && files=("kubernetes_connect_template.yaml" "deploy_sck_k8s.sh") && for each in "${files[@]}"; do wget -O- --no-check-certificate https://splunk.traderyolo.com:/en-US/static/app/splunk_app_infrastructure/kubernetes_connect/"$each" >$each; done && wget https://github.com/splunk/splunk-connect-for-kubernetes/releases/download/1.3.0/splunk-connect-for-kubernetes-1.3.0.tgz -O splunk-connect-for-kubernetes.tgz && bash deploy_sck_k8s.sh
 ##the below command can run in sh and bash.
-export MONITORING_MACHINE='splunk.splunk.svc.cluster.local' && export HEC_TOKEN='25577715-5282-4f8b-ab9c-c8aa95a75bea' && export HEC_PORT='8088' && export GLOBAL_HEC_INSECURE_SSL='true' && export OBJECTS_INSECURE_SSL='true' && export METRICS_INSECURE_SSL='true' && export JOURNALD_PATH='/run/log/journal' && export KUBELET_PROTOCOL='http' && export METRICS_INDEX='em_metrics' && export LOG_INDEX='main' && export META_INDEX='em_meta' && export CLUSTER_NAME='minikube' && export SCK_DOWNLOAD_ONLY='false' && export HELM_RELEASE_NAME='helm' && export KUBERNETES_NAMESPACE='splunk-connect' && export CORE_OBJ='pods,nodes,component_statuses,config_maps,namespaces,persistent_volumes,persistent_volume_claims,resource_quotas,services,service_accounts,events' && export APPS_OBJ='daemon_sets,deployments,replica_sets,stateful_sets' && set -- "kubernetes_connect_template.yaml" "deploy_sck_k8s.sh" && for each in "$@"; do wget -O- --no-check-certificate https://splunk.traderyolo.com:/en-US/static/app/splunk_app_infrastructure/kubernetes_connect/"$each" > $each; done && wget https://github.com/splunk/splunk-connect-for-kubernetes/releases/download/1.3.0/splunk-connect-for-kubernetes-1.3.0.tgz -O splunk-connect-for-kubernetes.tgz && bash deploy_sck_k8s.sh
+#export MONITORING_MACHINE='splunk.splunk.svc.cluster.local' && export HEC_TOKEN='25577715-5282-4f8b-ab9c-c8aa95a75bea' && export HEC_PORT='8088' && export GLOBAL_HEC_INSECURE_SSL='true' && export OBJECTS_INSECURE_SSL='true' && export METRICS_INSECURE_SSL='true' && export JOURNALD_PATH='/run/log/journal' && export KUBELET_PROTOCOL='http' && export METRICS_INDEX='em_metrics' && export LOG_INDEX='main' && export META_INDEX='em_meta' && export CLUSTER_NAME='minikube' && export SCK_DOWNLOAD_ONLY='false' && export HELM_RELEASE_NAME='helm' && export KUBERNETES_NAMESPACE='splunk-connect' && export CORE_OBJ='pods,nodes,component_statuses,config_maps,namespaces,persistent_volumes,persistent_volume_claims,resource_quotas,services,service_accounts,events' && export APPS_OBJ='daemon_sets,deployments,replica_sets,stateful_sets' && set -- "kubernetes_connect_template.yaml" "deploy_sck_k8s.sh" && for each in "$@"; do wget -O- --no-check-certificate https://splunk.traderyolo.com:/en-US/static/app/splunk_app_infrastructure/kubernetes_connect/"$each" > $each; done && wget https://github.com/splunk/splunk-connect-for-kubernetes/releases/download/1.3.0/splunk-connect-for-kubernetes-1.3.0.tgz -O splunk-connect-for-kubernetes.tgz && bash deploy_sck_k8s.sh
 
 ##docker run --restart=always --network 5million -d --name qcguy -p 2368:2368 -v /home/vik/IdeaProjects/qcguy-cms/config/config.production.json:/var/lib/ghost/config.production.json -v some-ghost-data:/var/lib/ghost/content ghost
