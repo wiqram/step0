@@ -117,6 +117,7 @@ Executed top to bottom (`set -e`, so any failure aborts the run):
 4. **Monitoring** – apply `kube-prometheus` (`manifests/setup` → wait for CRDs → `manifests/`) into `monitoring` ns.
 5. **Vault** – `cd ~/Ideaprojects/vault && bash start-vault.sh` (Helm install, init, unseal, policies, K8s auth, load per-app secrets from `/mnt`).
 6. **Jenkins** – build the custom `jenkins-inbound-agent-vik:cloud` image if absent, push to `container-registry.traderyolo.com`, then `kubectl apply` Jenkins manifests.
+6b. **vault-secrets-sync wiring** – after Jenkins is up, run `vault/scripts/setup-jenkins-pipeline.sh` to (re)create the `vault-secrets-sync` job and its credentials (`sops-age-key` + per-app `vault-approle-*`, from the AppRole secret_ids `start-vault.sh` just regenerated). Best-effort; idempotent.
 7. **qcguy** – create `qcguy` ns + configmap from `~/Ideaprojects/qcguy-ghost/config`, apply `compiled.yaml`.
 8. **predictonomy** – trigger Jenkins build via authenticated `curl` to `jenkins.traderyolo.com/job/predictonomy/build`.
 9. **yolo** – `sleep 1m`, then trigger Jenkins `trading-microservices` build.
@@ -142,10 +143,12 @@ ordering (Vault before Jenkins/apps) is what matters here. The vault repo owns i
 - **Per-app least-privilege policies** (`<app>-policy.hcl`): each app role reads only
   `kv/data/<app>/*` (the old `kv/*` wildcards that let any app read everything were
   removed). K8s auth roles are bound to each app's **own** namespace, not `*`.
-- Secret seeding is mid-transition (see vault `plan.md`):
-  - *Legacy:* per-app `*-env-variables.sh` from `/mnt/.../minikube-mnt/` (+ `upload-file-secrets.sh` for `*_B64` file secrets).
-  - *Going-forward:* declarative manifests `apps/<app>/<service>.env` (config, committed)
-    + `*.secret.sops.env` (SOPS+age encrypted), reconciled by `vault-sync.sh` (patch-based, never wipes).
+- Secret seeding (see vault `plan.md`): `start-vault.sh` seeds from the **declarative
+  manifests** `apps/<app>/<service>.env` (config) + `*.secret.sops.env` (SOPS+age
+  encrypted) via `vault-sync.sh --all` — the SAME source of truth the vault-secrets-sync
+  pipeline uses, so a full refresh never reverts a pipeline-applied change. Legacy
+  `*-env-variables.sh` from `/mnt` (+ `upload-file-secrets.sh`) is the automatic fallback
+  only if sops / the age key / the manifests are unavailable.
 - **Jenkins identity:** `start-vault.sh` provisions per-app AppRoles (`jenkins-<app>`,
   policy `jenkins-<app>-policy`, write only `kv/<app>/*`) via
   `scripts/setup-jenkins-approle.sh`. role_id/secret_id are written to
