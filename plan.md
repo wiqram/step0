@@ -14,17 +14,21 @@ Concrete, prioritized improvements found while documenting the stack
 - Splunk HEC token: `25577715-5282-4f8b-ab9c-c8aa95a75bea`
 - Vault userpass password `r00tT0k£n` (in `vault/start-vault.sh`)
 
-And **`vault/cluster-keys.json` (root token + unseal key) is git-tracked.** Anyone with
-repo access owns the entire cluster.
+Re **`cluster-keys.json`:** the vault repo's Phase 1 (2026-06) already moved it OUT of the
+repo to **`~/.vault/cluster-keys.json`** (0600); `start-vault.sh` writes there via
+`$VAULT_KEYS_FILE`, so it is no longer in any repo dir. The vault repo also tightened
+per-app policies to least privilege and provisions scoped Jenkins AppRoles instead of
+handing out root — see vault `plan.md`. **Still outstanding here in STEP0:** the Jenkins
+basic-auth/API token, the Splunk HEC token, and the `r00tT0k£n` userpass password.
 
-**Fix:**
-- Move all tokens/passwords to a single untracked `secrets.env` (or pull from Vault) and
-  `source` it at the top of the script: `curl ... "$JENKINS_USER:$JENKINS_TOKEN@..."`.
-- `git rm --cached vault/cluster-keys.json` and add it to `.gitignore`; store the unseal
-  key/root token in a password manager only.
+**Fix (STEP0 side):**
+- Move the Jenkins + Splunk tokens (and the Vault userpass password) to a single untracked
+  `secrets.env` and `source` it: `curl ... "$JENKINS_USER:$JENKINS_TOKEN@..."`.
 - **Rotate every credential above** — they must be considered compromised now.
-- Add a `.gitignore` rule for `*-env-variables.sh`, `cluster-keys.json`, `secrets.env`,
-  `*.hcl` if any contain secrets.
+- Add `.gitignore` rules for `secrets.env` and any `*-env-variables.sh` that land here.
+- Going-forward, app secrets flow through the vault repo's declarative manifests +
+  `vault-sync.sh` + the `vault-secrets-sync` Jenkins pipeline (AppRole auth), not the
+  inline `*-env-variables.sh` seeding.
 
 ### 2. Vault uses 1 key share / threshold 1
 Single unseal key = single point of compromise and no recovery quorum. For a personal

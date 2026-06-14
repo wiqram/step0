@@ -42,8 +42,13 @@ to a Kubernetes NodePort on `172.16.238.2`.
   the script; do not "normalize" a path without confirming which directory it resolves to.
 - **NodePort ↔ domain mapping** is owned by Nginx Proxy Manager (`~/Ideaprojects/nginx`),
   not by this repo. If you change a service's NodePort, the NPM proxy host must change too.
-- **Secrets are loaded by Vault** from `*-env-variables.sh` files on the `/mnt` mount;
-  apps authenticate to Vault via Kubernetes ServiceAccount auth.
+- **Secrets are owned by the vault repo, not STEP0.** STEP0 just calls `start-vault.sh`
+  in the right order. Apps authenticate to Vault via Kubernetes ServiceAccount auth.
+  Seeding is mid-transition: legacy `*-env-variables.sh` on `/mnt` → declarative
+  `apps/<app>/*.env` + SOPS-encrypted secrets reconciled by `vault-sync.sh`. `start-vault.sh`
+  also provisions per-app Jenkins AppRoles (`jenkins-<app>`) for the sync pipeline. The
+  Vault root token + unseal key now live at `~/.vault/cluster-keys.json` (outside any repo).
+  See the vault repo's `architecture.md` / `plan.md` for detail.
 - `set -e` is on in the main scripts — a single failing command aborts the whole run.
   Be deliberate about ordering and idempotency when editing.
 
@@ -57,9 +62,10 @@ to a Kubernetes NodePort on `172.16.238.2`.
   machine. Prefer `restart-minikube.sh` for an already-running host.
 - Prefer **`kubectl wait` / `kubectl rollout status`** over fixed `sleep` when adding
   new steps.
-- **Never commit secrets.** This repo has historically contained live tokens/passwords
-  inline (Jenkins API token, Vault password, Splunk HEC token) and `vault/cluster-keys.json`
-  is git-tracked. Do not add more; when touching those lines, move them to env/Vault. See `plan.md`.
+- **Never commit secrets.** This repo still contains live tokens/passwords inline
+  (Jenkins API token, Vault userpass password, Splunk HEC token) — see `plan.md` P0 #1 to
+  move + rotate them. (The vault repo already relocated `cluster-keys.json` to
+  `~/.vault/`, outside any repo.) Do not add more; move such lines to env/Vault.
 - This is a personal/home setup with no CI on the repo itself. Keep changes small,
   readable, and match the existing bash style (heavy inline `#` comments, alternative
   commands left commented for reference).

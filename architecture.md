@@ -132,12 +132,27 @@ cold rebuild.
 ## 5. Platform Services
 
 ### HashiCorp Vault (`~/Ideaprojects/vault/`)
-- Installed via Helm into the `vault` namespace.
-- `start-vault.sh`: init with 1 key share / threshold 1, unseal, write `admin` policy,
-  enable `userpass` (user `privatecloud`) and `kubernetes` auth, enable KV-v2 at `kv/`.
-- Per-app secrets loaded from `/mnt/.../minikube-mnt/*-env-variables.sh` (yolo, helpmepdf, ollama, predictonomy).
-- Per-app K8s auth roles + policies (`yolo-policy.hcl`, etc.) so pods authenticate by ServiceAccount.
-- `cluster-keys.json` holds the **root token + unseal key** (see security notes in `plan.md`).
+STEP0 delegates **all** Vault setup to `bash start-vault.sh` in the vault repo; the
+ordering (Vault before Jenkins/apps) is what matters here. The vault repo owns its own
+`architecture.md` / `plan.md` / `CLAUDE.md` — defer to those for detail. Current shape:
+- Installed via Helm into the `vault` namespace; images **pinned** (vault `2.0.2`,
+  vault-k8s `1.7.4` — no longer `latest`).
+- `start-vault.sh`: init 1 share / threshold 1, unseal, `admin` policy, `userpass`
+  (user `privatecloud`) + `kubernetes` auth, KV-v2 at `kv/`.
+- **Per-app least-privilege policies** (`<app>-policy.hcl`): each app role reads only
+  `kv/data/<app>/*` (the old `kv/*` wildcards that let any app read everything were
+  removed). K8s auth roles are bound to each app's **own** namespace, not `*`.
+- Secret seeding is mid-transition (see vault `plan.md`):
+  - *Legacy:* per-app `*-env-variables.sh` from `/mnt/.../minikube-mnt/` (+ `upload-file-secrets.sh` for `*_B64` file secrets).
+  - *Going-forward:* declarative manifests `apps/<app>/<service>.env` (config, committed)
+    + `*.secret.sops.env` (SOPS+age encrypted), reconciled by `vault-sync.sh` (patch-based, never wipes).
+- **Jenkins identity:** `start-vault.sh` provisions per-app AppRoles (`jenkins-<app>`,
+  policy `jenkins-<app>-policy`, write only `kv/<app>/*`) via
+  `scripts/setup-jenkins-approle.sh`. role_id/secret_id are written to
+  `~/.vault/jenkins-approle/<app>.env` (0600) — paste into Jenkins credentials. The
+  `vault-secrets-sync` pipeline (vault repo `ci/Jenkinsfile`) uses these instead of root.
+- `cluster-keys.json` (root token + unseal key) now lives at **`~/.vault/cluster-keys.json`**
+  (0600, outside any repo), written via `$VAULT_KEYS_FILE` — not in the vault repo dir.
 
 ### Monitoring — kube-prometheus (`~/Ideaprojects/kube-prometheus/`)
 - Full Prometheus Operator + Grafana + Alertmanager stack in the `monitoring` ns.
@@ -147,6 +162,10 @@ cold rebuild.
 - Custom `inbound-agent` image (kubectl + curl + wget pre-installed) pushed to the private registry.
 - Pipelines triggered remotely by `curl -X POST` with basic-auth + job token:
   `predictonomy`, `trading-microservices` (yolo). Builds produce images that land in the registry and deploy to K8s.
+- **`vault-secrets-sync` pipeline** (vault repo `ci/Jenkinsfile`) additionally needs
+  **`vault`, `sops`, `age`, `jq`** on the agent image, the `sops-age-key` credential, and
+  the per-app `vault-approle-id`/`vault-approle-secret` credentials. If you rebuild the
+  inbound-agent image, add those CLIs (see vault `plan.md`).
 
 ### Image Registry
 - Two mechanisms coexist: the Minikube `registry` addon (in-cluster, `172.16.238.2:5000`)
