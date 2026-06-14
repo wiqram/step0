@@ -230,8 +230,8 @@ R1+R2). Values derived from observed usage:
 | qcguy (Ghost) | 1 | 256Mi / 200m | 1Gi / 2 | 595Mi, 1252m spike | user-facing |
 | ollama (GPU) | 1 | 2Gi / 500m + gpu:1 | 6Gi / 4 + gpu:1 | 1786Mi | shared LLM backend |
 | ollama UI | 1 | 256Mi / 100m | 1Gi / 1 | 864Mi | check why so high |
-| predictonomy-web | **2 → 1** | 128Mi / 100m | 512Mi / 1 | 78Mi | tiny |
-| predictonomy-postgres | 1 | 256Mi / 100m | 1Gi / 1 | 465Mi | |
+| predictonomy-web | **keep 2** | 100m / 512Mi | 750m / 2Gi | 78Mi | already set; 2 replicas deliberate (anti-502 HA) + HPA min2/max4 — do NOT trim |
+| predictonomy-postgres | 1 | 100m / 256Mi | 500m / 512Mi | 465Mi | already set |
 | yolo services (each) | 1 | 64–128Mi / 50m | 256–512Mi / 1 | <72Mi idle | mongo → 512Mi limit |
 | bestrentaladmin | 1 | 64Mi / 50m | 256Mi / 1 | — | ~5 visitors/day |
 | prometheus | **2 → 1** | 512Mi / 200m | 1.5Gi / 1 | ~790Mi×2 | + 7d retention |
