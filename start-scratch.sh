@@ -135,33 +135,14 @@ curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.tr
 #curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/QCX/build?token=qcx
 
 #################Ollama#############################
-#create k8s namespace for ollama
-#kubectl create namespace ollama --dry-run=client -o yaml | kubectl apply -f -
-#create k8s components for ollama
-#kubectl apply -f $HOME/Ideaprojects/ollama/ollama-namespace.yaml
-#if docker image inspect container-registry.traderyolo.com/optionsollama:cloud; then
-  # docker image for optionsOllama doesnt exist. create one
-#  echo " optionsOllama image does exist - No need to create one"
-#else
-#  echo "optionsOllama DOES NOT exist - Creating one now"
-#  docker build -t container-registry.traderyolo.com/optionsollama:cloud $HOME/IdeaProjects/ollama/optionsOllama/.
-#fi
-#docker push container-registry.traderyolo.com/optionsollama:cloud
-
-#if docker image inspect container-registry.traderyolo.com/optionsapi:cloud; then
-  # docker image for optionsAPI doesnt exist. create one
-#  echo " optionsAPI image does exist - No need to create one"
-#else
-#  echo "optionsAPI DOES NOT exist - Creating one now"
-#  docker build -t container-registry.traderyolo.com/optionsapi:cloud $HOME/IdeaProjects/ollama/optionsAPI/.
-  #docker build -t $MINIKUBEIP:5000/jenkins-inbound-agent-vik:cloud $HOME/Ideaprojects/jenkins/inbound-agent/.
-#fi
-#docker push container-registry.traderyolo.com/optionsapi:cloud
-#create k8s components for ollama
-
-#kubectl apply -f $HOME/Ideaprojects/ollama/ollama-deployment.yaml
-#kubectl apply -f $HOME/Ideaprojects/ollama/api-deployment.yaml
-#kubectl apply -f $HOME/Ideaprojects/ollama/ingress.yaml
+# Deploy ollama via its Jenkins job (wiqram/ollama Jenkinsfile): it creates the
+# `ollama` namespace + the `vault-secrets` ServiceAccount and applies the ollama
+# + webui deployments, which fetch kv/ollama/* through the Vault agent injector.
+# The Vault side (ollama-role/policy, k8s auth config, kv/ollama/* seed) is set
+# up by start-vault.sh above. The ollama job has no build token, so trigger it as
+# the authenticated user (the API token authorises the build, no token needed).
+echo "building ollama"
+curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/ollama/build
 
 #################tatesremedies#############################
 #create k8s namespace for tatesremedies

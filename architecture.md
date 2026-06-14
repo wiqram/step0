@@ -120,6 +120,7 @@ Executed top to bottom (`set -e`, so any failure aborts the run):
 6b. **vault-secrets-sync wiring** – after Jenkins is up, run `vault/scripts/setup-jenkins-pipeline.sh` to (re)create the `vault-secrets-sync` job and its credentials (`sops-age-key` + per-app `vault-approle-*`, from the AppRole secret_ids `start-vault.sh` just regenerated). Best-effort; idempotent.
 7. **qcguy** – create `qcguy` ns + configmap from `~/Ideaprojects/qcguy-ghost/config`, apply `compiled.yaml`.
 8. **predictonomy** – trigger Jenkins build via authenticated `curl` to `jenkins.traderyolo.com/job/predictonomy/build`.
+8b. **ollama** – trigger the Jenkins `ollama` build (creates the `ollama` ns + `vault-secrets` SA and deploys ollama + webui, which fetch `kv/ollama/*` via the Vault injector). No build token — authenticated trigger.
 9. **yolo** – `sleep 1m`, then trigger Jenkins `trading-microservices` build.
 10. **Splunk (HSBC demo)** – apply namespace + `compiled.yaml`, `sleep 3m`, then deploy Splunk Connect for Kubernetes (SCK) via Helm with HEC token/index env vars.
 
