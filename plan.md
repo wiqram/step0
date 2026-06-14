@@ -19,7 +19,7 @@ repo to **`~/.vault/cluster-keys.json`** (0600); `start-vault.sh` writes there v
 `$VAULT_KEYS_FILE`, so it is no longer in any repo dir. The vault repo also tightened
 per-app policies to least privilege and provisions scoped Jenkins AppRoles instead of
 handing out root — see vault `plan.md`. **Still outstanding here in STEP0:** the Jenkins
-basic-auth/API token, the Splunk HEC token, and the `r00tT0k£n` userpass password.
+basic-auth/API token, the Splunk HEC token, and the Vault userpass password (line 15).
 
 **Fix (STEP0 side):**
 - Move the Jenkins + Splunk tokens (and the Vault userpass password) to a single untracked
@@ -58,12 +58,14 @@ against a stale kubeconfig or hang when the API is down. Use the purpose-built p
 if minikube status --format '{{.Host}}' | grep -q Running; then ...
 ```
 
-### 5. `vault operator init` is not re-run safe
-In `start-scratch.sh`, Vault is initialized unconditionally. On a warm machine Vault is
-already initialized, `vault operator init` errors, and `set -e` kills the whole bootstrap.
-`restart-vault.sh` exists precisely to work around this. **Fold the idempotency guard
-(`helm status` / "already initialized" check) into the main path** so there is one script,
-not two divergent ones (see #9).
+### 5. `vault operator init` is not re-run safe — ✅ RESOLVED (vault repo, 2026-06)
+`vault/start-vault.sh` now guards init/unseal on `vault status` (initialized/sealed) and
+the auth/secrets enables on `auth|secrets list`, so it is fully re-run safe. (It was worse
+than "errors out": the unconditional `init -format=json > $KEYS_FILE` truncated the keys
+file, wiping the root token + unseal key.) Verified end-to-end on a warm cluster: keys
+file byte-identical before/after, secrets/policies/roles/AppRoles preserved.
+`restart-vault.sh` was also de-drifted to just tear down + delegate to `start-vault.sh`,
+so there is now one bootstrap path, not two divergent ones (closes #9's vault portion).
 
 ### 6. Network subnet is inconsistent between the two scripts
 - `start-scratch.sh`: `--subnet=172.16.0.0/16` ✅ (matches gateway `172.16.238.1`)
