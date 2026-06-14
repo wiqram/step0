@@ -79,16 +79,15 @@ bash start-vault.sh
 #################jenkins###########################
 #create a customer jenkins/inbound-agent with k8s and curl and wget pre-installed and pushed to private repo
 #if [[ "$(docker image inspect 172.16.238.2:5000/jenkins-inbound-agent-vik:cloud 2> /dev/null)" == "" ]]; then
-if docker image inspect container-registry.traderyolo.com/jenkins-inbound-agent-vik:cloud; then
-#if docker image inspect $MINIKUBEIP:5000/jenkins-inbound-agent-vik:cloud; then
-  # docker image for inbound agent doesnt exist. create one
-  echo "custom jenkins/inbound-agent image does exist - No need to create one"
-else
-  echo "custom jenkins/inbound-agent DOES NOT exist - Creating one now"
-  docker build -t container-registry.traderyolo.com/jenkins-inbound-agent-vik:cloud $HOME/Ideaprojects/jenkins/inbound-agent/.
-  #docker build -t $MINIKUBEIP:5000/jenkins-inbound-agent-vik:cloud $HOME/Ideaprojects/jenkins/inbound-agent/.
-fi
-docker push container-registry.traderyolo.com/jenkins-inbound-agent-vik:cloud
+# Always build so the image reflects the Dockerfile (the source of truth) after a
+# refresh — e.g. the vault/sops/age/jq tooling the vault-secrets-sync pipeline
+# needs. Docker layer caching makes an unchanged rebuild near-instant. Non-fatal:
+# on a build/push failure fall back to whatever image is already present.
+echo "building custom jenkins/inbound-agent image (cached layers make unchanged rebuilds fast)"
+docker build -t container-registry.traderyolo.com/jenkins-inbound-agent-vik:cloud $HOME/Ideaprojects/jenkins/inbound-agent/. \
+  || echo "WARN: inbound-agent image build failed; using the existing image"
+docker push container-registry.traderyolo.com/jenkins-inbound-agent-vik:cloud \
+  || echo "WARN: inbound-agent image push failed; using the image already in the registry"
 #docker push $MINIKUBEIP:5000/jenkins-inbound-agent-vik:cloud
 #create k8s components for jenkins
 kubectl apply -f $HOME/Ideaprojects/jenkins/compiled.yaml
