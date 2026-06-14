@@ -92,13 +92,14 @@ docker push container-registry.traderyolo.com/jenkins-inbound-agent-vik:cloud \
 #create k8s components for jenkins
 kubectl apply -f $HOME/Ideaprojects/jenkins/compiled.yaml
 
-#################vault-secrets-sync (Jenkins job + credentials)#################
-# Recreate the vault-secrets-sync pipeline job and its credentials (sops-age-key
-# + the per-app AppRole role_id/secret_id that start-vault.sh just regenerated
-# into ~/.vault/jenkins-approle/). MUST run after Jenkins is up. On a fresh Vault
-# the AppRole secret_ids change, so this re-sync keeps Jenkins' credentials valid.
-# Best-effort: never abort the bootstrap. Logic lives in the vault repo.
-echo "configuring vault-secrets-sync Jenkins pipeline + credentials"
+#################vault Jenkins credentials#####################################
+# Mirror the per-app AppRole role_id/secret_id (that start-vault.sh just
+# regenerated into ~/.vault/jenkins-approle/) + sops-age-key into Jenkins
+# credentials. Each app's deploy job binds these and refreshes its own kv/<app>/*
+# at deploy via the vaultSync() shared library — there is no central sync job.
+# MUST run after Jenkins is up. On a fresh Vault the secret_ids change, so this
+# keeps the credentials valid. Best-effort: never abort the bootstrap.
+echo "configuring vault Jenkins credentials"
 JENKINS_AUTH=$(grep -oE 'private-cloud:[0-9a-f]+@jenkins' "$0" | head -1 | sed 's/@jenkins//')
 JENKINS_NODEPORT="http://$(minikube ip 2>/dev/null || echo 172.16.238.2):30380"
 for i in $(seq 1 60); do
@@ -106,8 +107,8 @@ for i in $(seq 1 60); do
   echo "waiting for jenkins API... ($i)"; sleep 5
 done
 JENKINS_URL="$JENKINS_NODEPORT" JENKINS_USER="${JENKINS_AUTH%%:*}" JENKINS_TOKEN="${JENKINS_AUTH#*:}" \
-  bash "$HOME/Ideaprojects/vault/scripts/setup-jenkins-pipeline.sh" \
-  || echo "WARN: vault-secrets-sync Jenkins setup failed; re-run vault/scripts/setup-jenkins-pipeline.sh manually."
+  bash "$HOME/Ideaprojects/vault/scripts/setup-jenkins-credentials.sh" \
+  || echo "WARN: vault Jenkins credential setup failed; re-run vault/scripts/setup-jenkins-credentials.sh manually."
 
 #################container-registry#############################
 #create k8s components for private container registry - NOT USED BCOZ USING MINIKUBE REGISTRY
