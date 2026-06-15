@@ -24,7 +24,7 @@ to a Kubernetes NodePort on `172.16.238.2`.
 | `start-scratch.sh` | **Master cold-bootstrap.** Order matters: network → minikube → addons → monitoring → vault → jenkins → qcguy → app builds → splunk. |
 | `restart-minikube.sh` | Warm restart; reuses cluster, idempotent vault, most apps commented out. |
 | `minikube-delete-and-upgrade.sh` | Nuke + reinstall latest Minikube. |
-| `backup-minikube-mnt.sh` | **Weekly disaster-recovery backup** (run by a `root` cron, Mondays ~05:00). Compresses the `minikube-mnt` shared volume — per-app secrets (qcguy, vault/SOPS keys, ollama, predictonomy, yolo, helpmepdf) and DB snapshots — plus nginx + STEP0 + qcguy into a dated `private-cloud-<date>.tgz` in `/mnt/minikube-backups`. |
+| `backup-minikube-mnt.sh` | **Weekly disaster-recovery backup** (run by a `root` cron, Mondays ~05:00). Compresses the `minikube-mnt` shared volume — per-app secrets (qcguy, vault/SOPS keys, ollama, predictonomy, yolo, helpmepdf) and DB snapshots — plus nginx + STEP0 + qcguy into a dated `private-cloud-<date>.tgz` in `/mnt/minikube-backups`, then prunes for space (keeps weekly backups for the current + previous month; for older months keeps only the latest backup of each). |
 | `reduce-*.sh`, `delete-docker-reg-images.sh`, `remove-old-snaps.sh` | Disk/space maintenance. |
 | `Modelfile` | Ollama model def (`deepseek-r1:14b`, equities-research prompt). |
 | `5million.xml`, `default.xml` | Legacy libvirt/KVM network defs (kvm2 era). |

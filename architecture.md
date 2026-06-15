@@ -208,8 +208,13 @@ A **`root` cron job runs weekly** (Mondays ~05:00) and executes
 **`backup-minikube-mnt.sh`**. This is the disaster-recovery safety net: if anything
 happens to the `private-cloud` host, these archives are what the stack is rebuilt from.
 Every run produces a single compressed, dated archive
-`private-cloud-<MM-DD-YY>.tgz` (≈4–5 GB) under **`/mnt/minikube-backups`**; the dated
-files accumulate there as a rolling history (root-owned).
+`private-cloud-<MM-DD-YY>.tgz` (≈4–5 GB) under **`/mnt/minikube-backups`** (root-owned).
+
+**Retention (space-saving prune, at the end of each run):** all weekly backups for the
+**current and previous month** are kept; for any **older month** only that month's
+**most recent** backup is kept and the rest are deleted. So recent history stays
+weekly-granular while older months collapse to one archive each (≈4–5 GB/month saved
+per pruned week).
 
 The script `tar -czf`s four trees — `minikube-mnt`, `~/Ideaprojects/nginx`,
 `~/Ideaprojects/STEP0`, and `~/Ideaprojects/qcguy-ghost` — but the bulk of the value is
@@ -241,7 +246,7 @@ place, then re-bootstrap via `start-scratch.sh` (which re-seeds Vault from the r
 | `start-scratch.sh` | Cold bootstrap of the whole stack |
 | `restart-minikube.sh` | Warm restart (reuse cluster, idempotent vault, apps commented out) |
 | `minikube-delete-and-upgrade.sh` | Delete cluster, reinstall latest Minikube (kvm2 + GPU addons) |
-| `backup-minikube-mnt.sh` | **Weekly `root` cron** (Mon ~05:00): compress shared volume (secrets + DB snapshots) + nginx + STEP0 + qcguy → dated `.tgz` in `/mnt/minikube-backups` |
+| `backup-minikube-mnt.sh` | **Weekly `root` cron** (Mon ~05:00): compress shared volume (secrets + DB snapshots) + nginx + STEP0 + qcguy → dated `.tgz` in `/mnt/minikube-backups`, then prune (keep weekly for current+previous month, one per older month) |
 | `reduce-docker-minikube-space.sh` | apt/journal clean + `docker system prune` on host **and** inside Minikube |
 | `reduce-var-space.sh` | Truncate logs, vacuum journald, prune docker |
 | `delete-docker-reg-images.sh` | GC orphaned blobs in the registry |
