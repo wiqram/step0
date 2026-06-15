@@ -1,6 +1,10 @@
 #!/bin/bash
 
 set -e
+# Absolute path to this script, captured BEFORE any cd below (lines ~68/77 cd
+# into kube-prometheus/ then vault/). Later steps grep this file for the inline
+# Jenkins credential; a relative $0 would no longer resolve after those cds.
+SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 #echo "in UP.sh >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"-e url=https://www.qcguy.com
 #./build.sh
 #setup the 5million external network on docker
@@ -100,7 +104,7 @@ kubectl apply -f $HOME/Ideaprojects/jenkins/compiled.yaml
 # MUST run after Jenkins is up. On a fresh Vault the secret_ids change, so this
 # keeps the credentials valid. Best-effort: never abort the bootstrap.
 echo "configuring vault Jenkins credentials"
-JENKINS_AUTH=$(grep -oE 'private-cloud:[0-9a-f]+@jenkins' "$0" | head -1 | sed 's/@jenkins//')
+JENKINS_AUTH=$(grep -oE 'private-cloud:[0-9a-f]+@jenkins' "$SCRIPT_PATH" | head -1 | sed 's/@jenkins//')
 JENKINS_NODEPORT="http://$(minikube ip 2>/dev/null || echo 172.16.238.2):30380"
 for i in $(seq 1 60); do
   curl -sf -u "$JENKINS_AUTH" "$JENKINS_NODEPORT/api/json?tree=mode" >/dev/null 2>&1 && { echo "jenkins API ready"; break; }
