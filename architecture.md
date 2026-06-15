@@ -201,9 +201,36 @@ Nginx config (buffering off, 600s timeouts).
 
 - **Shared volume:** `/mnt/minikube-backups/minikube-mnt` is mounted into the Minikube
   node at `/mnt`. It carries per-app env/secret scripts and app data shared between host and cluster.
-- **`backup-minikube-mnt.sh`:** copies the live yolo/helpmepdf Vault env scripts into
-  `minikube-mnt`, then `tar`s `minikube-mnt`, `nginx`, `STEP0`, and `qcguy-ghost` into a
-  dated `.tgz` under `/mnt/minikube-backups`.
+
+### Weekly automated backup (cron)
+
+A **`root` cron job runs weekly** (Mondays ~05:00) and executes
+**`backup-minikube-mnt.sh`**. This is the disaster-recovery safety net: if anything
+happens to the `private-cloud` host, these archives are what the stack is rebuilt from.
+Every run produces a single compressed, dated archive
+`private-cloud-<MM-DD-YY>.tgz` (≈4–5 GB) under **`/mnt/minikube-backups`**; the dated
+files accumulate there as a rolling history (root-owned).
+
+The script `tar -czf`s four trees — `minikube-mnt`, `~/Ideaprojects/nginx`,
+`~/Ideaprojects/STEP0`, and `~/Ideaprojects/qcguy-ghost` — but the bulk of the value is
+inside the **`minikube-mnt`** shared volume, which captures everything that **can't live
+in GitHub**:
+
+- **Per-app secrets / Vault seed material** — `yolo-`, `helpmepdf-`, `predictonomy-`,
+  `ollama-env-variables.sh`, the SOPS age key (`keys-sops-IMPORTANT.txt`) and
+  `phase-file-secrets-kv.txt`. (Before archiving, the script refreshes all four live env
+  scripts — yolo, helpmepdf, predictonomy, ollama — from `~/Ideaprojects/vault/` into
+  `minikube-mnt`.)
+- **Database snapshots** (for restoring app state) — `yolo-db-snapshots`,
+  `predictonomy-backups` + `predictonomy-postgres`, and the MongoDB `storage.bson`
+  dumps under `trading-microservices/` and `helpmepdf/`.
+- **App data & platform state** — `qcguy-ghost` (Ghost content), `ollama`, `jenkins`,
+  `container-registry`, `splunk-hsbc`, `tatesremedies`.
+- **Ingress + bootstrap config** — the NPM tree (`nginx/`) and the STEP0 scripts.
+
+To restore, unpack the relevant tree from the latest `private-cloud-*.tgz` back into
+place, then re-bootstrap via `start-scratch.sh` (which re-seeds Vault from the recovered
+`/mnt` secret scripts and redeploys the apps).
 
 ---
 
@@ -214,7 +241,7 @@ Nginx config (buffering off, 600s timeouts).
 | `start-scratch.sh` | Cold bootstrap of the whole stack |
 | `restart-minikube.sh` | Warm restart (reuse cluster, idempotent vault, apps commented out) |
 | `minikube-delete-and-upgrade.sh` | Delete cluster, reinstall latest Minikube (kvm2 + GPU addons) |
-| `backup-minikube-mnt.sh` | Backup shared volume + nginx + STEP0 + qcguy |
+| `backup-minikube-mnt.sh` | **Weekly `root` cron** (Mon ~05:00): compress shared volume (secrets + DB snapshots) + nginx + STEP0 + qcguy → dated `.tgz` in `/mnt/minikube-backups` |
 | `reduce-docker-minikube-space.sh` | apt/journal clean + `docker system prune` on host **and** inside Minikube |
 | `reduce-var-space.sh` | Truncate logs, vacuum journald, prune docker |
 | `delete-docker-reg-images.sh` | GC orphaned blobs in the registry |

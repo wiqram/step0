@@ -11,9 +11,12 @@ backup_files2="/home/cloud/Ideaprojects/nginx"
 backup_files3="/home/cloud/Ideaprojects/STEP0"
 backup_files4="/home/cloud/Ideaprojects/qcguy-ghost"
 
-#First get the vault config files for yolo and helpmepdf to minikube-mnt
+#First refresh the live vault config files into minikube-mnt so the backup captures
+#the current per-app secrets (these can't live in GitHub).
 cp /home/cloud/Ideaprojects/vault/helpmepdf-env-variables.sh $backup_files
 cp /home/cloud/Ideaprojects/vault/yolo-env-variables.sh $backup_files
+cp /home/cloud/Ideaprojects/vault/predictonomy-env-variables.sh $backup_files
+cp /home/cloud/Ideaprojects/vault/ollama-env-variables.sh $backup_files
 
 # Where to backup to.
 dest="/mnt/minikube-backups"
