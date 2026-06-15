@@ -209,6 +209,10 @@ A **`root` cron job runs weekly** (Mondays ~05:00) and executes
 happens to the `private-cloud` host, these archives are what the stack is rebuilt from.
 Every run produces a single compressed, dated archive
 `private-cloud-<MM-DD-YY>.tgz` (≈4–5 GB) under **`/mnt/minikube-backups`** (root-owned).
+The live entry is in `root`'s crontab (`sudo crontab -l`):
+`0 5 * * 1 /bin/bash /home/cloud/Ideaprojects/STEP0/backup-minikube-mnt.sh >> /var/log/minikube-backup.log 2>&1`
+— run output (including the prune) is appended to **`/var/log/minikube-backup.log`**, so
+check there to confirm a run or debug a failure.
 
 **Retention (space-saving prune, at the end of each run):** all weekly backups for the
 **current and previous month** are kept; for any **older month** only that month's
