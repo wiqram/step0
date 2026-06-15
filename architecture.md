@@ -237,6 +237,53 @@ To restore, unpack the relevant tree from the latest `private-cloud-*.tgz` back 
 place, then re-bootstrap via `start-scratch.sh` (which re-seeds Vault from the recovered
 `/mnt` secret scripts and redeploys the apps).
 
+### Backup retention convention — apply to **every** backup cron job
+
+**Standard for all backup cron jobs in this setup** (new ones must replicate it):
+
+> Keep **all** periodic backups for the **current month and the previous month**. For
+> any **older month**, keep only that month's **most recent** backup and delete the rest.
+
+This keeps recent history fine-grained (weekly) while older months collapse to one
+archive each, bounding disk use on `/mnt/minikube-backups`. The rules every backup
+script must follow so the prune works:
+
+- **Name each archive with its date** as `<name>-MM-DD-YY.<ext>` (e.g.
+  `private-cloud-06-15-26.tgz`). The prune reads the date from the **filename**, not mtime.
+- **Group by calendar month** using a numeric `YYMM` key (e.g. `2606`) so comparisons
+  sort correctly across year boundaries (Jan 2026 `2601` > Dec 2025 `2512`).
+- **"Current + previous month"** is the calendar window `date +%y%m` and
+  `date -d "$(date +%Y-%m-01) -1 month" +%y%m` — anything `>=` the previous month is kept.
+- Run the prune **at the end of the backup**, after the new archive is written.
+
+Reference implementation (copy into any new backup script — set `dest` and `prefix`):
+
+```bash
+# --- retention prune: keep weekly for current+previous month, one per older month ---
+prefix="private-cloud"          # archive name stem; files are $prefix-MM-DD-YY.tgz
+prev_ym=$(date -d "$(date +%Y-%m-01) -1 month" +%y%m)   # numeric YYMM cutoff
+
+declare -A latest_day latest_file
+for f in "$dest/$prefix"-*.tgz; do          # pass 1: newest backup per older month
+    [ -e "$f" ] || continue
+    [[ "$(basename "$f")" =~ ^${prefix}-([0-9]{2})-([0-9]{2})-([0-9]{2})\.tgz$ ]] || continue
+    dd="${BASH_REMATCH[2]}"; ym="${BASH_REMATCH[3]}${BASH_REMATCH[1]}"
+    [ "$ym" -ge "$prev_ym" ] && continue
+    if [ -z "${latest_day[$ym]}" ] || [ "$dd" -gt "${latest_day[$ym]}" ]; then
+        latest_day[$ym]="$dd"; latest_file[$ym]="$f"
+    fi
+done
+for f in "$dest/$prefix"-*.tgz; do           # pass 2: delete the non-latest old ones
+    [ -e "$f" ] || continue
+    [[ "$(basename "$f")" =~ ^${prefix}-([0-9]{2})-([0-9]{2})-([0-9]{2})\.tgz$ ]] || continue
+    ym="${BASH_REMATCH[3]}${BASH_REMATCH[1]}"
+    [ "$ym" -ge "$prev_ym" ] && continue
+    [ "$f" != "${latest_file[$ym]}" ] && rm -f "$f"
+done
+```
+
+`backup-minikube-mnt.sh` is the canonical example of this convention.
+
 ---
 
 ## 8. Maintenance Scripts

@@ -51,6 +51,12 @@ to a Kubernetes NodePort on `172.16.238.2`.
   See the vault repo's `architecture.md` / `plan.md` for detail.
 - `set -e` is on in the main scripts — a single failing command aborts the whole run.
   Be deliberate about ordering and idempotency when editing.
+- **Backup retention is a standard convention.** *Every* backup cron job must follow the
+  same rule: keep all backups for the current + previous month, and for any older month
+  keep only that month's most recent backup (delete the rest). Name archives
+  `<name>-MM-DD-YY.<ext>` and prune at the end of the run. `backup-minikube-mnt.sh` is the
+  canonical implementation; see `architecture.md` §7 ("Backup retention convention") for
+  the reusable snippet to copy into any new backup script.
 
 ## Working norms
 
