@@ -115,12 +115,13 @@ JENKINS_URL="$JENKINS_NODEPORT" JENKINS_USER="${JENKINS_AUTH%%:*}" JENKINS_TOKEN
 #kubectl apply -f $HOME/Ideaprojects/container-registry/private-registry.yaml
 
 #################qcguy#############################
-#create k8s namespace for qcguy
-kubectl create namespace qcguy --dry-run=client -o yaml | kubectl apply -f -
-#create configmap for qcguy
-kubectl create configmap qcguy-configmap --from-file=$HOME/Ideaprojects/qcguy-ghost/config -n qcguy --dry-run=client -o yaml | kubectl apply -f -
-#create k8s components for qcguy
-kubectl apply -f $HOME/Ideaprojects/qcguy-ghost/compiled.yaml
+# qcguy (Ghost CMS) is now onboarded to Vault like the other apps: its config
+# lives in wiqram/qcguy-ghost vault/ (encrypted) and the qcguy Jenkins job runs
+# vaultSync(app:'qcguy') -> kv/qcguy/ghost, then deploys (the deployment renders
+# config.production.json via the Vault injector; no more ConfigMap). The job's
+# deploy also creates the qcguy namespace + vault-secrets ServiceAccount.
+echo "building qcguy"
+curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/qcguy/build?token=qcguy
 
 ##################qcx && predictonomy#############################
 ##create k8s namespace for qcx
