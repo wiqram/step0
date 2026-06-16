@@ -269,6 +269,23 @@ reverted by minikube's addon-manager — bake the volume into the node addon man
 Supersedes the ephemeral half of R7 for the registry. Cross-ref: IG-Trading-Microservices memory
 `registry-ephemeral-wipe.md`.
 
+> **✅ IMPLEMENTED 2026-06-16 (in `k8s/registry/`) — pending cold-boot activation.** Approach chosen:
+> **self-managed registry on sdb2**. Two facts found while building it corrected the sketch above:
+> - The minikube docker driver binds exactly **one** host dir into the node
+>   (`/mnt/minikube-backups/minikube-mnt → /mnt`, sdb1) and the bind is **`rprivate`**; it takes only
+>   one `--mount-string`. So sdb2 (`/mnt/kachra`) cannot be added to a *running* node. `ensure-registry-store.sh`
+>   instead bind-mounts (via `/etc/fstab`) sdb2's image dir **into** the minikube-mnt tree on the host;
+>   docker's recursive (rbind) bind captures it **at container creation**, so it activates on the next
+>   **cold boot** (`minikube delete` + `start-scratch.sh`), not on a warm `stop`/`start`.
+> - The addon is replaced (not patched): `start-scratch.sh` now runs `minikube addons disable registry`
+>   then `kubectl apply -f k8s/registry/` (PV → PVC → Deployment+Service → registry-proxy DaemonSet,
+>   hostPort 5000 preserved so `:5000` / `container-registry.traderyolo.com` are unchanged).
+>
+> **Activation deferred to the next natural cold rebuild** (operator choice — a recreate-now would be
+> as disruptive as the outage). Until then the registry still uses the old ephemeral store, so a warm
+> stop still needs the manual re-push (RESTART-RECOVERY triage row 3). Acceptance test + rollback in
+> `k8s/registry/README.md`.
+
 ### Net effect
 Same 32 GB envelope, but: scheduler can no longer silently over-commit; OOM pressure is caught by
 kubelet eviction and absorbed by zram instead of killing pods mid-request; ~2.5 GB reclaimed from HA

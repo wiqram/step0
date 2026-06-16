@@ -26,6 +26,9 @@ if kubectl version; then
   #    minikube delete
 else
   echo "Minikube NOT running - Creating one now"
+  # R8 (plan.md): establish the sdb2 registry-blob bind BEFORE the node is created, so the docker
+  # rbind captures it at container-creation time (durable registry store; see k8s/registry/README.md).
+  "$(dirname "$SCRIPT_PATH")/k8s/registry/ensure-registry-store.sh"
   #minikube start --cpus 4 --memory 16384 --nodes 2 #--driver=none--driver=docker --alsologtostderr -v=4
   #---------------------------------------------------------------------------------------------------------
   # Resource-efficient start (see plan.md "Cluster resource efficiency" section). Key changes vs the old line:
@@ -55,8 +58,13 @@ else
   #echo "now sleeping for 3 minutes to allow for nginx to be updted with latest minikube kvm ip"
   #sleep 3m
 fi
-#to install docker container registry
-minikube addons enable registry
+#to install docker container registry — R8: self-managed + durable on sdb2 (NOT the ephemeral addon).
+# The addon stored blobs on the pod's ephemeral /var/lib/registry, so every cluster stop wiped all
+# images (cluster-wide ImagePullBackOff — the 2026-06-16 outage). We disable it and run our own
+# Deployment+proxy backed by a hostPath PVC on sdb2. See k8s/registry/README.md.
+minikube addons disable registry
+kubectl apply -f "$(dirname "$SCRIPT_PATH")/k8s/registry/"
+# Old ephemeral path (kept for reference): minikube addons enable registry
 #setup metrics server for minikube - NOT NEEDED because of grafana and prometheus installation
 #minikube addons enable metrics-server
 #minikube addons enable ingress

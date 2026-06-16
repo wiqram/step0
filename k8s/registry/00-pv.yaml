@@ -1,0 +1,27 @@
+# R8 — durable registry blob storage (plan.md). PV backed by a hostPath that, inside the
+# minikube node, resolves to /mnt/container-registry-images. That node path is the host bind
+#   /mnt/kachra/container-registry-images  (sdb2, 195G free)  →
+#   /mnt/minikube-backups/minikube-mnt/container-registry-images  (the dir minikube binds to /mnt)
+# established by ensure-registry-store.sh BEFORE the minikube container is created (docker
+# bind-mounts are recursive, so the nested sdb2 mount is captured at container-creation time;
+# rprivate propagation means a warm node will NOT pick it up — takes effect on next COLD boot).
+# Reclaim=Retain + a claimRef pin keep blobs across PVC delete/recreate. Mirrors predictonomy-postgres-pv.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: container-registry-images-pv
+  labels:
+    app: registry
+spec:
+  capacity:
+    storage: 60Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    path: /mnt/container-registry-images
+    type: DirectoryOrCreate
+  claimRef:
+    namespace: kube-system
+    name: container-registry-images-pvc

@@ -1,0 +1,71 @@
+# Self-managed replacement for the minikube `registry` addon Deployment+Service.
+# WHY self-managed: the addon is addonmanager.kubernetes.io/mode=Reconcile, so a `kubectl patch`
+# to add a volume is reverted and the node manifests (/etc/kubernetes/addons/registry-*.yaml) are
+# regenerated on every `minikube start`. So start-scratch.sh runs `minikube addons disable registry`
+# and applies THIS instead (no Reconcile label → addon-manager leaves it alone).
+# Behaviour-identical to the addon (same image digest, kube-system ns, Service name `registry`,
+# selector actual-registry:"true", env) PLUS a PVC mounted at /var/lib/registry for durability.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: registry
+  namespace: kube-system
+  labels:
+    app: registry
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate: the blob store is RWO hostPath on a single node, so two pods must
+  # never mount it at once (a rolling update would briefly run old+new → multi-attach / corruption).
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      actual-registry: "true"
+  template:
+    metadata:
+      labels:
+        app: registry
+        actual-registry: "true"
+    spec:
+      # hostPath dir is root-owned on the host (sdb2); the distribution image may run non-root.
+      # Run the daemon as root so it can write /var/lib/registry without a recursive fsGroup chown
+      # (single-tenant homelab registry — same effective privilege the addon ran with).
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+      containers:
+        - name: registry
+          image: docker.io/registry:3.0.0@sha256:6c5666b861f3505b116bb9aa9b25175e71210414bd010d92035ff64018f9457e
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5000
+              protocol: TCP
+          env:
+            - name: REGISTRY_STORAGE_DELETE_ENABLED
+              value: "true"
+          volumeMounts:
+            - name: images
+              mountPath: /var/lib/registry
+      volumes:
+        - name: images
+          persistentVolumeClaim:
+            claimName: container-registry-images-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: registry
+  namespace: kube-system
+  labels:
+    app: registry
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      name: http
+      targetPort: 5000
+    - port: 443
+      name: https
+      targetPort: 443
+  selector:
+    actual-registry: "true"

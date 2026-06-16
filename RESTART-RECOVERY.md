@@ -82,9 +82,12 @@ curl -s -o /dev/null -w '%{http_code}\n' https://predictonomy.com   # 200
 
 1. **Vault no auto-unseal** → ✅ **mitigated** by `vault-auto-unseal.sh` (host-side; drill-proven:
    sealed → auto-recovered ~6s).
-2. **Registry on ephemeral storage** (images vanish on stop) → ❌ **OPEN** — tracked here as
-   **plan.md R8** ("persist registry on `/mnt/kachra`, off `/var`"). Until done, re-push cached
-   images after any cluster stop (web **and** `*-migrate`).
+2. **Registry on ephemeral storage** (images vanish on stop) → 🟡 **FIX BUILT, NOT YET ACTIVE** —
+   the durable self-managed registry on sdb2 is implemented in `k8s/registry/` and wired into
+   `start-scratch.sh` (**plan.md R8**), but it only takes effect on the **next cold boot** (the sdb2
+   bind is captured at minikube-container creation; see `k8s/registry/README.md`). **Until that cold
+   boot, the registry is still ephemeral** — so after any warm stop you must still re-push cached
+   images (web **and** `*-migrate`), per the triage row above.
 3. **No cluster auto-start** → ✅ **mitigated** by `unless-stopped` + `cluster-autostart.sh`.
 
 ## Manual recovery (if the automation is gone or the host is rebuilt)

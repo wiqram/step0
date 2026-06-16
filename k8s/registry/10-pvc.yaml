@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: container-registry-images-pvc
+  namespace: kube-system
+  labels:
+    app: registry
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: manual
+  resources:
+    requests:
+      storage: 60Gi
+  volumeName: container-registry-images-pv
