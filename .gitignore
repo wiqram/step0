@@ -6,3 +6,6 @@
 *.iml
 out
 gen
+# host-script config + logs (added 2026-06-16 for relocated cluster scripts)
+.env
+logs/

@@ -57,18 +57,19 @@ curl -s -o /dev/null -w '%{http_code}\n' https://predictonomy.com   # 200
 
 | Symptom | Likely root cause | Check | Fix |
 |---|---|---|---|
-| `kubectl`/all sites down after reboot | cluster didn't resume | `docker ps -a \| grep minikube`; `tail ~/Ideaprojects/STEP0/../../IdeaProjects/Predictonomy/ops/agent/logs/cluster-autostart.log` | container `exited` = intentionally stopped → `minikube start --driver=docker`; `running` but k8s down → let the `*/10` watchdog reconcile, or run `minikube start` |
-| Pods stuck `Init`/`Error`, "secret not found" across **all** namespaces | **Vault sealed** (boots sealed, no KMS) | `kubectl -n vault exec vault-0 -- vault status` → `Sealed true`; `tail .../ops/agent/logs/vault-auto-unseal.log` | unsealer fixes in ~10s; if its loop died the `*/5` watchdog restarts it; manual: `restart-minikube.sh` calls `restart-vault.sh`, or unseal from `~/.vault/cluster-keys.json` |
+| `kubectl`/all sites down after reboot | cluster didn't resume | `docker ps -a \| grep minikube`; `tail ~/Ideaprojects/STEP0/logs/cluster-autostart.log` | container `exited` = intentionally stopped → `minikube start --driver=docker`; `running` but k8s down → let the `*/10` watchdog reconcile, or run `minikube start` |
+| Pods stuck `Init`/`Error`, "secret not found" across **all** namespaces | **Vault sealed** (boots sealed, no KMS) | `kubectl -n vault exec vault-0 -- vault status` → `Sealed true`; `tail ~/Ideaprojects/STEP0/logs/vault-auto-unseal.log` | unsealer fixes in ~10s; if its loop died the `*/5` watchdog restarts it; manual: `restart-minikube.sh` calls `restart-vault.sh`, or unseal from `~/.vault/cluster-keys.json` |
 | A web pod `ImagePullBackOff` / `manifest unknown` | **registry lost images** on stop — registry on ephemeral storage (**plan.md R8 / N-0006 #2, OPEN**) | `kubectl -n <ns> describe pod <pod>` | re-push the node's cached image, e.g. `minikube ssh -- docker push container-registry.traderyolo.com/predictonomy-web:latest`, then delete the pod. **Re-push the `*-migrate` image too** or data CronJobs stay broken |
 | Site is fine but **data CronJobs** `ImagePullBackOff` | same #2 — only the web image was re-pushed | `kubectl -n predictonomy get pods \| grep -E 'refresh\|backup\|loaders'` | re-push the `predictonomy-migrate:latest` image too. A healthy site does NOT imply healthy jobs |
-| Nightly backup skipped | Vault sealed at 01:00, or cluster down | `tail .../ops/agent/logs/backup-check.log` | now backstopped by auto-unseal; one-off: `kubectl -n predictonomy create job --from=cronjob/predictonomy-postgres-backup backup-manual-$(date +%s)` |
+| Nightly backup skipped | Vault sealed at 01:00, or cluster down | `tail ~/IdeaProjects/Predictonomy/ops/agent/logs/backup-check.log` (this check stays app-side) | now backstopped by auto-unseal; one-off: `kubectl -n predictonomy create job --from=cronjob/predictonomy-postgres-backup backup-manual-$(date +%s)` |
 | minikube container **gone** | unclean crash wiped it / `minikube delete` ran | `cluster-autostart.log` shows "ABSENT" + ntfy alert | **human decision** — run STEP0 `start-scratch.sh` (cold) then re-deploy apps; hostPath PVs (`/mnt/predictonomy-postgres`, `/mnt/predictonomy-backups`, `/mnt/minikube-backups`) survive |
 
 ## Where the automation lives
 
-- **Scripts** (currently in the Predictonomy repo `ops/agent/` — see "Ownership" below):
-  `cluster-autostart.sh`, `vault-auto-unseal.sh`, `check-backup.sh`. Logs alongside in
-  `ops/agent/logs/` (`cluster-autostart.log`, `vault-auto-unseal.log`, `backup-check.log`).
+- **Scripts:** `cluster-autostart.sh` + `vault-auto-unseal.sh` live **here in STEP0** (repo root),
+  logs in `STEP0/logs/`. The ntfy topic is in the gitignored `STEP0/.env` (`NTFY_URL`). The
+  app-specific `check-backup.sh` stays in the **Predictonomy** repo (`ops/agent/`, logs in
+  `ops/agent/logs/`) because it checks a Predictonomy CronJob.
 - **Schedule:** host crontab (`crontab -l`) — `@reboot` + watchdog for each. Idempotent
   (flock-guarded, re-enforce drift). The crontab is host state, not in any repo.
 - **Docker restart policy:** `docker update --restart=unless-stopped minikube` (re-apply after any
@@ -93,14 +94,20 @@ curl -s -o /dev/null -w '%{http_code}\n' https://predictonomy.com   # 200
 - **Cold** (from scratch): `cd ~/Ideaprojects/STEP0 && ./start-scratch.sh`, then re-deploy apps via
   Jenkins.
 - **Re-arm the automation:** `docker update --restart=unless-stopped minikube`, then re-add the
-  `@reboot` + watchdog cron lines (see the script headers / Predictonomy `ops/agent/README.md`).
+  `@reboot` + watchdog cron lines pointing at the STEP0 scripts:
+  ```cron
+  @reboot            ~/Ideaprojects/STEP0/vault-auto-unseal.sh  >> ~/Ideaprojects/STEP0/logs/vault-auto-unseal.log 2>&1
+  */5 * * * *        ~/Ideaprojects/STEP0/vault-auto-unseal.sh  >> ~/Ideaprojects/STEP0/logs/vault-auto-unseal.log 2>&1
+  @reboot sleep 30 && ~/Ideaprojects/STEP0/cluster-autostart.sh >> ~/Ideaprojects/STEP0/logs/cluster-autostart.log 2>&1
+  */10 * * * *       ~/Ideaprojects/STEP0/cluster-autostart.sh  >> ~/Ideaprojects/STEP0/logs/cluster-autostart.log 2>&1
+  ```
+  Start the unseal loop immediately without waiting for a reboot:
+  `setsid ~/Ideaprojects/STEP0/vault-auto-unseal.sh >> ~/Ideaprojects/STEP0/logs/vault-auto-unseal.log 2>&1 </dev/null &`.
 
-## Ownership note (TODO)
+## Ownership
 
-The three scripts currently live in the **Predictonomy** repo (`ops/agent/`) because that is where
-they were first written, and they read `NTFY_URL` from Predictonomy's `.env`. `cluster-autostart.sh`
-and `vault-auto-unseal.sh` are **foundational cluster** concerns (they manage the shared minikube
-lifecycle + the shared Vault for *all* namespaces) and arguably belong in STEP0. Relocating them
-means moving the files, re-pointing the cron lines, and giving STEP0 its own ntfy/notify source.
-Left as a follow-up to avoid breaking the working automation — see the conversation that produced
-this doc.
+`cluster-autostart.sh` + `vault-auto-unseal.sh` were relocated from Predictonomy into STEP0 on
+2026-06-16 (they are foundational cluster concerns — shared minikube lifecycle + shared Vault for
+*all* namespaces). They read `NTFY_URL` from `STEP0/.env`. The app-specific `check-backup.sh` stays
+in Predictonomy. **Caveat:** the ntfy topic now lives in two gitignored `.env` files (STEP0 +
+Predictonomy) — if it is ever rotated, update both.
