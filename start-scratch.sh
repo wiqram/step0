@@ -146,7 +146,10 @@ curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.tr
 #curl -X POST https://jenkins.traderyolo.com/job/predictonomy/build?token=predict
 echo "building predictonomy"
 curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/predictonomy/build?token=predict
+echo "building bestrentaladmin"
 curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/bestrentaladmin/build?token=best
+echo "building dyingpaleblue"
+curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/dyingpaleblue/build?token=dying
 #curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/QCX/build?token=qcx
 
 #################Ollama#############################
