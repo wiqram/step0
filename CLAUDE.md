@@ -46,6 +46,15 @@ to a Kubernetes NodePort on `172.16.238.2`.
   the script; do not "normalize" a path without confirming which directory it resolves to.
 - **NodePort ↔ domain mapping** is owned by Nginx Proxy Manager (`~/Ideaprojects/nginx`),
   not by this repo. If you change a service's NodePort, the NPM proxy host must change too.
+- **Resource metrics (`kubectl top` / HPAs) come from the `metrics-server` addon**, NOT
+  prometheus-adapter. The adapter can't serve pod metrics on this node — the kubelet's
+  cAdvisor series lack `pod`/`namespace`/`container` labels, so `top pod` returns empty.
+  `start-scratch.sh` and `restart-minikube.sh` both `minikube addons enable metrics-server`,
+  and it owns `v1beta1.metrics.k8s.io`. Do **not** re-add kube-prometheus's
+  `manifests/prometheusAdapter-apiService.yaml` (removed there) — applying it re-claims that
+  API for the adapter and silently re-breaks `top`. Full rationale: `architecture.md` →
+  "Resource metrics — metrics-server". Verify with `kubectl get apiservice v1beta1.metrics.k8s.io`
+  (owner should be `kube-system/metrics-server`).
 - **Secrets are owned by the vault repo, not STEP0.** STEP0 just calls `start-vault.sh`
   in the right order. Apps authenticate to Vault via Kubernetes ServiceAccount auth.
   Seeding is mid-transition: legacy `*-env-variables.sh` on `/mnt` → declarative
@@ -86,6 +95,7 @@ to a Kubernetes NodePort on `172.16.238.2`.
 minikube status                 # is the cluster up?
 kubectl get ns                  # monitoring, vault, jenkins, qcguy, yolo, ...
 kubectl get po -A               # all workloads
+kubectl top po -A               # resource usage (served by metrics-server addon)
 docker ps                       # nginx-proxy-manager + minikube container
 docker network inspect 5million # fixed-IP layout
 ```
