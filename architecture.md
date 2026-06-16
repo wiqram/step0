@@ -129,6 +129,15 @@ calls `restart-vault.sh` (idempotent, skips re-init), and leaves monitoring / qc
 splunk **commented out**. Use it for a warm restart; use `start-scratch.sh` for a
 cold rebuild.
 
+**Automated restart recovery (host reboot).** As of 2026-06-16 the warm path is mostly
+automatic: the `minikube` container runs with Docker `--restart=unless-stopped` (auto-resumes a
+cluster that was running, respects an intentional `minikube stop`), plus host-cron `cluster-autostart.sh`
+(reconcile k8s health) and `vault-auto-unseal.sh` (Vault boots sealed; re-unsealed in ~10s). A
+**missing/corrupt** container is NOT auto-rebuilt — it alerts, leaving the cold `start-scratch.sh`
+decision to a human. **Full boot sequence, the warm-vs-cold decision, and a symptom→fix triage table
+are in [`RESTART-RECOVERY.md`](./RESTART-RECOVERY.md) — read it first when the cluster is unhealthy
+after a reboot.**
+
 ---
 
 ## 5. Platform Services

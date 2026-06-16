@@ -5,6 +5,9 @@ the full system design and `plan.md` for the improvement backlog.
 
 ## What this repo is
 
+> **Cluster unhealthy after a reboot/crash? → read [`RESTART-RECOVERY.md`](./RESTART-RECOVERY.md) FIRST**
+> (warm-vs-cold decision, what auto-recovers — auto-start + Vault auto-unseal — and a symptom→fix triage).
+
 STEP0 is the **bootstrap layer** for a single-node, GPU-accelerated private cloud
 running on one Ubuntu workstation (`private-cloud`: i9-12900K / 48 GB / RTX 3080 Ti /
 ASUS ProArt Z690). It is a collection of bash scripts — **not** an application
