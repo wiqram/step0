@@ -192,6 +192,8 @@ ordering (Vault before Jenkins/apps) is what matters here. The vault repo owns i
   (separate APIService).
 - **Verify:** `kubectl get apiservice v1beta1.metrics.k8s.io` (owner should be
   `kube-system/metrics-server`, `Available=True`) and `kubectl top pod -A`.
+- **Background:** the root-cause investigation, durability layers, and watch-items are in
+  [`HANDOFF-2026-06-16-metrics-server-and-rollout-fixes.md`](./HANDOFF-2026-06-16-metrics-server-and-rollout-fixes.md).
 
 ### CI/CD — Jenkins (`~/Ideaprojects/jenkins/`)
 - Custom `inbound-agent` image (kubectl + curl + wget pre-installed) pushed to the private registry.
