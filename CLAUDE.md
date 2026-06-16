@@ -1,7 +1,8 @@
 # CLAUDE.md — STEP0 (Private-Cloud Bootstrap)
 
-Guidance for Claude Code when working in this repository. See `architecture.md` for
-the full system design and `plan.md` for the improvement backlog.
+Guidance for Claude Code when working in this repository. See `README.md` for the
+human-facing front door, `architecture.md` for the full system design (incl. **§10 "deploy
+a new app" scaffolding**), and `plan.md` for the improvement backlog.
 
 ## What this repo is
 

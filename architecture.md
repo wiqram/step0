@@ -208,8 +208,21 @@ Nginx config (buffering off, 600s timeouts).
 
 ## 7. Persistence & Backups
 
-- **Shared volume:** `/mnt/minikube-backups/minikube-mnt` is mounted into the Minikube
-  node at `/mnt`. It carries per-app env/secret scripts and app data shared between host and cluster.
+- **Shared volume:** `/mnt/minikube-backups/minikube-mnt` (on `/dev/sdb1`) is mounted into
+  the Minikube node at `/mnt`. It carries per-app env/secret scripts and app data shared
+  between host and cluster. Inside it, `container-registry-images/` is itself a **separate
+  `/dev/sdb2` mount** (the durable registry from commit R8) — `tar` descends into it
+  normally, so it is captured by the backup.
+- **Location history (important).** The shared volume used to live at
+  `~/Ideaprojects/minikube-mnt` (on the `/home` disk, `/dev/sda6`). It was relocated to
+  `/mnt/minikube-backups/minikube-mnt` and `restart-minikube.sh` / `start-scratch.sh`
+  mount the new path. On **2026-06-16** we found `backup-minikube-mnt.sh` was still pointing
+  `backup_files` at the *old* `~/Ideaprojects/minikube-mnt` — so every weekly archive had
+  silently been backing up a **stale** copy (months old, missing the live Postgres/Mongo
+  data, durable registry, and current secrets). Fixed to the live path; the old stale tree
+  was moved to **`/mnt/minikube-backups/old-minikube-mnt`** (kept as a just-in-case relic,
+  not used by anything). If you ever see two `minikube-mnt`-ish dirs again, the live one is
+  the one Minikube mounts — confirm against `restart-minikube.sh`.
 
 ### Weekly automated backup (cron)
 
@@ -217,11 +230,28 @@ A **`root` cron job runs weekly** (Mondays ~05:00) and executes
 **`backup-minikube-mnt.sh`**. This is the disaster-recovery safety net: if anything
 happens to the `private-cloud` host, these archives are what the stack is rebuilt from.
 Every run produces a single compressed, dated archive
-`private-cloud-<MM-DD-YY>.tgz` (≈4–5 GB) under **`/mnt/minikube-backups`** (root-owned).
-The live entry is in `root`'s crontab (`sudo crontab -l`):
+`private-cloud-<MM-DD-YY>.tgz` (≈5 GB) under **`/mnt/minikube-backups`** (root-owned).
+The live entry is the **single** line in `root`'s crontab (`sudo crontab -l -u root`):
 `0 5 * * 1 /bin/bash /home/cloud/Ideaprojects/STEP0/backup-minikube-mnt.sh >> /var/log/minikube-backup.log 2>&1`
 — run output (including the prune) is appended to **`/var/log/minikube-backup.log`**, so
 check there to confirm a run or debug a failure.
+
+> **Must run as `root`.** The live mount contains root-owned data dirs
+> (`predictonomy-postgres/pgdata`, the `trading-microservices` MongoDB WiredTiger files,
+> the durable registry). A non-root run would *silently skip* those (tar only warns,
+> `set -e` is off) and produce a false-confidence archive. Run/test it with `sudo`.
+
+> **Single-instance guard (`flock`).** The archive name is deterministic per day, so two
+> concurrent runs would `tar` into the same file and corrupt it. The script grabs a
+> non-blocking `flock` on `/tmp/backup-minikube-mnt.lock` (fd 200) and a second runner
+> exits 0 quietly. (Added 2026-06-16 after the crontab was found to contain a *duplicate*
+> entry firing at the same minute — the duplicate has since been removed.)
+
+> **`ollama/models` is excluded** from the tar (`--exclude='*/ollama/models'`). Those
+> model weights are ~38 GB and **reproducible** (`ollama pull` / the `Modelfile`); without
+> the exclude each weekly archive would balloon from ~5 GB to ~40 GB and fill `/dev/sdb1`
+> under the retention policy. Ollama's identity key (`id_ed25519`) lives outside `models/`
+> and **is** captured. On restore, re-fetch the model rather than expecting it in the tar.
 
 **Retention (space-saving prune, at the end of each run):** all weekly backups for the
 **current and previous month** are kept; for any **older month** only that month's
@@ -229,10 +259,11 @@ check there to confirm a run or debug a failure.
 weekly-granular while older months collapse to one archive each (≈4–5 GB/month saved
 per pruned week).
 
-The script `tar -czf`s four trees — `minikube-mnt`, `~/Ideaprojects/nginx`,
-`~/Ideaprojects/STEP0`, and `~/Ideaprojects/qcguy-ghost` — but the bulk of the value is
-inside the **`minikube-mnt`** shared volume, which captures everything that **can't live
-in GitHub**:
+The script `tar -czf`s **five** trees — `minikube-mnt`, `~/Ideaprojects/nginx`,
+`~/Ideaprojects/STEP0`, `~/Ideaprojects/qcguy-ghost`, and **`~/.vault`** (the *only* copy
+of Vault's unseal key + root token, in `cluster-keys.json`, plus the Jenkins AppRole
+secret_ids under `jenkins-approle/`) — but the bulk of the value is inside the
+**`minikube-mnt`** shared volume, which captures everything that **can't live in GitHub**:
 
 - **Per-app secrets / Vault seed material** — `yolo-`, `helpmepdf-`, `predictonomy-`,
   `ollama-env-variables.sh`, the SOPS age key (`keys-sops-IMPORTANT.txt`) and
@@ -326,3 +357,208 @@ The host has **two near-identical directories that differ only by case**:
 `$HOME/IdeaProjects/splunk-hsbc-demo/...` for Splunk). On case-sensitive Linux these
 are **different paths**, and the script only works because both directories happen to
 exist. This is fragile — see `plan.md`.
+
+---
+
+## 10. Deploying a NEW app onto the cluster (dev → prod scaffolding)
+
+This is the playbook for onboarding a brand-new project onto `private-cloud`. The whole
+platform is **convention over configuration**: copy the patterns below and your app gets
+secrets, CI/CD, a public HTTPS domain, and weekly backups "for free". The two reference
+apps to copy from are **qcguy-ghost** (simplest: public image + Vault-injected config)
+and **ollama** (GPU + Vault). Real file paths are given so you can lift the skeletons.
+
+### 10.1 The mental model
+
+```
+GitHub repo (your app)
+  ├─ Dockerfile                         → image
+  ├─ compiled.yaml                      → Namespace + ServiceAccount + Deployment + NodePort Service
+  ├─ Jenkinsfile                        → vaultSync → docker build/push → kubectl apply → rollout status
+  └─ vault/<svc>.env, <svc>.secret.sops.env  → config + SOPS-encrypted secrets
+
+Jenkins build  ──push──▶  registry (container-registry.traderyolo.com → 172.16.238.2:5000, blobs on sdb2)
+               ──apply─▶  K8s ns "<app>"  ──Service type:NodePort 30XXX on 172.16.238.2
+Vault agent injector  ──reads kv/<app>/*──▶  renders /vault/secrets/* into the pod
+nginx-proxy-manager   ──<app>.com (TLS) ──▶  172.16.238.2:30XXX
+```
+
+Each app owns exactly **one Kubernetes namespace**, **one NodePort**, **one Vault KV path
+`kv/<app>/*`** + policy + K8s-auth role + `jenkins-<app>` AppRole, **one Jenkins job**, and
+**one (or more) NPM proxy host(s)**. Persistent data goes under the shared mount so it is
+backed up (§10.7).
+
+### 10.2 Dev vs prod on a single node
+
+There is **one** cluster, so environments are separated by **namespace + NodePort + domain
++ Vault path**, not by cluster. Recommended convention for a new app `myapp`:
+
+| | Namespace | Vault path | Domain (NPM) | NodePort |
+|---|---|---|---|---|
+| **dev**  | `myapp-dev`  | `kv/myapp-dev/*`  | `dev.myapp.com` | one free 30XXX |
+| **prod** | `myapp`      | `kv/myapp/*`      | `myapp.com`     | another free 30XXX |
+
+Each environment gets its own `*-policy.hcl`, K8s-auth role (`myapp-dev-role` /
+`myapp-role`), and `jenkins-myapp-dev` / `jenkins-myapp` AppRole. Drive them from the same
+repo with a parameterised Jenkinsfile (`ENV=dev|prod` → picks namespace, image tag, and
+`vaultSync(app: "myapp-${ENV}")`). The cheapest alternative is **local dev off-cluster**
+(docker-compose on your laptop) and only `myapp` (prod) on the cluster — most existing apps
+do this today (they are single-environment). Use the two-namespace split only when you need
+a true in-cluster staging target.
+
+### 10.3 Step-by-step checklist
+
+1. **Pick a free NodePort** in `30000–32767`. The authoritative list of what's already
+   taken is the **NPM routing table in §3** (and `grep -rn 'nodePort:' ~/Ideaprojects/*/compiled.yaml`).
+   Record your new one back into §3 when you add the proxy host.
+2. **Write `compiled.yaml`** — Namespace, `vault-secrets` ServiceAccount, Deployment, and a
+   `type: NodePort` Service (skeleton in §10.4).
+3. **Write `Dockerfile`** and confirm the image name `container-registry.traderyolo.com/<app>:<tag>`.
+4. **Write `vault/<svc>.env` (config) + `vault/<svc>.secret.sops.env` (SOPS+age encrypted)**
+   in the app repo. These are the source of truth for `kv/<app>/*`.
+5. **Provision Vault for the app** (§10.5) — policy, K8s-auth role, `jenkins-<app>` AppRole;
+   paste the AppRole creds into Jenkins credentials.
+6. **Write `Jenkinsfile`** (§10.6): `vaultSync(app:'<app>')` → build/push → `kubectl apply`
+   → `kubectl rollout status`.
+7. **Create the Jenkins job** pointing at the repo, then add a trigger line to
+   `start-scratch.sh` so a cold rebuild redeploys it:
+   `curl -X POST https://private-cloud:<JENKINS_TOKEN>@jenkins.traderyolo.com/job/<app>/build?token=<jobtoken>`
+8. **Add an NPM proxy host** in `~/Ideaprojects/nginx` (admin UI :81): `<app>.com` (HTTPS,
+   Let's Encrypt) → forward to `172.16.238.2:30XXX`. Update §3.
+9. **Point DNS** for the domain at the host's public IP.
+
+### 10.4 `compiled.yaml` skeleton (copy from `qcguy-ghost/compiled.yaml`)
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata: { name: myapp }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: vault-secrets, namespace: myapp }   # bound to the Vault K8s-auth role
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: myapp, namespace: myapp, labels: { app: myapp } }
+spec:
+  selector: { matchLabels: { app: myapp } }
+  template:
+    metadata:
+      labels: { app: myapp }
+      annotations:
+        vault.hashicorp.com/agent-inject: 'true'
+        vault.hashicorp.com/role: 'myapp-role'                 # matches the K8s-auth role
+        vault.hashicorp.com/agent-pre-populate-only: 'true'    # render once at startup, no sidecar
+        vault.hashicorp.com/agent-inject-secret-app.env: 'kv/myapp/config'
+        vault.hashicorp.com/agent-inject-template-app.env: |
+          {{- with secret "kv/myapp/config" -}}
+          {{- range $k, $v := .Data.data }}{{ $k }}={{ $v }}
+          {{ end -}}{{- end -}}
+    spec:
+      serviceAccountName: vault-secrets
+      # nodeSelector / "nvidia.com/gpu: 1" resource limits ONLY if you need the RTX 3080 Ti (see ollama)
+      containers:
+        - name: myapp
+          image: container-registry.traderyolo.com/myapp:latest
+          imagePullPolicy: IfNotPresent
+          # secrets rendered to /vault/secrets/app.env — source it in your entrypoint
+---
+apiVersion: v1
+kind: Service
+metadata: { name: myapp, namespace: myapp, labels: { app: myapp } }
+spec:
+  type: NodePort
+  selector: { app: myapp }
+  ports:
+    - { port: 80, targetPort: 8080, nodePort: 30XXX }   # 30XXX = your chosen free port
+```
+
+### 10.5 Vault provisioning for the app (in the **vault** repo)
+
+1. `vault/<app>-policy.hcl` — least privilege:
+   ```hcl
+   path "kv/data/<app>/*"     { capabilities = ["read"] }
+   path "kv/metadata/<app>/*" { capabilities = ["read","list"] }
+   ```
+2. K8s-auth role (add to `start-vault.sh` so cold bootstrap recreates it):
+   ```bash
+   vault write auth/kubernetes/role/<app>-role \
+     bound_service_account_names=vault-secrets \
+     bound_service_account_namespaces=<app> \
+     policies=<app>-policy
+   ```
+3. Jenkins AppRole for the sync pipeline:
+   ```bash
+   ~/Ideaprojects/vault/scripts/setup-jenkins-approle.sh <app>
+   # writes role_id/secret_id to ~/.vault/jenkins-approle/<app>.env (0600)
+   ```
+4. In Jenkins, add credentials `vault-approle-id-<app>` / `vault-approle-secret-<app>` from
+   that file, and ensure the shared `sops-age-key` credential exists.
+
+Secrets then flow: app repo `vault/*.env` + `*.secret.sops.env` → `vaultSync(app:'<app>')`
+merges them into `kv/<app>/*` (never clobbering sibling keys) → the agent injector renders
+them into the pod. See vault repo `vault-sync.sh` / `vars/vaultSync.groovy`.
+
+### 10.6 `Jenkinsfile` skeleton (copy from `qcguy-ghost/Jenkinsfile`)
+
+```groovy
+pipeline {
+  agent none
+  stages {
+    stage('Refresh Vault secrets') {
+      agent { kubernetes { cloud 'kubernetes'; label 'kubeagent'; defaultContainer 'jnlp' } }
+      steps {
+        checkout scm
+        script {
+          library identifier: 'vault-tools@main', retriever: modernSCM([
+            $class: 'GitSCMSource', remote: 'https://github.com/wiqram/vault.git',
+            credentialsId: '<vault-repo-cred-id>'])
+          vaultSync(app: 'myapp')          // ./vault/*.env (+ sops) → kv/myapp/*
+        }
+      }
+    }
+    stage('Build & push') {
+      agent { kubernetes { cloud 'kubernetes'; label 'kubeagent'; defaultContainer 'jnlp' } }
+      steps {
+        checkout scm
+        sh 'docker build -t container-registry.traderyolo.com/myapp:latest .'
+        sh 'docker push container-registry.traderyolo.com/myapp:latest'
+      }
+    }
+    stage('Deploy') {
+      agent { kubernetes { cloud 'kubernetes'; label 'kubeagent'; defaultContainer 'jnlp' } }
+      steps {
+        checkout scm
+        sh 'kubectl apply -f compiled.yaml'
+        sh 'kubectl rollout status deployment -n myapp myapp --timeout=240s'
+      }
+    }
+  }
+}
+```
+
+The build runs on the custom **`jenkins-inbound-agent-vik:cloud`** agent image
+(`~/Ideaprojects/jenkins/inbound-agent/`), which already has `kubectl`, `vault`, `sops`,
+`age`, `jq`, `docker`. If your build needs more tooling, extend that image and re-push it.
+
+### 10.7 Persistence & backups for the new app
+
+Anything the app must **not lose** (DB data dirs, uploads, generated keys) should live under
+the shared mount `/mnt/minikube-backups/minikube-mnt/<app>/` (appears as `/mnt/<app>` inside
+the cluster — use a `hostPath`/`local` PV pointing there). It is then captured by the weekly
+backup automatically (§7). **Do not** rely on backing up reproducible artifacts (container
+images, downloadable model weights — cf. the `ollama/models` exclude); back up only the
+irreplaceable state. If the app needs a *consistent* DB snapshot, add a `mongodump`/`pg_dump`
+CronJob that writes into `minikube-mnt/<app>-backups/` rather than trusting the hot file copy.
+
+### 10.8 Don't forget
+
+- **NodePort uniqueness** — a clash silently breaks routing; check §3 first, update it after.
+- **Image pull** — manifests use `imagePullPolicy: IfNotPresent` against the insecure
+  registry `172.16.238.2:5000`; the cluster trusts it via `--insecure-registry` (already set).
+- **GPU** — only request `nvidia.com/gpu` if you truly need it; there is exactly one RTX
+  3080 Ti shared across the node (ollama is the heavy user).
+- **No secrets in Git or manifests** — config goes in `*.env`, secrets in `*.secret.sops.env`
+  (SOPS+age), everything else is read from Vault at runtime.
+- **Wire it into `start-scratch.sh`** — otherwise a cold rebuild won't bring your app back.
