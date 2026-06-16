@@ -6,7 +6,7 @@
 ####################################
 
 # What to backup.
-backup_files="/home/cloud/Ideaprojects/minikube-mnt"
+backup_files="/mnt/minikube-backups/minikube-mnt"
 backup_files2="/home/cloud/Ideaprojects/nginx"
 backup_files3="/home/cloud/Ideaprojects/STEP0"
 backup_files4="/home/cloud/Ideaprojects/qcguy-ghost"
@@ -46,7 +46,12 @@ date
 echo
 
 # Backup the files using tar.
-tar -czf $dest/$archive_file $backup_files $backup_files2 $backup_files3 $backup_files4 $backup_files5
+# Exclude ollama/models (~38G of model blobs, e.g. deepseek-r1:14b): they are
+# reproducible via `ollama pull` / the Modelfile, and including them would bloat
+# each weekly archive from ~5G to ~40G and fill /dev/sdb1 under the retention
+# policy. ollama's identity key (id_ed25519) + config live outside models/ and
+# ARE still captured.
+tar -czf $dest/$archive_file --exclude='*/ollama/models' $backup_files $backup_files2 $backup_files3 $backup_files4 $backup_files5
 
 # Print end status message.
 echo
