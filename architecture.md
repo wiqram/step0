@@ -113,7 +113,8 @@ Executed top to bottom (`set -e`, so any failure aborts the run):
    `--cpus 12 --memory 32768 --disk-size 40g --driver=docker --network 5million
    --gpus all --mount /mnt/minikube-backups/minikube-mnt:/mnt
    --insecure-registry 172.16.238.2:5000` plus kubelet/scheduler/controller webhook flags.
-3. **Addons** – `registry`, `nvidia-gpu-device-plugin`.
+3. **Addons** – `registry`, `nvidia-gpu-device-plugin`, `metrics-server` (serves
+   `kubectl top`/HPAs — see [Resource metrics](#resource-metrics--metrics-server-kubectl-top--hpas)).
 4. **Monitoring** – apply `kube-prometheus` (`manifests/setup` → wait for CRDs → `manifests/`) into `monitoring` ns.
 5. **Vault** – `cd ~/Ideaprojects/vault && bash start-vault.sh` (Helm install, init, unseal, policies, K8s auth, load per-app secrets from `/mnt`).
 6. **Jenkins** – build the custom `jenkins-inbound-agent-vik:cloud` image if absent, push to `container-registry.traderyolo.com`, then `kubectl apply` Jenkins manifests.
@@ -169,7 +170,28 @@ ordering (Vault before Jenkins/apps) is what matters here. The vault repo owns i
 
 ### Monitoring — kube-prometheus (`~/Ideaprojects/kube-prometheus/`)
 - Full Prometheus Operator + Grafana + Alertmanager stack in the `monitoring` ns.
-- Replaces the `metrics-server` addon (intentionally not enabled).
+
+### Resource metrics — `metrics-server` (`kubectl top` / HPAs)
+> Updated 2026-06-16. This used to read "kube-prometheus replaces metrics-server
+> (intentionally not enabled)" — that was wrong on this node and broke `kubectl top pod`.
+
+- **What serves `metrics.k8s.io`:** the **`metrics-server`** addon (`kube-system`), not
+  prometheus-adapter. It owns the `v1beta1.metrics.k8s.io` APIService and reads the kubelet
+  **Summary API** (keyed by pod/namespace).
+- **Why not prometheus-adapter:** on this minikube/docker node the kubelet's cAdvisor
+  series (`/metrics/cadvisor`) are emitted **without `pod`/`namespace`/`container` labels**,
+  so the adapter's pod resource-rules match nothing → `kubectl top pod` returned empty
+  (`top node` worked because node rules don't need those labels). metrics-server's Summary-API
+  path is unaffected by the missing cAdvisor labels.
+- **Enabled in bootstrap:** `minikube addons enable metrics-server` in both `start-scratch.sh`
+  and `restart-minikube.sh`. The addon flag also persists across `minikube stop/start`.
+- **No re-claim conflict:** the kube-prometheus `manifests/prometheusAdapter-apiService.yaml`
+  (which re-claimed `v1beta1.metrics.k8s.io` for the adapter on every `kubectl apply -f manifests/`)
+  has been **removed from that repo**. So a full rebuild — addon enabled + `manifests/` applied —
+  leaves metrics-server as the owner. prometheus-adapter still runs for *custom* metrics
+  (separate APIService).
+- **Verify:** `kubectl get apiservice v1beta1.metrics.k8s.io` (owner should be
+  `kube-system/metrics-server`, `Available=True`) and `kubectl top pod -A`.
 
 ### CI/CD — Jenkins (`~/Ideaprojects/jenkins/`)
 - Custom `inbound-agent` image (kubectl + curl + wget pre-installed) pushed to the private registry.
