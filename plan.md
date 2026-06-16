@@ -4,6 +4,11 @@ Concrete, prioritized improvements found while documenting the stack
 (see `architecture.md`). Grouped by severity. Each item notes **why** it matters and
 **what** to change.
 
+> ⚠️ **OPEN (2026-06-16): minikube is Stopped — platform down.** Restart it here, then
+> re-push the registry, then finish the yolo reconcile Vault-durability task. Full pickup
+> steps: [`HANDOFF-2026-06-16-cluster-down.md`](HANDOFF-2026-06-16-cluster-down.md).
+> Permanent registry fix that prevents the recurring wipe = **R8** below.
+
 ---
 
 ## P0 — Security (do these first)
