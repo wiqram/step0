@@ -248,6 +248,22 @@ R1+R2). Values derived from observed usage:
 blobs fill it. Keep `delete-docker-reg-images.sh` + `reduce-docker-minikube-space.sh` scheduled, and
 point Jenkins workspaces / backups at the roomy `/mnt/minikube-backups` (432 G), not `/var`.
 
+**R8. Persist the registry on `/mnt/kachra`, off `/var`.** TODO (raised 2026-06-16). The
+`kube-system/registry` addon currently has **no volume** — image blobs live on the registry pod's
+ephemeral fs (`/var/lib/registry`), which sits on minikube's `/var`-backed disk. Two problems in one:
+(a) a node/pod restart **wipes every pushed manifest** → cluster-wide `manifest unknown` ImagePullBackOff
+*and* Jenkins agent image gone → 0 executors → builds stuck in queue (this exact outage hit 2026-06-16;
+recovered by re-pushing the node's cached images); (b) the blobs bloat `/var`. Fix: back the registry
+with a PVC (hostPath) at **`/mnt/kachra/container-registry-images`** (sdb2, 206 G, ~195 G free) so it
+survives restarts *and* keeps `/var` lean. Caveat: `/mnt/kachra` is a separate HDD (sdb2) from the
+minikube disk, so `docker push`/`pull` blob I/O will be slightly slower — acceptable for durability.
+Wrinkle: the addon Deployment is `addonmanager.kubernetes.io/mode: Reconcile`, so a `kubectl patch` is
+reverted by minikube's addon-manager — bake the volume into the node addon manifest
+(`/etc/kubernetes/addons/`) or disable the addon and run a self-managed registry Deployment+PVC
+(checked into `k8s/`). Pre-create `/mnt/kachra/container-registry-images` and mount it into minikube.
+Supersedes the ephemeral half of R7 for the registry. Cross-ref: IG-Trading-Microservices memory
+`registry-ephemeral-wipe.md`.
+
 ### Net effect
 Same 32 GB envelope, but: scheduler can no longer silently over-commit; OOM pressure is caught by
 kubelet eviction and absorbed by zram instead of killing pods mid-request; ~2.5 GB reclaimed from HA
@@ -260,4 +276,4 @@ IntelliJ/Chrome; GPU cleanly dedicated to the one Ollama that serves everything.
 2. **R2** — already in `start-scratch.sh`; takes effect on next `restart-minikube.sh` / cold boot.
    Mirror the same flags into `restart-minikube.sh`.
 3. **R3, R6** — manifest edits, roll out per namespace.
-4. **R4, R7** — operability follow-ups.
+4. **R4, R7, R8** — operability follow-ups (R8 needs a minikube restart to mount `/mnt/kachra`).
