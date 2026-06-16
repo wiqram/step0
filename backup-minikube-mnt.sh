@@ -5,11 +5,17 @@
 #
 ####################################
 
-# What to backup. 
+# What to backup.
 backup_files="/home/cloud/Ideaprojects/minikube-mnt"
 backup_files2="/home/cloud/Ideaprojects/nginx"
 backup_files3="/home/cloud/Ideaprojects/STEP0"
 backup_files4="/home/cloud/Ideaprojects/qcguy-ghost"
+# ~/.vault holds cluster-keys.json (the ONLY copy of Vault's unseal key + root
+# token) and jenkins-approle/. It lives in $HOME, outside every dir above, so it
+# was NOT captured before — meaning a lost/truncated keys file (see the
+# 2026-06-16 start-vault.sh race that zeroed it) on an already-initialized Vault
+# would be unrecoverable. Back it up here. Runs as root cron; can read the 0600 file.
+backup_files5="/home/cloud/.vault"
 
 #First refresh the live vault config files into minikube-mnt so the backup captures
 #the current per-app secrets (these can't live in GitHub).
@@ -17,6 +23,14 @@ cp /home/cloud/Ideaprojects/vault/helpmepdf-env-variables.sh $backup_files
 cp /home/cloud/Ideaprojects/vault/yolo-env-variables.sh $backup_files
 cp /home/cloud/Ideaprojects/vault/predictonomy-env-variables.sh $backup_files
 cp /home/cloud/Ideaprojects/vault/ollama-env-variables.sh $backup_files
+
+# Sanity-check the irreplaceable keys file before snapshotting. An empty/missing
+# cluster-keys.json would make this archive a false-confidence backup, so warn
+# loudly (visible in the cron log) — but still proceed so the rest is captured.
+keys_file="$backup_files5/cluster-keys.json"
+if [ ! -s "$keys_file" ]; then
+    echo "WARNING: $keys_file is missing or EMPTY — Vault unseal key/root token will NOT be in this backup." >&2
+fi
 
 # Where to backup to.
 dest="/mnt/minikube-backups"
@@ -27,12 +41,12 @@ hostname=$(hostname -s)
 archive_file="$hostname-$day.tgz"
 
 # Print start status message.
-echo "Backing up $backup_files and $backup_files2 and $backup_files3 and $backup_files4 to $dest/$archive_file"
+echo "Backing up $backup_files and $backup_files2 and $backup_files3 and $backup_files4 and $backup_files5 to $dest/$archive_file"
 date
 echo
 
 # Backup the files using tar.
-tar -czf $dest/$archive_file $backup_files $backup_files2 $backup_files3 $backup_files4
+tar -czf $dest/$archive_file $backup_files $backup_files2 $backup_files3 $backup_files4 $backup_files5
 
 # Print end status message.
 echo
