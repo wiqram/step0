@@ -388,25 +388,24 @@ Each app owns exactly **one Kubernetes namespace**, **one NodePort**, **one Vaul
 **one (or more) NPM proxy host(s)**. Persistent data goes under the shared mount so it is
 backed up (§10.7).
 
-### 10.2 Dev vs prod on a single node
+### 10.2 Dev vs prod — what each means here
 
-There is **one** cluster, so environments are separated by **namespace + NodePort + domain
-+ Vault path**, not by cluster. Recommended convention for a new app `myapp`:
+The two environments are **not** two namespaces on the cluster. The convention is:
 
-| | Namespace | Vault path | Domain (NPM) | NodePort |
-|---|---|---|---|---|
-| **dev**  | `myapp-dev`  | `kv/myapp-dev/*`  | `dev.myapp.com` | one free 30XXX |
-| **prod** | `myapp`      | `kv/myapp/*`      | `myapp.com`     | another free 30XXX |
+| | Where it runs | How it gets config/secrets | Ingress |
+|---|---|---|---|
+| **dev**  | **Local, OFF the cluster** — on the host/laptop (e.g. `docker-compose up`, or running the binary/process directly). Minikube is not involved. | Source the same repo files: `vault/<svc>.env` for config + `sops -d vault/<svc>.secret.sops.env` to decrypt secrets locally. No Vault server needed. | `localhost:<port>` |
+| **prod** | **The minikube cluster only** — `compiled.yaml` applied into namespace `<app>`, image from the private registry. | Vault agent injector renders `kv/<app>/*` into the pod at runtime. | NPM domain (TLS) → NodePort `30XXX` on `172.16.238.2` |
 
-Each environment gets its own `*-policy.hcl`, K8s-auth role (`myapp-dev-role` /
-`myapp-role`), and `jenkins-myapp-dev` / `jenkins-myapp` AppRole. Drive them from the same
-repo with a parameterised Jenkinsfile (`ENV=dev|prod` → picks namespace, image tag, and
-`vaultSync(app: "myapp-${ENV}")`). The cheapest alternative is **local dev off-cluster**
-(docker-compose on your laptop) and only `myapp` (prod) on the cluster — most existing apps
-do this today (they are single-environment). Use the two-namespace split only when you need
-a true in-cluster staging target.
+So **everything from §10.3 onward (NodePort, namespace, Vault role/AppRole, Jenkins, NPM) is
+PROD** — the steps to put an app on the cluster. **Dev needs none of it**: clone the repo,
+provide the env (the un-encrypted `.env` plus a local `sops -d` of the secrets file), and run
+it on your machine. The same `vault/*.env` + `*.secret.sops.env` files are the single source
+of truth for both — dev reads them directly; prod gets them via `vaultSync` → `kv/<app>/*` →
+the injector. Keep the **dev port and the prod NodePort distinct in your head**: dev binds a
+local port on the host; prod publishes a cluster NodePort.
 
-### 10.3 Step-by-step checklist
+### 10.3 Step-by-step checklist (PROD / on-cluster)
 
 1. **Pick a free NodePort** in `30000–32767`. The authoritative list of what's already
    taken is the **NPM routing table in §3** (and `grep -rn 'nodePort:' ~/Ideaprojects/*/compiled.yaml`).
