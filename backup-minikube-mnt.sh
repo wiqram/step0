@@ -5,6 +5,16 @@
 #
 ####################################
 
+# Single-instance guard (flock). The archive name is deterministic per day
+# ($hostname-$day.tgz), so two copies running at once — e.g. a duplicated root
+# cron entry both firing Monday 05:00 — would `tar -czf` into the SAME file
+# concurrently and corrupt it. Grab an exclusive, non-blocking lock on fd 200;
+# if another run already holds it, exit quietly (0) instead of queuing. /tmp is
+# writable whether this runs as the root cron or manually via sudo.
+LOCKFILE="/tmp/backup-minikube-mnt.lock"
+exec 200>"$LOCKFILE"
+flock -n 200 || { echo "Another backup-minikube-mnt run holds $LOCKFILE; exiting."; exit 0; }
+
 # What to backup.
 backup_files="/mnt/minikube-backups/minikube-mnt"
 backup_files2="/home/cloud/Ideaprojects/nginx"
