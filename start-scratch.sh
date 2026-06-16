@@ -65,11 +65,15 @@ fi
 minikube addons disable registry
 kubectl apply -f "$(dirname "$SCRIPT_PATH")/k8s/registry/"
 # Old ephemeral path (kept for reference): minikube addons enable registry
-#setup metrics server for minikube - NOT NEEDED because of grafana and prometheus installation
-#minikube addons enable metrics-server
+# Resource metrics for `kubectl top` / HPAs. We DO need this: prometheus-adapter
+# can't serve pod metrics on this node (kubelet cAdvisor series lack pod/namespace/
+# container labels), so top pod returns nothing. metrics-server reads the kubelet
+# Summary API instead and owns v1beta1.metrics.k8s.io. The kube-prometheus
+# adapter-apiservice manifest (which would re-claim that API on `apply -f manifests/`)
+# has been removed from that repo, so there's no conflict on rebuild.
+minikube addons enable metrics-server
 #minikube addons enable ingress
 #minikube addons enable dashboard
-#minikube addons enable metrics-server
 minikube addons enable nvidia-gpu-device-plugin
 #minikube addons enable nvidia-driver-installer
 #MINIKUBEIP=$(minikube ip)
