@@ -15,6 +15,14 @@ secret durable) is **blocked** on the cluster being up. This doc is the pickup p
   registered service account `reconcile-bot@yolo.local`, and Mongo data all come back
   intact. Only the **ephemeral in-cluster registry** loses data (its pod has no volume —
   see plan.md **R8**), exactly like the 2026-06-16 03:24 wipe.
+  - **⚠️ This only holds for `restart-minikube.sh` (preserves the node).** If the cluster
+    is instead rebuilt from scratch (`start-scratch.sh` / `minikube delete`), etcd + Mongo
+    PV are wiped: `reconcile-config` AND the `reconcile-bot@yolo.local` account are gone, so
+    the "read the password back" step below CANNOT work. In that case, first **re-register
+    the service account** (the password is unrecoverable — generate a fresh one) via
+    `POST /v1/user/registerfollower`, then put the NEW creds in the SOPS manifest. The
+    registration payload MUST include a `follower` object or it 409s with
+    `Cannot read property 'brokerId' of null` — see yolo memory `reconcile-sweep-auth.md`.
 - Because of that, after restart expect cluster-wide **ImagePullBackOff** (`manifest
   unknown`) until the images are re-pushed.
 
