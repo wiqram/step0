@@ -178,7 +178,7 @@ curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.tr
 echo "building yolo pipeline but before that sleeping for 1 min"
 sleep 1m
 #wget --auth-no-challenge --user=admin --password=5ad344f0518640f62d0483084bb889bc http://13.126.143.49:8080/job/ANT//build?token=iFBDOBhNhaxL4T9ass93HRXun2JF161Z
-curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/trading-microservices/build?token=yolobuildstep_0
+curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/trading-microservices/build?token=yolo
 #curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/delete_mem_leak_java/build?token=delete_mem_leak_java
 ##################### ONLY FOR HSBC splunk-for-hsbc-demo - the lines with only one # can be dehashed to deploy splunk#############################
 echo "End - NOT deploying splunk"
