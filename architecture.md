@@ -305,6 +305,34 @@ To restore, unpack the relevant tree from the latest `private-cloud-*.tgz` back 
 place, then re-bootstrap via `start-scratch.sh` (which re-seeds Vault from the recovered
 `/mnt` secret scripts and redeploys the apps).
 
+### Off-site copy — Google Cloud Storage Coldline
+
+After the local archive + prune, the **same script** pushes that run's `.tgz` **off-site**
+to **`gs://private_cloud_backup`** (storage class **Coldline**, **asia** multi-region,
+project `igtrader-296013`). This is the off-host leg of disaster recovery — a
+fire/theft/disk-loss that takes out `/dev/sdb1` no longer takes out every backup. (The
+existing local archives were backfilled to the bucket when this was first set up.)
+
+- **No re-zip** — the local `.tgz` is already compressed; it is uploaded as-is.
+- **Auth** — a dedicated GCP service account
+  `step0-backup@igtrader-296013.iam.gserviceaccount.com` (role `roles/storage.objectAdmin`
+  on the bucket — needs object create **and** delete for the prune), via a key at
+  **`~/.gcp/step0-backup-key.json`** (0600, outside every repo, readable by the root cron).
+  The script activates it into an isolated `CLOUDSDK_CONFIG=~/.gcp/cloudsdk-config`.
+- **gcloud is a no-root (home) install** at `~/google-cloud-sdk`; the script calls it by
+  **absolute path** (`GCLOUD_BIN`) because the root cron's `PATH` won't include it.
+- **Bucket prune mirrors the local retention** (current + previous month, one per older
+  month) **plus a 90-day age floor** (`GCS_MIN_AGE_DAYS=93`). Coldline has a **90-day
+  minimum storage duration**, so deleting earlier incurs an early-deletion fee; a
+  delete-candidate younger than the floor is left until a later weekly run prunes it for
+  free. Object age is read from the **date in the filename** (uploaded the same day), so the
+  prune makes **no** extra GCS metadata/API calls.
+- **Fully additive + guarded** — a missing `gcloud`/key or any network failure only `WARN`s
+  to `/var/log/minikube-backup.log`; it never aborts or affects the local backup.
+
+One-time setup (create bucket → service account → `objectAdmin` binding → key) is documented
+verbatim in the script's header comment.
+
 ### Backup retention convention — apply to **every** backup cron job
 
 **Standard for all backup cron jobs in this setup** (new ones must replicate it):
@@ -361,7 +389,7 @@ done
 | `start-scratch.sh` | Cold bootstrap of the whole stack |
 | `restart-minikube.sh` | Warm restart (reuse cluster, idempotent vault, apps commented out) |
 | `minikube-delete-and-upgrade.sh` | Delete cluster, reinstall latest Minikube (kvm2 + GPU addons) |
-| `backup-minikube-mnt.sh` | **Weekly `root` cron** (Mon ~05:00): compress shared volume (secrets + DB snapshots) + nginx + STEP0 + qcguy → dated `.tgz` in `/mnt/minikube-backups`, then prune (keep weekly for current+previous month, one per older month) |
+| `backup-minikube-mnt.sh` | **Weekly `root` cron** (Mon ~05:00): compress shared volume (secrets + DB snapshots) + nginx + STEP0 + qcguy → dated `.tgz` in `/mnt/minikube-backups`, prune (keep weekly for current+previous month, one per older month), then push the archive **off-site to GCS Coldline** (`gs://private_cloud_backup`) with a 90-day-floor prune. See §7 "Off-site copy". |
 | `reduce-docker-minikube-space.sh` | apt/journal clean + `docker system prune` on host **and** inside Minikube |
 | `reduce-var-space.sh` | Truncate logs, vacuum journald, prune docker |
 | `delete-docker-reg-images.sh` | GC orphaned blobs in the registry |

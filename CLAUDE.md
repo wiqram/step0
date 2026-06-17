@@ -28,7 +28,7 @@ to a Kubernetes NodePort on `172.16.238.2`.
 | `start-scratch.sh` | **Master cold-bootstrap.** Order matters: network → minikube → addons → monitoring → vault → jenkins → qcguy → app builds → splunk. |
 | `restart-minikube.sh` | Warm restart; reuses cluster, idempotent vault, most apps commented out. |
 | `minikube-delete-and-upgrade.sh` | Nuke + reinstall latest Minikube. |
-| `backup-minikube-mnt.sh` | **Weekly disaster-recovery backup** (run by a `root` cron, Mondays ~05:00). Compresses the `minikube-mnt` shared volume — per-app secrets (qcguy, vault/SOPS keys, ollama, predictonomy, yolo, helpmepdf) and DB snapshots — plus nginx + STEP0 + qcguy into a dated `private-cloud-<date>.tgz` in `/mnt/minikube-backups`, then prunes for space (keeps weekly backups for the current + previous month; for older months keeps only the latest backup of each). |
+| `backup-minikube-mnt.sh` | **Weekly disaster-recovery backup** (run by a `root` cron, Mondays ~05:00). Compresses the `minikube-mnt` shared volume — per-app secrets (qcguy, vault/SOPS keys, ollama, predictonomy, yolo, helpmepdf) and DB snapshots — plus nginx + STEP0 + qcguy into a dated `private-cloud-<date>.tgz` in `/mnt/minikube-backups`, then prunes for space (keeps weekly backups for the current + previous month; for older months keeps only the latest backup of each). Finally pushes the archive **off-site to GCS Coldline** (`gs://private_cloud_backup`, project `igtrader-296013`) and prunes the bucket the same way **but with a 90-day floor** so Coldline early-deletion fees never apply. Off-site auth: service-account key at `~/.gcp/step0-backup-key.json`; `gcloud` is a no-root install at `~/google-cloud-sdk` (called by absolute path). See `architecture.md` §7 "Off-site copy". |
 | `reduce-*.sh`, `delete-docker-reg-images.sh`, `remove-old-snaps.sh` | Disk/space maintenance. |
 | `Modelfile` | Ollama model def (`deepseek-r1:14b`, equities-research prompt). |
 | `5million.xml`, `default.xml` | Legacy libvirt/KVM network defs (kvm2 era). |
@@ -70,6 +70,11 @@ to a Kubernetes NodePort on `172.16.238.2`.
   `<name>-MM-DD-YY.<ext>` and prune at the end of the run. `backup-minikube-mnt.sh` is the
   canonical implementation; see `architecture.md` §7 ("Backup retention convention") for
   the reusable snippet to copy into any new backup script.
+  - **Off-site mirror (GCS Coldline):** `backup-minikube-mnt.sh` also pushes each archive to
+    `gs://private_cloud_backup` and applies the **same** month rule to the bucket — but with
+    a **90-day age floor** (`GCS_MIN_AGE_DAYS`), because Coldline's 90-day minimum-storage
+    duration makes earlier deletes incur a fee. Any future cloud-storage prune must keep that
+    floor. Details: `architecture.md` §7 ("Off-site copy — GCS Coldline").
 
 ## Working norms
 
