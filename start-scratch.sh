@@ -164,7 +164,7 @@ curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.tr
 # up by start-vault.sh above. The ollama job has no build token, so trigger it as
 # the authenticated user (the API token authorises the build, no token needed).
 echo "building ollama"
-curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/ollama/build
+curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/ollama/build?token=ollama
 
 #################tatesremedies#############################
 #create k8s namespace for tatesremedies
