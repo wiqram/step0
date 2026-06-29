@@ -20,7 +20,7 @@ HOST: private-cloud  (i9-12900K · 48GB · RTX 3080 Ti · Ubuntu 6.8)
          Kubernetes (single node):
            platform: vault · jenkins · kube-prometheus · registry
            apps:     qcguy(Ghost) · yolo/trading-microservices · predictonomy ·
-                     helpmepdf · ollama(deepseek-r1:14b, GPU) · splunk
+                     helpmepdf · ollama(quantos/qwen2.5; deepseek-r1:32b def, GPU) · splunk
 ```
 
 Everything is co-located on one box. "Private cloud" = Docker + one Minikube + Nginx.

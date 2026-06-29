@@ -1,4 +1,4 @@
-FROM deepseek-r1:14b
+FROM deepseek-r1:32b
 
 # Keep it structured and practical for equities research
 SYSTEM """
@@ -14,4 +14,4 @@ Rules:
 
 PARAMETER temperature 0.4
 PARAMETER top_p 0.9
-PARAMETER num_ctx 8192
+PARAMETER num_ctx 32768

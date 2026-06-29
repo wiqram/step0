@@ -56,8 +56,9 @@ date
 echo
 
 # Backup the files using tar.
-# Exclude ollama/models (~38G of model blobs, e.g. deepseek-r1:14b): they are
-# reproducible via `ollama pull` / the Modelfile, and including them would bloat
+# Exclude ollama/models (~38G of model blobs, e.g. quantos/qwen2.5, qwen3-coder,
+# deepseek-r1:32b): they are reproducible via `ollama pull` / the loaders / the Modelfile,
+# and including them would bloat
 # each weekly archive from ~5G to ~40G and fill /dev/sdb1 under the retention
 # policy. ollama's identity key (id_ed25519) + config live outside models/ and
 # ARE still captured.

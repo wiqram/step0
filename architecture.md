@@ -53,7 +53,7 @@ co-located.
 │         │             yolo / trading-microservices                 │  │
 │         │             predictonomy                                 │  │
 │         │             helpmepdf                                    │  │
-│         │             ollama (deepseek-r1:14b, GPU)                │  │
+│         │             ollama (quantos/qwen2.5; ds-r1:32b def, GPU) │  │
 │         │             splunk (HSBC demo, optional)                 │  │
 │         │             tatesremedies (legacy / kvm2)                │  │
 │         └──────────────────────────────────────────────────────────┘  │
@@ -219,14 +219,26 @@ ordering (Vault before Jenkins/apps) is what matters here. The vault repo owns i
 | **yolo / trading-microservices** | Java microservices | built by Jenkins | traderyolo.com; IG-Trading bots |
 | **predictonomy** | (Jenkins-built) | built by Jenkins | Market prediction app |
 | **helpmepdf** | API + web | (Jenkins/registry) | PDF tooling, helpmepdf.com |
-| **ollama** | Ollama + DeepSeek | `Modelfile`, `~/Ideaprojects/ollama` | `deepseek-r1:14b` equities research model, GPU-backed; streaming proxy |
+| **ollama** | Ollama (multi-model) | `Modelfile` (standalone), `~/IdeaProjects/ollama` | Cluster serves `quantos:latest` (FROM `qwen2.5:7b-instruct`) + `qwen3-coder-private`; the STEP0 `Modelfile` is a **standalone** `deepseek-r1:32b` equities def, **not** what the apps consume. GPU-backed; streaming proxy. See §"Ollama model". |
 | **splunk** | Splunk Enterprise | `~/IdeaProjects/splunk-hsbc-demo` | HSBC demo; SCK log forwarding; optional |
 | **tatesremedies** | (legacy) | `~/Ideaprojects/tatesremedies` | Old kvm2 deployment, currently disabled |
 
 ### Ollama model (`Modelfile`)
-`FROM deepseek-r1:14b` with a stock-market-research system prompt (temperature 0.4,
-top_p 0.9, num_ctx 8192). Served via `ollama.traderyolo.com` with streaming-friendly
-Nginx config (buffering off, 600s timeouts).
+`FROM deepseek-r1:32b` with a stock-market-research system prompt (temperature 0.4,
+top_p 0.9, num_ctx 32768). At ~20 GB (Q4) it exceeds the 3080 Ti's 12 GB VRAM and
+partial-offloads to system RAM — feasible after the 96 GB host upgrade. Served via
+`ollama.traderyolo.com` with streaming-friendly Nginx config (buffering off, 600s timeouts).
+
+> **Scope note (reconciled 2026-06-29):** this `Modelfile` is a **standalone / reference**
+> equities-research definition; it is **not** built or served by the in-cluster Ollama.
+> The live Ollama (built by the `~/IdeaProjects/ollama` Jenkins pipeline) serves
+> **`quantos:latest`** (FROM `qwen2.5:7b-instruct`) and **`qwen3-coder-private:latest`**,
+> plus pulled bases `qwen2.5:7b-instruct`, `qwen3-coder:latest`, `llama3.1:latest`.
+> **App → model:** predictonomy & dyingpaleblue → `qwen2.5:7b-instruct`;
+> yolo/trading-microservices → `quantos:latest` (+ `nomic-embed-text` embeddings) — all
+> overridable via `OLLAMA_MODEL` (env/Vault) and, for the two TS apps, a DB
+> `aiModel`/`ai.model` setting. **Authoritative source:**
+> `~/IdeaProjects/ollama/docs/ollama/current-setup.md`.
 
 ---
 

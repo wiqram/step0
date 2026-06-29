@@ -128,7 +128,7 @@ plus a quick `curl -so /dev/null -w '%{http_code}' https://qcguy.com` smoke test
 
 ### 12. Resource sizing on a 48 GB / 12900K / 3080 Ti host
 Minikube takes `--memory 32768` (32 GB) + `--cpus 12`, leaving ~16 GB and 12 threads for
-host + Nginx + Docker + Ollama. With GPU LLM inference (`deepseek-r1:14b`) this is tight
+host + Nginx + Docker + Ollama. With GPU LLM inference (`quantos`/qwen2.5:7b — see note) this is tight
 under load. Worth either: (a) trimming Minikube to 28 GB and reserving headroom, or
 (b) setting K8s resource requests/limits per app so the GPU/RAM-hungry Ollama pod can't
 starve qcguy/yolo. Also confirm `--cpus 12` is intentional given 8P+8E cores (P-cores
@@ -183,7 +183,7 @@ Minikube binary. A future upgrade can break the whole cold-boot with no warning.
 | `start-scratch.sh` flags | `--cpus 12 --memory 32768 --disk-size 40g` | — |
 | Docker cgroup on `minikube` container | — | hard cap **12 CPU / 32 GB** (MemSwap 64 G but host has no swap → effectively 32 G hard) |
 | What kubelet reports to the scheduler | — | **24 CPU / 49 GB / ~92 GB ephemeral** — i.e. the *whole host* |
-| Actual cluster usage | — | ~1.6 cores, **11.8 GB** RAM. GPU: 7.8/12 GB (Ollama `deepseek-r1:14b`). |
+| Actual cluster usage | — | ~1.6 cores, **11.8 GB** RAM. GPU: sole claimant = Ollama; apps' served model `quantos:latest` (qwen2.5:7b) ≈ 5 GB VRAM. (Standalone `deepseek-r1:32b` Modelfile ≈ 20 GB, not the served model.) |
 
 ### The core problem — scheduler over-commit (correctness, not capacity)
 With the **docker driver**, the kubelet advertises node capacity = full host (24 CPU / 49 GB),
@@ -229,7 +229,8 @@ scale it up.
 **R5. Keep the single shared Ollama as the only GPU claimant (already correct — keep it that way).**
 One Ollama pod requests `nvidia.com/gpu: 1`; predictonomy + traderyolo consume it via its API, not
 the GPU directly. `nvidia.com/gpu` is whole-GPU-only and the 3080 Ti has just 12 GB VRAM
-(deepseek-r1:14b ≈ 7.8 GB) — **no other pod may request the GPU** or it will be unschedulable. If a
+(the served `quantos`/qwen2.5:7b model ≈ 5 GB; the standalone `deepseek-r1:32b` Modelfile ≈ 20 GB
+would partial-offload to RAM) — **no other pod may request the GPU** or it will be unschedulable. If a
 second GPU workload ever appears, use the device-plugin time-slicing config rather than a second claim.
 
 **R6. Right-size requests/limits** so the scheduler packs by *request* and bursts to *limit*
