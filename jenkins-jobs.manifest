@@ -1,0 +1,8 @@
+# app              job                    endpoint             build-token
+# (endpoint: build | buildWithParameters — yolo's job is parameterised)
+qcguy            qcguy                  build                qcguy
+predictonomy     predictonomy           build                predict
+bestrentaladmin  bestrentaladmin        build                best
+dyingpaleblue    dyingpaleblue          build                dying
+ollama           ollama                 build                ollama
+yolo             trading-microservices  buildWithParameters  yolo
