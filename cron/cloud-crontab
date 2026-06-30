@@ -14,7 +14,7 @@ CRON_TZ=UTC
 @reboot sleep 30 && /home/cloud/Ideaprojects/STEP0/cluster-autostart.sh >> /home/cloud/Ideaprojects/STEP0/logs/cluster-autostart.log 2>&1
 */10 * * * * /home/cloud/Ideaprojects/STEP0/cluster-autostart.sh >> /home/cloud/Ideaprojects/STEP0/logs/cluster-autostart.log 2>&1
 # YOLO Improvement Agent — one scoped cycle every 3h (see ops/agent/README.md)
-#PAUSED-for-wheel-build 17 */3 * * * /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/run-cycle.sh >> /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/logs/cron.log 2>&1
+17 */3 * * * /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/run-cycle.sh >> /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/logs/cron.log 2>&1
 # dyingpaleblue Improvement Agent - one scoped cycle every 3h (see ops/agent/README.md)
 41 */3 * * * /home/cloud/IdeaProjects/dyingpaleblue/ops/agent/run-cycle.sh >> /home/cloud/IdeaProjects/dyingpaleblue/ops/agent/logs/cron.log 2>&1
 
