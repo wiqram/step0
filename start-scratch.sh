@@ -38,13 +38,16 @@ else
   #                          Reserves ~32G for OS/Docker/nginx-proxy-manager/IntelliJ/Chrome + Jenkins build
   #                          spikes. NOTE: ollama runs as a pod INSIDE this cgroup, so the 32b model's CPU offload
   #                          (~8-10G) is charged against this 64G, not the host reserve. 64G still leaves ample room.
-  #   kubelet system/kube-reserved + eviction-hard : the docker driver reports the FULL host (24CPU/96G) as node
-  #                          capacity while Docker hard-caps the container at 16CPU/64G via cgroups. Without these
-  #                          the scheduler silently over-commits past 64G and the host kernel OOM-kills inside the
-  #                          cgroup (zram swap softens the edge but won't save a runaway). These flags make the
-  #                          kubelet reserve headroom and evict BEFORE the cgroup limit is hit. NOTE: zram swap is
-  #                          still configured on the host as a cheap safety net (see plan.md).
-  minikube start --cpus 16 --memory 65536 --disk-size 40g --driver=docker --network 5million --gpus all --mount-string="/mnt/minikube-backups/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.system-reserved=cpu=1,memory=2Gi --extra-config=kubelet.kube-reserved=cpu=1,memory=2Gi --extra-config=kubelet.eviction-hard="memory.available<1Gi,nodefs.available<10%" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
+  #   kubelet system-reserved=31Gi : the docker driver reports the FULL host (24CPU/96G) as node capacity (kubelet
+  #                          reads the host /proc/meminfo, NOT the cgroup) while Docker hard-caps the container at
+  #                          16CPU/64G via cgroups. The reservation must therefore bridge the ENTIRE host->cgroup gap:
+  #                          94Gi capacity - 31Gi system-reserved - 2Gi kube-reserved - 1Gi eviction => ~60Gi
+  #                          Allocatable, i.e. ~4Gi UNDER the 64G cgroup so the scheduler can't place pods the cgroup
+  #                          won't grant. (Was memory=2Gi, which left Allocatable ~89Gi -> 25Gi of silent over-commit;
+  #                          only the eviction-hard backstop saved it, and only by thrashing at the very edge.)
+  #                          CPU stays over-advertised (24 cap vs 16 cgroup) on purpose: CPU is compressible (throttles,
+  #                          never OOM-kills), so the burst headroom is free. zram swap stays on as a cheap net (plan.md).
+  minikube start --cpus 16 --memory 65536 --disk-size 40g --driver=docker --network 5million --gpus all --mount-string="/mnt/minikube-backups/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.system-reserved=cpu=1,memory=31Gi --extra-config=kubelet.kube-reserved=cpu=1,memory=2Gi --extra-config=kubelet.eviction-hard="memory.available<1Gi,nodefs.available<10%" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
   # Previous line (kept for reference): no kubelet reservations/eviction -> scheduler over-commits the 32G cgroup cap.
   #minikube start --cpus 12 --memory 32768 --disk-size 40g --driver=docker --network 5million --gpus all --mount-string="/mnt/minikube-backups/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
   #minikube start --cpus 12 --memory 32768 --disk-size 40g --driver=docker --network 5million --mount-string="/home/cloud/Ideaprojects/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
