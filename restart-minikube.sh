@@ -120,8 +120,12 @@ docker push container-registry.traderyolo.com/jenkins-inbound-agent-vik:cloud
 #################################build yolo jenkins pipeline remotely##########################
 echo "building yolo pipeline"
 #wget --auth-no-challenge --user=admin --password=5ad344f0518640f62d0483084bb889bc http://13.126.143.49:8080/job/ANT//build?token=iFBDOBhNhaxL4T9ass93HRXun2JF161Z
-curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/trading-microservices/build?token=yolobuildstep_0
-#curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/delete_mem_leak_java/build?token=delete_mem_leak_java
+# Jenkins credential from the gitignored .env (JENKINS_CRED) — same pattern as trigger-app-builds.sh,
+# so the token is no longer inline here. Set JENKINS_CRED=user:token in STEP0/.env.
+SELFDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+JENKINS_CRED="$(grep -E '^JENKINS_CRED=' "$SELFDIR/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'"'' )"
+curl -X POST "https://${JENKINS_CRED}@jenkins.traderyolo.com/job/trading-microservices/build?token=yolobuildstep_0"
+#curl -X POST "https://${JENKINS_CRED}@jenkins.traderyolo.com/job/delete_mem_leak_java/build?token=delete_mem_leak_java"
 ##################### ONLY FOR HSBC splunk-for-hsbc-demo#############################
 #echo "deploying splunk"
 #cd $HOME/IdeaProjects/splunk-hsbc-demo/
