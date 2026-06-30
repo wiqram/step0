@@ -123,7 +123,11 @@ kubectl apply -f $HOME/Ideaprojects/jenkins/compiled.yaml
 # MUST run after Jenkins is up. On a fresh Vault the secret_ids change, so this
 # keeps the credentials valid. Best-effort: never abort the bootstrap.
 echo "configuring vault Jenkins credentials"
-JENKINS_AUTH=$(grep -oE 'private-cloud:[0-9a-f]+@jenkins' "$SCRIPT_PATH" | head -1 | sed 's/@jenkins//')
+# Prefer the Jenkins credential from the gitignored .env (JENKINS_CRED) — same source
+# trigger-app-builds.sh uses — so this no longer depends on an inline token in this file.
+# Fall back to the legacy self-grep for backward-compat if .env is absent.
+JENKINS_AUTH="$(grep -E '^JENKINS_CRED=' "$(dirname "$SCRIPT_PATH")/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'"'' )"
+[ -n "$JENKINS_AUTH" ] || JENKINS_AUTH=$(grep -oE 'private-cloud:[0-9a-f]+@jenkins' "$SCRIPT_PATH" | head -1 | sed 's/@jenkins//')
 JENKINS_NODEPORT="http://$(minikube ip 2>/dev/null || echo 172.16.238.2):30380"
 for i in $(seq 1 60); do
   curl -sf -u "$JENKINS_AUTH" "$JENKINS_NODEPORT/api/json?tree=mode" >/dev/null 2>&1 && { echo "jenkins API ready"; break; }

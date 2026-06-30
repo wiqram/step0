@@ -37,6 +37,10 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+# Validate --from-phase early (it feeds numeric comparisons in should_run).
+if [ -n "$FROM_PHASE" ] && ! [[ "$FROM_PHASE" =~ ^[0-9]$ ]]; then
+  echo "--from-phase must be a single digit 0-9" >&2; exit 2
+fi
 
 # ---- helpers ----
 log()  { echo "[restore $(date '+%H:%M:%S')] $*"; }
@@ -47,7 +51,14 @@ need() { command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
 run()  { if [ "$DRY_RUN" = 1 ]; then echo "  DRYRUN> $*"; else log "+ $*"; eval "$@"; fi; }
 
 phase_done() { [ -f "$MARKER" ] && [ "$(cat "$MARKER" 2>/dev/null)" -ge "$1" ] 2>/dev/null; }
-mark_phase() { [ "$DRY_RUN" = 1 ] || echo "$1" > "$MARKER"; }
+# mark_phase ratchets: it only ever advances the marker, so a --from-phase re-run on an
+# already-further-along box does not regress it (marker = highest completed phase).
+mark_phase() {
+  [ "$DRY_RUN" = 1 ] && return 0
+  local cur; cur="$(cat "$MARKER" 2>/dev/null)"; [[ "$cur" =~ ^[0-9]+$ ]] || cur=-1
+  [ "$1" -gt "$cur" ] && echo "$1" > "$MARKER"
+  return 0
+}
 # should_run: true unless this phase already completed (honours --from-phase override)
 should_run() {
   local p="$1"
@@ -322,8 +333,9 @@ phase8_automation() {
   # Keep the cluster across host reboots.
   run "docker update --restart=unless-stopped minikube || true"
 
-  # Reinstall the cloud crontab verbatim (CRON_TZ ordering matters). App-agent lines are
-  # included only if those repos exist (they were cloned in phase 5).
+  # Reinstall the cloud crontab verbatim (CRON_TZ ordering matters). The app-agent lines
+  # (Predictonomy/yolo) are installed unconditionally; cron simply logs errors if a repo
+  # path is absent, so a partial restore is harmless.
   local cron_tmp="/tmp/restore-cloud-crontab.$$"
   if [ "$DRY_RUN" = 1 ]; then
     echo "  DRYRUN> install cloud crontab (vault-auto-unseal, cluster-autostart, reduce-node-docker-cache + app agents)"
