@@ -129,6 +129,16 @@ predictonomy/yolo agent lines (only if those repos are restored).
 - **Ollama models** excluded (~38 GB) → re-`ollama pull` post-restore (identity key restored).
 - **~100 GB pull** from Coldline → real time + egress cost; phase marker makes it resumable.
 - **Vault** boots sealed, auto-unseals from restored keys; existing secrets preserved.
+- **Jenkins jobs/pipelines + API-token** restore with `JENKINS_HOME`. `JENKINS_HOME` is the
+  hostPath PV `/mnt/jenkins` (node) = `minikube-mnt/jenkins` (host), captured by the backup and
+  laid back down in phase 4; `start-scratch.sh`'s `kubectl apply -f jenkins/compiled.yaml` then
+  boots Jenkins on top of it, so all job definitions, the `private-cloud` user, `credentials.xml`,
+  and the **hashed API token** return. Webhook auth works because the `.env` plaintext
+  `JENKINS_CRED` and the `JENKINS_HOME` token-hash are captured in the **same** backup → consistent.
+  **Caveat:** a backup taken *before* `JENKINS_CRED` was added to `.env` (or a token rotated *after*
+  that backup) leaves the two out of sync → webhooks 401. Phase 9 pre-flights the credential against
+  the restored Jenkins and prints a fix (set a valid `JENKINS_CRED` / regenerate the token) before
+  the operator runs `trigger-app-builds.sh`.
 - **GPU** may need a reboot after driver install before minikube `--gpus all` works.
 
 ## 8. Verification end-state (printed by Phase 9)

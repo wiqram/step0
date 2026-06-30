@@ -394,6 +394,22 @@ phase9_handoff() {
     kubectl -n vault exec vault-0 -- vault status 2>/dev/null | grep -i sealed || true
     kubectl get po -A 2>/dev/null | head -30 || true
     docker compose -f /home/cloud/Ideaprojects/nginx/docker-compose.yml ls 2>/dev/null || true
+
+    # Pre-flight the Jenkins credential so app-build WEBHOOKS don't silently 401. The
+    # restored Jenkins (JENKINS_HOME on minikube-mnt) holds the API-token hash; .env holds
+    # the plaintext JENKINS_CRED. Both come from the same backup, so they normally match —
+    # but a backup taken BEFORE JENKINS_CRED existed (or a token rotated after that backup)
+    # leaves them out of sync. Verify against the live restored Jenkins and tell the operator.
+    JCRED="$(grep -E '^JENKINS_CRED=' "$SCRIPT_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'"'' )"
+    JURL="http://$(minikube ip 2>/dev/null || echo 172.16.238.2):30380"
+    if [ -n "$JCRED" ] && curl -sf -u "$JCRED" "$JURL/whoAmI/api/json?tree=authenticated" >/dev/null 2>&1; then
+      log "Jenkins credential OK — app-build webhooks (trigger-app-builds.sh) will authenticate."
+    else
+      log "WARN: STEP0/.env JENKINS_CRED is missing or does NOT authenticate against the restored Jenkins."
+      log "      App webhooks WILL 401 until fixed. Remedy: set JENKINS_CRED=private-cloud:<valid-token>"
+      log "      in $SCRIPT_DIR/.env (Jenkins UI: user 'private-cloud' -> Configure -> API Token ->"
+      log "      generate), then run ./trigger-app-builds.sh."
+    fi
   fi
   cat <<'DONE'
 ==================================================================
@@ -411,8 +427,11 @@ NEXT — required before app deploys:
   2. Confirm https://jenkins.traderyolo.com resolves to this box.
   3. THEN deploy the apps:
         cd ~/Ideaprojects/STEP0 && ./trigger-app-builds.sh
+     ** If a "Jenkins credential ... does NOT authenticate" WARN appeared above, fix
+        STEP0/.env JENKINS_CRED FIRST — otherwise every webhook 401s. **
      Registry starts EMPTY (single-disk restore) — the first build of each app
      rebuilds + re-pushes its image; transient ImagePullBackOff is expected.
+     (Jenkins jobs/pipelines themselves are restored with JENKINS_HOME on minikube-mnt.)
   4. Re-pull ollama models (excluded from backup):  ollama pull <model>  (see Modelfile)
 ==================================================================
 DONE
