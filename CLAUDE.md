@@ -4,6 +4,13 @@ Guidance for Claude Code when working in this repository. See `README.md` for th
 human-facing front door, `architecture.md` for the full system design (incl. **§10 "deploy
 a new app" scaffolding**), and `plan.md` for the improvement backlog.
 
+> **Creating a NEW website/app to deploy here? → read [`base-architecture-scaffold.md`](./base-architecture-scaffold.md) FIRST.**
+> It's the copy-paste contract for what files a new project needs (Dockerfile/.production,
+> docker-compose dev+prod, Jenkinsfile, namespace.yaml, deployment.yaml with Vault injector
+> annotations, `vault/` SOPS secrets) and the exact platform touch-points to register (Vault
+> policy/role, Jenkins job + build token, a free NodePort, the NPM proxy host, the cold-boot
+> trigger line). Don't re-discover the pattern — start there.
+
 ## What this repo is
 
 > **Cluster unhealthy after a reboot/crash? → read [`RESTART-RECOVERY.md`](./RESTART-RECOVERY.md) FIRST**
