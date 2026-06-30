@@ -19,33 +19,22 @@
 # NOTE: best-effort, NOT set -e — a single unreachable job must not abort the rest.
 
 SELFDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Read JENKINS_CRED from env, else from the gitignored .env (strip surrounding quotes).
-JENKINS_CRED="${JENKINS_CRED:-$(grep -E '^JENKINS_CRED=' "$SELFDIR/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'"'' )}"
-if [ -z "${JENKINS_CRED:-}" ]; then
-  echo "trigger-app-builds: JENKINS_CRED not set — add 'JENKINS_CRED=user:token' to $SELFDIR/.env" >&2
-  exit 1
-fi
-JENKINS="https://${JENKINS_CRED}@jenkins.traderyolo.com"
 
-echo "building qcguy"
-curl -X POST "$JENKINS/job/qcguy/build?token=qcguy"
+# Trigger one app's Jenkins job using the assembled URL (handles build vs
+# buildWithParameters per jenkins-jobs.manifest). Best-effort.
+trigger() {
+  echo "building $1"
+  curl -X POST "$("$SELFDIR/jenkins-deploy-url.sh" "$1")"
+}
 
-echo "building predictonomy"
-curl -X POST "$JENKINS/job/predictonomy/build?token=predict"
-
-echo "building bestrentaladmin"
-curl -X POST "$JENKINS/job/bestrentaladmin/build?token=best"
-
-echo "building dyingpaleblue"
-curl -X POST "$JENKINS/job/dyingpaleblue/build?token=dying"
-
-echo "building ollama"
-curl -X POST "$JENKINS/job/ollama/build?token=ollama"
+trigger qcguy
+trigger predictonomy
+trigger bestrentaladmin
+trigger dyingpaleblue
+trigger ollama
 
 echo "building yolo pipeline but before that sleeping for 1 min"
 sleep 1m
-# trading-microservices is a PARAMETERISED job (RUN_SIGNAL_EVAL/DEPLOY_STAGING), so a plain
-# /build returns HTTP 400 — it must be triggered via /buildWithParameters (uses defaults).
-curl -X POST "$JENKINS/job/trading-microservices/buildWithParameters?token=yolo"
+trigger yolo
 
 echo "trigger-app-builds: all app build jobs triggered."
