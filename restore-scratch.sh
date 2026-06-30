@@ -336,38 +336,15 @@ phase8_automation() {
   # Keep the cluster across host reboots.
   run "docker update --restart=unless-stopped minikube || true"
 
-  # Reinstall the cloud crontab verbatim (CRON_TZ ordering matters). The app-agent lines
-  # (Predictonomy/yolo) are installed unconditionally; cron simply logs errors if a repo
-  # path is absent, so a partial restore is harmless.
-  local cron_tmp="/tmp/restore-cloud-crontab.$$"
+  # Reinstall the cloud crontab from the canonical source of truth (cron/cloud-crontab):
+  # STEP0 automation (vault-auto-unseal, cluster-autostart, reduce-node-docker-cache) + the
+  # per-project autonomous agents (predictonomy/yolo/dyingpaleblue). install-cron.sh is the
+  # ONE installer shared with start-scratch.sh, so the schedule never drifts between paths.
+  # Agents stay DISARMED until AGENT_PERMISSION_MODE is set in each app's .env.
   if [ "$DRY_RUN" = 1 ]; then
-    echo "  DRYRUN> install cloud crontab (vault-auto-unseal, cluster-autostart, reduce-node-docker-cache + app agents)"
+    echo "  DRYRUN> $SCRIPT_DIR/install-cron.sh (canonical cloud crontab)"
   else
-    cat > "$cron_tmp" <<'CRON'
-23 */3 * * * /home/cloud/IdeaProjects/Predictonomy/ops/agent/run-cycle.sh >> /home/cloud/IdeaProjects/Predictonomy/ops/agent/logs/cron.log 2>&1
-
-# Predictonomy postgres-backup health check — 01:15 UTC, 15m after the 0 1 * * * CronJob (ops/agent/check-backup.sh)
-CRON_TZ=UTC
-15 1 * * * /home/cloud/IdeaProjects/Predictonomy/ops/agent/check-backup.sh >> /home/cloud/IdeaProjects/Predictonomy/ops/agent/logs/cron.log 2>&1
-
-# Vault auto-unseal — keep the minikube Vault unsealed so backups/secrets never stall (N-0006/N-0009)
-# @reboot starts the ~10s loop; */5 watchdog restarts it if it ever dies (flock = single instance).
-@reboot /home/cloud/Ideaprojects/STEP0/vault-auto-unseal.sh >> /home/cloud/Ideaprojects/STEP0/logs/vault-auto-unseal.log 2>&1
-*/5 * * * * /home/cloud/Ideaprojects/STEP0/vault-auto-unseal.sh >> /home/cloud/Ideaprojects/STEP0/logs/vault-auto-unseal.log 2>&1
-
-# Cluster auto-start/heal — resume the minikube cluster after a host reboot if it was running
-# (Docker unless-stopped does the restart; this reconciles k8s health + alerts on failure). N-0006 #3
-@reboot sleep 30 && /home/cloud/Ideaprojects/STEP0/cluster-autostart.sh >> /home/cloud/Ideaprojects/STEP0/logs/cluster-autostart.log 2>&1
-*/10 * * * * /home/cloud/Ideaprojects/STEP0/cluster-autostart.sh >> /home/cloud/Ideaprojects/STEP0/logs/cluster-autostart.log 2>&1
-# YOLO Improvement Agent — one scoped cycle every 3h (see ops/agent/README.md)
-17 */3 * * * /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/run-cycle.sh >> /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/logs/cron.log 2>&1
-
-# Node docker build-cache cap — bound /var against Jenkins build churn (plan.md R7). Daily 04:30 local.
-CRON_TZ=Europe/London
-30 4 * * * /home/cloud/Ideaprojects/STEP0/reduce-node-docker-cache.sh >> /home/cloud/Ideaprojects/STEP0/logs/reduce-node-docker-cache.log 2>&1
-CRON
-    crontab "$cron_tmp" && log "cloud crontab installed" || log "WARN: cloud crontab install failed"
-    rm -f "$cron_tmp"
+    "$SCRIPT_DIR/install-cron.sh" && log "cloud crontab installed (canonical)" || log "WARN: cloud crontab install failed"
   fi
 
   # Reinstall the SINGLE root backup cron line (needs root to read 0600 keys file).

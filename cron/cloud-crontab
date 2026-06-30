@@ -1,0 +1,23 @@
+23 */3 * * * /home/cloud/IdeaProjects/Predictonomy/ops/agent/run-cycle.sh >> /home/cloud/IdeaProjects/Predictonomy/ops/agent/logs/cron.log 2>&1
+
+# Predictonomy postgres-backup health check — 01:15 UTC, 15m after the 0 1 * * * CronJob (ops/agent/check-backup.sh)
+CRON_TZ=UTC
+15 1 * * * /home/cloud/IdeaProjects/Predictonomy/ops/agent/check-backup.sh >> /home/cloud/IdeaProjects/Predictonomy/ops/agent/logs/cron.log 2>&1
+
+# Vault auto-unseal — keep the minikube Vault unsealed so backups/secrets never stall (N-0006/N-0009)
+# @reboot starts the ~10s loop; */5 watchdog restarts it if it ever dies (flock = single instance).
+@reboot /home/cloud/Ideaprojects/STEP0/vault-auto-unseal.sh >> /home/cloud/Ideaprojects/STEP0/logs/vault-auto-unseal.log 2>&1
+*/5 * * * * /home/cloud/Ideaprojects/STEP0/vault-auto-unseal.sh >> /home/cloud/Ideaprojects/STEP0/logs/vault-auto-unseal.log 2>&1
+
+# Cluster auto-start/heal — resume the minikube cluster after a host reboot if it was running
+# (Docker unless-stopped does the restart; this reconciles k8s health + alerts on failure). N-0006 #3
+@reboot sleep 30 && /home/cloud/Ideaprojects/STEP0/cluster-autostart.sh >> /home/cloud/Ideaprojects/STEP0/logs/cluster-autostart.log 2>&1
+*/10 * * * * /home/cloud/Ideaprojects/STEP0/cluster-autostart.sh >> /home/cloud/Ideaprojects/STEP0/logs/cluster-autostart.log 2>&1
+# YOLO Improvement Agent — one scoped cycle every 3h (see ops/agent/README.md)
+#PAUSED-for-wheel-build 17 */3 * * * /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/run-cycle.sh >> /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/logs/cron.log 2>&1
+# dyingpaleblue Improvement Agent - one scoped cycle every 3h (see ops/agent/README.md)
+41 */3 * * * /home/cloud/IdeaProjects/dyingpaleblue/ops/agent/run-cycle.sh >> /home/cloud/IdeaProjects/dyingpaleblue/ops/agent/logs/cron.log 2>&1
+
+# Node docker build-cache cap — bound /var against Jenkins build churn (plan.md R7). Daily 04:30 local.
+CRON_TZ=Europe/London
+30 4 * * * /home/cloud/Ideaprojects/STEP0/reduce-node-docker-cache.sh >> /home/cloud/Ideaprojects/STEP0/logs/reduce-node-docker-cache.log 2>&1
