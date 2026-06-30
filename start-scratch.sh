@@ -141,15 +141,6 @@ JENKINS_URL="$JENKINS_NODEPORT" JENKINS_USER="${JENKINS_AUTH%%:*}" JENKINS_TOKEN
 #create k8s components for private container registry - NOT USED BCOZ USING MINIKUBE REGISTRY
 #kubectl apply -f $HOME/Ideaprojects/container-registry/private-registry.yaml
 
-#################host crontab (automation + per-project agents)#############################
-# Install the cloud user's crontab from the canonical source of truth (STEP0/cron/cloud-crontab):
-# vault-auto-unseal, cluster-autostart, reduce-node-docker-cache + the autonomous project agents
-# (predictonomy/yolo/dyingpaleblue). Same installer restore-scratch.sh uses, so a from-scratch
-# build and a restore produce the identical schedule. Agents stay DISARMED until AGENT_PERMISSION_MODE
-# is set in each app's .env. Best-effort: a failure here must not abort the bootstrap.
-echo "installing cloud crontab (automation + agents)"
-"$(dirname "$SCRIPT_PATH")/install-cron.sh" || echo "WARN: install-cron.sh failed; re-run it manually."
-
 #################app deploys (Jenkins)#############################
 # The actual per-app deploys are Jenkins job triggers, extracted to
 # trigger-app-builds.sh. restore-scratch.sh sets SKIP_APP_BUILDS=1 to bring up the

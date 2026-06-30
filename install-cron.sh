@@ -3,8 +3,10 @@
 # SINGLE SOURCE OF TRUTH for the cloud user's crontab: STEP0 automation (vault-auto-unseal,
 # cluster-autostart, reduce-node-docker-cache) + the per-project autonomous agents
 # (predictonomy, yolo, dyingpaleblue). Edit cron/cloud-crontab (committed) and run this — do NOT
-# `crontab -e` directly — so start-scratch.sh and restore-scratch.sh reproduce the exact schedule
-# on a fresh setup (no drift). Agents stay DISARMED until AGENT_PERMISSION_MODE is set in their .env.
+# `crontab -e` directly — so the schedule never drifts. restore-scratch.sh runs this during a
+# bare-metal rebuild (host-level setup); on the existing host, run it by hand after editing the
+# canonical file. (start-scratch.sh is platform bring-up only and does NOT touch the host crontab.)
+# Agents stay DISARMED until AGENT_PERMISSION_MODE is set in their .env.
 set -eu
 SELFDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CANON="$SELFDIR/cron/cloud-crontab"

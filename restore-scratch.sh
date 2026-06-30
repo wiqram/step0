@@ -338,8 +338,8 @@ phase8_automation() {
 
   # Reinstall the cloud crontab from the canonical source of truth (cron/cloud-crontab):
   # STEP0 automation (vault-auto-unseal, cluster-autostart, reduce-node-docker-cache) + the
-  # per-project autonomous agents (predictonomy/yolo/dyingpaleblue). install-cron.sh is the
-  # ONE installer shared with start-scratch.sh, so the schedule never drifts between paths.
+  # per-project autonomous agents (predictonomy/yolo/dyingpaleblue). The host crontab is a
+  # restore-scratch (host-setup) concern — start-scratch.sh (platform bring-up) does NOT touch it.
   # Agents stay DISARMED until AGENT_PERMISSION_MODE is set in each app's .env.
   if [ "$DRY_RUN" = 1 ]; then
     echo "  DRYRUN> $SCRIPT_DIR/install-cron.sh (canonical cloud crontab)"
