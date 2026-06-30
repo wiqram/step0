@@ -137,55 +137,15 @@ JENKINS_URL="$JENKINS_NODEPORT" JENKINS_USER="${JENKINS_AUTH%%:*}" JENKINS_TOKEN
 #create k8s components for private container registry - NOT USED BCOZ USING MINIKUBE REGISTRY
 #kubectl apply -f $HOME/Ideaprojects/container-registry/private-registry.yaml
 
-#################qcguy#############################
-# qcguy (Ghost CMS) is now onboarded to Vault like the other apps: its config
-# lives in wiqram/qcguy-ghost vault/ (encrypted) and the qcguy Jenkins job runs
-# vaultSync(app:'qcguy') -> kv/qcguy/ghost, then deploys (the deployment renders
-# config.production.json via the Vault injector; no more ConfigMap). The job's
-# deploy also creates the qcguy namespace + vault-secrets ServiceAccount.
-echo "building qcguy"
-curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/qcguy/build?token=qcguy
-
-##################qcx && predictonomy#############################
-##create k8s namespace for qcx
-#kubectl create namespace qcx --dry-run=client -o yaml | kubectl apply -f -
-##create configmap for qcx
-#kubectl create configmap qcguy-configmap --from-file=$HOME/Ideaprojects/qcguy-ghost/config -n qcguy --dry-run=client -o yaml | kubectl apply -f -
-##create k8s components for qcguy
-#kubectl apply -f $HOME/IdeaProjects/qcx/k8s/deployment.yaml
-#curl -X POST https://jenkins.traderyolo.com/job/QCX/build?token=qcx
-#curl -X POST https://jenkins.traderyolo.com/job/predictonomy/build?token=predict
-echo "building predictonomy"
-curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/predictonomy/build?token=predict
-echo "building bestrentaladmin"
-curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/bestrentaladmin/build?token=best
-echo "building dyingpaleblue"
-curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/dyingpaleblue/build?token=dying
-#curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/QCX/build?token=qcx
-
-#################Ollama#############################
-# Deploy ollama via its Jenkins job (wiqram/ollama Jenkinsfile): it creates the
-# `ollama` namespace + the `vault-secrets` ServiceAccount and applies the ollama
-# + webui deployments, which fetch kv/ollama/* through the Vault agent injector.
-# The Vault side (ollama-role/policy, k8s auth config, kv/ollama/* seed) is set
-# up by start-vault.sh above. The ollama job has no build token, so trigger it as
-# the authenticated user (the API token authorises the build, no token needed).
-echo "building ollama"
-curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/ollama/build?token=ollama
-
-#################tatesremedies#############################
-#create k8s namespace for tatesremedies
-#kubectl create namespace tatesremedies --dry-run=client -o yaml | kubectl apply -f -
-#create configmap for tatesremedies
-#kubectl create configmap tatesremedies-configmap --from-file=$HOME/Ideaprojects/tatesremedies/config -n tatesremedies --dry-run=true -o yaml | kubectl apply -f -
-#create k8s components for tatesremedies
-#kubectl apply -f $HOME/Ideaprojects/tatesremedies/compiled.yaml
-
-#################################build yolo jenkins pipeline remotely##########################
-echo "building yolo pipeline but before that sleeping for 1 min"
-sleep 1m
-#wget --auth-no-challenge --user=admin --password=5ad344f0518640f62d0483084bb889bc http://13.126.143.49:8080/job/ANT//build?token=iFBDOBhNhaxL4T9ass93HRXun2JF161Z
-curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/trading-microservices/build?token=yolo
+#################app deploys (Jenkins)#############################
+# The actual per-app deploys are Jenkins job triggers, extracted to
+# trigger-app-builds.sh. restore-scratch.sh sets SKIP_APP_BUILDS=1 to bring up the
+# platform first and fire these only AFTER DNS points at the host.
+if [ -z "${SKIP_APP_BUILDS:-}" ]; then
+  "$(dirname "$SCRIPT_PATH")/trigger-app-builds.sh"
+else
+  echo "SKIP_APP_BUILDS set — skipping Jenkins app-build triggers. Run ./trigger-app-builds.sh after DNS is confirmed."
+fi
 #curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/delete_mem_leak_java/build?token=delete_mem_leak_java
 ##################### ONLY FOR HSBC splunk-for-hsbc-demo - the lines with only one # can be dehashed to deploy splunk#############################
 echo "End - NOT deploying splunk"
