@@ -229,15 +229,21 @@ config and a committed **SOPS-encrypted** `<group>.secret.sops.env` for secrets.
 `kv/<app>/<group>` via `vaultSync(app:'<app>')` on every deploy. Keys are `UPPER_SNAKE`.
 
 ```yaml
-# vault/.sops.yaml  — only *.secret.sops.env is encrypted; comments stay readable
+# vault/.sops.yaml  — TWO recipients: this app's OWN key + the master recovery key.
+# Per-app isolation: this app's Jenkins job decrypts only its own secrets.
 creation_rules:
   - path_regex: \.secret(\.sops)?\.env$
-    age: "age1jgqwj4az5kuzhq2m9077cmdr3q22zv60z86wrwql8ehvj4k0qgeskqx4nn"   # shared traderyolo recipient (public half)
+    age: "age1<THIS-APP-from-gen-app-age-key>,age1jgqwj4az5kuzhq2m9077cmdr3q22zv60z86wrwql8ehvj4k0qgeskqx4nn"
     unencrypted_regex: "^(#.*)?$"
 ```
-Edit a secret with `cd vault && sops <group>.secret.sops.env`. The **age private key** is never in
-git — it lives at `~/.config/sops/age/keys.txt` and is mirrored into the `sops-age-key` Jenkins
-credential. Standard web mapping:
+Mint the app's key first: `~/Ideaprojects/vault/gen-app-age-key.sh <app>` (writes it to Vault
+`kv/age-keys/<app>` + `~/.vault/age-keys/<app>.txt`), then paste the printed recipient as the **first**
+of the two `age:` recipients. Edit a secret with `cd vault && sops <group>.secret.sops.env`.
+- **Per-app private key** — in Vault `kv/age-keys/<app>` (read only by `jenkins-<app>` AppRole) +
+  offline mirror `~/.vault/age-keys/<app>.txt`. `vaultSync` fetches it at deploy.
+- **Master recovery key** (`age1jgqwj4az5…`) — operator-offline at `~/.config/sops/age/keys.txt`,
+  the recovery anchor + your local-dev decrypt key. Never in Vault or any repo.
+Standard web mapping:
 
 | Vault path (KV v2) | Typical keys | Consumed by |
 |---|---|---|
@@ -254,16 +260,18 @@ These are the touch-points OUTSIDE the app repo. Most are scripted in the vault 
 | # | Touch-point | Where | What to add |
 |---|---|---|---|
 | 1 | **Vault policy** | `~/Ideaprojects/vault/<app>-policy.hcl` (new file) | `read` on `kv/data/<app>/*`, `read,list` on `kv/metadata/<app>/*`. *Its existence also auto-enrolls the `jenkins-<app>` AppRole.* |
+| 1b | **App age key** | `~/Ideaprojects/vault` → `./gen-app-age-key.sh <app>` | Mints the app's SOPS age key to `kv/age-keys/<app>` + `~/.vault/age-keys/<app>.txt`; paste the printed recipient into the app's `vault/.sops.yaml` as the **1st of two** `age:` recipients (2nd = master). `jenkins-<app>-policy` auto-gains read on `kv/data/age-keys/<app>` (it's in `jenkins-policy.hcl.tmpl`). `vaultSync` fetches it at deploy. |
 | 2 | **Vault K8s-auth + role** | `~/Ideaprojects/vault/start-vault.sh` (mirror an existing app, ~L127–151) | `vault write -namespace <app> auth/kubernetes/config …`; `vault policy write <app>-policy -< <app>-policy.hcl`; `vault write auth/kubernetes/role/<app>-role bound_service_account_names=vault-secrets bound_service_account_namespaces=<app> policies=<app>-policy` |
-| 3 | **Jenkins AppRole + creds** | auto | `start-vault.sh`→`setup-jenkins-approle.sh` creates `jenkins-<app>`; `setup-jenkins-credentials.sh` provisions `vault-approle-id-<app>`, `vault-approle-secret-<app>`, `sops-age-key` into Jenkins. Nothing manual. |
+| 3 | **Jenkins AppRole + creds** | auto | `start-vault.sh`→`setup-jenkins-approle.sh` creates `jenkins-<app>`; `setup-jenkins-credentials.sh` provisions `vault-approle-id-<app>`, `vault-approle-secret-<app>` into Jenkins. The age key is **not** a Jenkins credential — `vaultSync` fetches the per-app key from Vault `kv/age-keys/<app>`. Nothing manual. |
 | 4 | **Jenkins job** | Jenkins UI (`:30380`, PV-backed, not in git) | Create a pipeline job named `<app>` → this repo + its `Jenkinsfile`; set a remote-build **token** (e.g. `<app>` short form). |
 | 5 | **NodePort** | app `deployment.yaml` Service | Pick a **free** `30000–32767` port. Check taken ports: `~/Ideaprojects/nginx/all proxy hosts.txt` and `grep -rn 'nodePort:' ~/IdeaProjects/*/deployment.yaml ~/IdeaProjects/*/compiled*.yaml`. Record the new one in `architecture.md §3`. |
 | 6 | **NPM proxy host** | NPM admin UI on `172.16.238.10:81` (MariaDB-backed — UI/API only, never edit conf files) | New proxy host: `your-domain.com` → forward `172.16.238.2:<nodeport>`, scheme `http`, **SSL forced + request a Let's Encrypt cert** (HTTP-01). `mysqldump -uroot -pnpm npm` first if scripting the DB. |
 | 7 | **Cold-boot build trigger** | `~/Ideaprojects/STEP0/trigger-app-builds.sh` | Add `echo "building <app>"` + `curl -X POST "$JENKINS/job/<app>/build?token=<jobtoken>"`. Auth comes from `.env` `JENKINS_CRED` — **never hardcode a token.** |
 | 8 | **DNS** | your registrar | Point `your-domain.com` A-record at the host's public IP. |
 
-Host prerequisite for all of it: the age private key at `~/.config/sops/age/keys.txt` (backs
-`sops-age-key` and decrypts every `*.secret.sops.env`).
+Host prerequisite for all of it: the **master** age key at `~/.config/sops/age/keys.txt` — the
+operator-offline recovery anchor that decrypts every app's `*.secret.sops.env` (each file is also
+encrypted to its own per-app key, which lives in Vault). Keep it backed up off-box.
 
 ---
 

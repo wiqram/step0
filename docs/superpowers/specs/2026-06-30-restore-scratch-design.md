@@ -139,6 +139,11 @@ predictonomy/yolo agent lines (only if those repos are restored).
   that backup) leaves the two out of sync → webhooks 401. Phase 9 pre-flights the credential against
   the restored Jenkins and prints a fix (set a valid `JENKINS_CRED` / regenerate the token) before
   the operator runs `trigger-app-builds.sh`.
+- **Per-app SOPS age keys** restore with Vault storage (`kv/age-keys/<app>` is on the restored
+  `minikube-mnt` Vault PVC). On a *fresh* Vault, `start-vault.sh` re-seeds them from the offline
+  mirror `~/.vault/age-keys/` (restored with `~/.vault` in phase 4a) via `seed-age-keys.sh`. Phase 3
+  pre-creates that dir. The **master** age key (`~/.config/sops/age/keys.txt`, restored from
+  `keys-sops-IMPORTANT.txt`) is the recovery anchor that can decrypt every app regardless.
 - **GPU** may need a reboot after driver install before minikube `--gpus all` works.
 
 ## 8. Verification end-state (printed by Phase 9)

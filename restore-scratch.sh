@@ -204,6 +204,9 @@ phase3_dirs() {
   run "sudo mkdir -p /mnt/kachra/container-registry-images"
   run "sudo mkdir -p /mnt/predictonomy-postgres /mnt/predictonomy-backups"
   run "sudo chown -R cloud:cloud /mnt/minikube-backups /mnt/kachra"
+  # Per-app SOPS age keys offline mirror (normally restored by phase 4a with ~/.vault;
+  # pre-create so seed-age-keys.sh (run by start-vault.sh in phase 6) can re-seed Vault).
+  run "mkdir -p '$HOME/.vault/age-keys' && chmod 700 '$HOME/.vault/age-keys'"
   mark_phase 3
 }
 
@@ -433,6 +436,9 @@ NEXT — required before app deploys:
      rebuilds + re-pushes its image; transient ImagePullBackOff is expected.
      (Jenkins jobs/pipelines themselves are restored with JENKINS_HOME on minikube-mnt.)
   4. Re-pull ollama models (excluded from backup):  ollama pull <model>  (see Modelfile)
+  5. Per-app SOPS age keys: restored with Vault storage; on a fresh Vault, start-vault.sh
+     re-seeds them from ~/.vault/age-keys/ (seed-age-keys.sh). The MASTER recovery key
+     (~/.config/sops/age/keys.txt) is the anchor — keep it backed up off-box.
 ==================================================================
 DONE
   mark_phase 9
