@@ -267,6 +267,20 @@ roomy `/mnt/minikube-backups` (432 G), not `/var`.
 > - `reduce-docker-minikube-space.sh` / `reduce-var-space.sh` stay as the **manual emergency hammer
 >   only** — they use `docker system prune -a -f`, which deletes app+base images the node would then
 >   re-pull/rebuild. Do NOT schedule those.
+> - **Base-image audit (2026-06-30).** Checked the "old" cached bases before deleting. Two looked stale
+>   but are **live**, so were KEPT: `golang:1.19` (yolo CI build-agent pod — `IG-Trading-Microservices/
+>   Jenkinsfile:110 image: golang:1.19`, ephemeral so it never shows in a workload scan) and
+>   `grafana/grafana:9.3.2` (running, `kube-prometheus/.../grafana-deployment.yaml`). Only `node:18`
+>   (plain) was genuinely dead — its `FROM node:18` hits were all in the `docker-development-youtube-series`
+>   tutorial repo / `node_modules`; real web apps use `node:22`/`node:20`/`node:18-slim`. Removed it.
+>   **Method to reuse:** an image is "dead" only if absent from BOTH (a) `kubectl get deploy/sts/ds/cronjob/pod
+>   -A -o jsonpath` over container images AND (b) every real-app `Dockerfile`/`Jenkinsfile` `FROM`/`image:`
+>   (exclude the tutorial repo + `node_modules`). Ephemeral CI agents live in Jenkinsfiles, not workloads.
+>
+> **Lesson — manual image deletes are low-value here.** node docker images share base layers, so `rmi`/
+> `image prune` of a "1 GB" tag frees ~0 real disk (only the unique top layer); `df /var` didn't budge.
+> The build CACHE is the only thing that meaningfully grows `/var`, which is why the daily prune (cache cap)
+> — not image hunting — is the durable control. Don't bother hand-deleting cached images for space.
 >
 > *Remaining (optional, backlog):* bake a buildkit `gc`/`reserved-space` policy into the node docker via
 > `start-scratch.sh` at cold boot, so the cache self-trims with no cron at all. The daily prune covers
