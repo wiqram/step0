@@ -60,23 +60,23 @@
 # NOTE: best-effort, NOT set -e — a single unreachable job must not abort the rest.
 
 echo "building qcguy"
-curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/qcguy/build?token=qcguy
+curl -X POST https://private-cloud:REVOKED-2026-06-30@jenkins.traderyolo.com/job/qcguy/build?token=qcguy
 
 echo "building predictonomy"
-curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/predictonomy/build?token=predict
+curl -X POST https://private-cloud:REVOKED-2026-06-30@jenkins.traderyolo.com/job/predictonomy/build?token=predict
 
 echo "building bestrentaladmin"
-curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/bestrentaladmin/build?token=best
+curl -X POST https://private-cloud:REVOKED-2026-06-30@jenkins.traderyolo.com/job/bestrentaladmin/build?token=best
 
 echo "building dyingpaleblue"
-curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/dyingpaleblue/build?token=dying
+curl -X POST https://private-cloud:REVOKED-2026-06-30@jenkins.traderyolo.com/job/dyingpaleblue/build?token=dying
 
 echo "building ollama"
-curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/ollama/build?token=ollama
+curl -X POST https://private-cloud:REVOKED-2026-06-30@jenkins.traderyolo.com/job/ollama/build?token=ollama
 
 echo "building yolo pipeline but before that sleeping for 1 min"
 sleep 1m
-curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/trading-microservices/build?token=yolo
+curl -X POST https://private-cloud:REVOKED-2026-06-30@jenkins.traderyolo.com/job/trading-microservices/build?token=yolo
 
 echo "trigger-app-builds: all app build jobs triggered."
 ```

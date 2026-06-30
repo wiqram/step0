@@ -150,7 +150,7 @@ if [ -z "${SKIP_APP_BUILDS:-}" ]; then
 else
   echo "SKIP_APP_BUILDS set — skipping Jenkins app-build triggers. Run ./trigger-app-builds.sh after DNS is confirmed."
 fi
-#curl -X POST https://private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com/job/delete_mem_leak_java/build?token=delete_mem_leak_java
+#curl -X POST https://private-cloud:REVOKED-2026-06-30@jenkins.traderyolo.com/job/delete_mem_leak_java/build?token=delete_mem_leak_java
 ##################### ONLY FOR HSBC splunk-for-hsbc-demo - the lines with only one # can be dehashed to deploy splunk#############################
 echo "End - NOT deploying splunk"
 #cd $HOME/IdeaProjects/splunk-hsbc-demo/

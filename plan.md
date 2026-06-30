@@ -15,7 +15,7 @@ Concrete, prioritized improvements found while documenting the stack
 
 ### 1. Live secrets are hard-coded in the script and committed to git
 `start-scratch.sh` / `restart-minikube.sh` contain in cleartext:
-- Jenkins basic-auth + API token: `private-cloud:117c6b563ff409adc59ecbfbbd2f795392@jenkins.traderyolo.com`
+- Jenkins basic-auth + API token: `private-cloud:REVOKED-2026-06-30@jenkins.traderyolo.com`
 - Splunk HEC token: `25577715-5282-4f8b-ab9c-c8aa95a75bea`
 - Vault userpass password `r00tT0k£n` (in `vault/start-vault.sh`)
 
