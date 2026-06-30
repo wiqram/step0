@@ -32,6 +32,60 @@ NTFY_URL="${NTFY_URL:-$(grep -E '^NTFY_URL=' "$SELFDIR/.env" 2>/dev/null | head 
 log(){ echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $*" >>"$LOG"; }
 ntfy(){ [ -n "${NTFY_URL:-}" ] || return 0; curl -fsS -m 15 -H "Title: $1" -H "Priority: ${3:-high}" -H "Tags: ${4:-rotating_light,cloud}" -d "$2" "$NTFY_URL" >/dev/null 2>&1 || log "WARN: ntfy push failed"; }
 
+# Self-heal Vault secret injection (called once the cluster is confirmed healthy).
+# WHY: the Vault agent-injector webhook is failurePolicy=Ignore (fail-open). After a
+# reboot every pod restarts roughly together; any Vault-injected workload that comes up
+# as a BRAND-NEW pod (e.g. Recreate-strategy Deployments like ollama, or a controller
+# that replaces a dead pod) while the injector isn't ready yet is admitted WITHOUT its
+# vault-agent-init container, so it crashloops on a missing /vault/secrets/* forever
+# (observed: ollama, 2026-06-30). Pods restarted IN PLACE (most Deployments/StatefulSets)
+# keep their already-injected spec and are unaffected. Fix: once the injector AND an
+# unsealed Vault are ready, find injected workloads whose pod lacks vault-agent-init and
+# rollout-restart ONLY those. kubectl via `minikube kubectl --` so it matches the cluster
+# version and reuses minikube's kubeconfig (same access model as the minikube calls above).
+self_heal_vault_injection() {
+  local kc="minikube kubectl --" ready="" i ns pod inject inits okind oname key healed="" pods
+  # Need the injector Available AND Vault unsealed (vault-0 readiness reflects unseal),
+  # else a restart just yields another un-injected / secret-less pod. Wait up to ~90s;
+  # vault-auto-unseal.sh unseals separately and may still be running right after boot.
+  for i in $(seq 1 30); do
+    if $kc -n vault get deploy vault-agent-injector -o jsonpath='{.status.availableReplicas}' 2>/dev/null | grep -qE '^[1-9]' \
+       && [ "$($kc -n vault get pod vault-0 -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null)" = "true" ]; then
+      ready=1; break
+    fi
+    sleep 3
+  done
+  if [ -z "$ready" ]; then
+    log "self-heal: vault-agent-injector or vault-0 not ready after 90s — skipping injection reconcile (vault-auto-unseal.sh may still be unsealing)"
+    return 0
+  fi
+  # One cluster-wide read: per pod -> "ns|name|<agent-inject annotation>|initc1,initc2,".
+  # A pod with agent-inject=true but no 'vault-agent-init' init container missed injection.
+  pods=$($kc get pods -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"|"}{.metadata.name}{"|"}{.metadata.annotations.vault\.hashicorp\.com/agent-inject}{"|"}{range .spec.initContainers[*]}{.name}{","}{end}{"\n"}{end}' 2>/dev/null)
+  while IFS='|' read -r ns pod inject inits; do
+    [ "$inject" = "true" ] || continue
+    case ",$inits" in *,vault-agent-init,*) continue ;; esac    # already injected -> fine
+    okind=$($kc -n "$ns" get pod "$pod" -o jsonpath='{.metadata.ownerReferences[0].kind}' 2>/dev/null)
+    oname=$($kc -n "$ns" get pod "$pod" -o jsonpath='{.metadata.ownerReferences[0].name}' 2>/dev/null)
+    if [ "$okind" = "ReplicaSet" ]; then   # Deployment pod -> walk RS up to the Deployment
+      oname=$($kc -n "$ns" get rs "$oname" -o jsonpath='{.metadata.ownerReferences[0].name}' 2>/dev/null)
+      okind=Deployment
+    fi
+    case "$okind" in Deployment|StatefulSet) ;; *) continue ;; esac   # skip Jobs/bare pods
+    [ -n "$oname" ] || continue
+    key="$ns/$okind/$oname"
+    case " $healed " in *" $key "*) continue ;; esac          # dedupe (multi-replica)
+    log "self-heal: $ns/$pod has agent-inject=true but no vault-agent-init -> rollout restart $okind/$oname"
+    $kc -n "$ns" rollout restart "$okind/$oname" >>"$LOG" 2>&1 && healed="$healed $key"
+  done <<< "$pods"
+  if [ -n "$healed" ]; then
+    log "self-heal: re-injected ->$healed"
+    ntfy "vault-injection self-heal" "Post-reboot: rollout-restarted to restore Vault secret injection for:$healed" default "syringe,cloud"
+  else
+    log "self-heal: no vault-injection gaps — all injected workloads have vault-agent-init"
+  fi
+}
+
 # Single instance (the */10 watchdog no-ops while a run is in flight).
 exec 9>"$LOCK"; flock -n 9 || exit 0
 
@@ -66,12 +120,12 @@ fi
 
 # 5. Container is running — let k8s self-heal first; only reconcile if it stays unhealthy.
 k8s_ok(){ minikube status -o json 2>/dev/null | grep -q '"APIServer":"Running"' && minikube status -o json 2>/dev/null | grep -q '"Kubelet":"Running"'; }
-for _ in $(seq 1 40); do k8s_ok && { log "cluster healthy (container up, APIServer+Kubelet Running)"; exit 0; }; sleep 3; done
+for _ in $(seq 1 40); do k8s_ok && { log "cluster healthy (container up, APIServer+Kubelet Running)"; self_heal_vault_injection; exit 0; }; sleep 3; done
 
 # 6. Up but unhealthy after ~2min -> reconcile with `minikube start` (fixes kubeconfig/IP + control plane).
 log "container running but k8s unhealthy after 120s — reconciling with 'minikube start --driver=docker'"
 if timeout 360 minikube start --driver=docker >>"$LOG" 2>&1; then
-  if k8s_ok; then log "reconcile OK — cluster healthy"; ntfy "minikube cluster auto-recovered" "Host rebooted; cluster reconciled to healthy via minikube start." default "white_check_mark,cloud"; exit 0
+  if k8s_ok; then log "reconcile OK — cluster healthy"; self_heal_vault_injection; ntfy "minikube cluster auto-recovered" "Host rebooted; cluster reconciled to healthy via minikube start." default "white_check_mark,cloud"; exit 0
   else log "minikube start returned but k8s still unhealthy"; ntfy "minikube auto-recover INCOMPLETE" "minikube start ran but APIServer/Kubelet not Running — manual check needed."; exit 1; fi
 else
   log "minikube start FAILED — manual recovery needed (possibly from-scratch). NOT auto-deleting."
