@@ -96,6 +96,14 @@ curl -s -o /dev/null -w '%{http_code}\n' https://predictonomy.com   # 200
   `minikube start --driver=docker`.
 - **Cold** (from scratch): `cd ~/Ideaprojects/STEP0 && ./start-scratch.sh`, then re-deploy apps via
   Jenkins.
+- **Total host loss (bare-metal rebuild):** if the *machine* is gone, not just the cluster — on a
+  fresh Ubuntu box, `git clone https://github.com/wiqram/step0.git` then run **`./restore-scratch.sh`**.
+  It installs all tooling, pulls the latest GCS Coldline backup (interactive `gcloud auth login`),
+  restores Vault keys + data + nginx proxy-hosts/certs + secrets, clones every app repo, brings up the
+  platform (`SKIP_APP_BUILDS=1 start-scratch.sh`), re-arms cron, then **pauses**. Repoint DNS at the new
+  host, then `./trigger-app-builds.sh`. Resumable (`--from-phase N`), inspectable (`--dry-run`). Registry
+  blobs (sdb2) and ollama models are **not** in the backup — rebuilt via Jenkins / re-pulled. Full design:
+  `docs/superpowers/specs/2026-06-30-restore-scratch-design.md`.
 - **Re-arm the automation:** `docker update --restart=unless-stopped minikube`, then re-add the
   `@reboot` + watchdog cron lines pointing at the STEP0 scripts:
   ```cron

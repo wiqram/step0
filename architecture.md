@@ -345,6 +345,14 @@ existing local archives were backfilled to the bucket when this was first set up
 One-time setup (create bucket → service account → `objectAdmin` binding → key) is documented
 verbatim in the script's header comment.
 
+**Restoring from the off-site copy.** `restore-scratch.sh` is the documented inverse: on a bare Ubuntu
+box it picks the newest `private-cloud-*.tgz` from the bucket (date parsed from the filename, like the
+prune) via an interactive `gcloud auth login` — note the SA key (`~/.gcp/step0-backup-key.json`) is
+**not** in the bucket or the tar, so the first pull uses your own Google identity. Two things are not in
+the archive and are reconstructed on restore: the **registry blobs** (they live on sdb2/`/mnt/kachra`,
+re-pushed by Jenkins on a single-disk rebuild) and the **ollama models** (`*/ollama/models` excluded,
+re-pulled). See `docs/superpowers/specs/2026-06-30-restore-scratch-design.md`.
+
 ### Backup retention convention — apply to **every** backup cron job
 
 **Standard for all backup cron jobs in this setup** (new ones must replicate it):
