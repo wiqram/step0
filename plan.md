@@ -35,18 +35,24 @@ basic-auth/API token, the Splunk HEC token, and the Vault userpass password (lin
 > (`docs/superpowers/plans/2026-06-30-restore-scratch.md`, 6×, reproduced as before/after reference),
 > and **git history**. Externalization alone does not undo any of those — **rotation is the fix.**
 
-**Fix — rotate the Jenkins token (do this; makes all the above moot):**
-1. In Jenkins (user `private-cloud` → Configure → API Token), **generate a new API token and revoke
-   `117c6b…`**. Once revoked, every cleartext copy above (incl. git history) is dead and harmless.
-2. Update the live config: set the new value in `STEP0/.env` as `JENKINS_CRED=private-cloud:<new-token>`
-   (gitignored; nothing else to change — both scripts already source it).
-3. Externalize the **last live inline use**: change `restart-minikube.sh:123` to read `JENKINS_CRED`
-   from `.env` the same way `trigger-app-builds.sh` does (grep `^JENKINS_CRED=` from `$(dirname …)/.env`).
-4. Scrub the now-dead cleartext copies: the commented `delete_mem_leak_java` lines
-   (`start-scratch.sh:153`, `restart-minikube.sh:124`) and, if desired, the literal tokens in the
-   restore plan doc (replace with `private-cloud:<token>` placeholders).
-5. History rewrite is **optional** once the token is revoked (the old value no longer authenticates);
-   skip the `git filter-repo` churn unless you also need to purge Splunk/Vault secrets at the same time.
+**Fix — rotate the Jenkins token. ✅ DONE 2026-06-30.** The old token (user `private-cloud`, name
+`build`, uuid `0a2b57cb…`, value `117c6b…`) was **revoked** — it now returns **HTTP 401**. The
+replacement (name `step0-rotated-2026-06-30`, uuid `e44eced5…`) lives **only** in the gitignored
+`STEP0/.env`. Rotation was done via the Jenkins REST API (generate → verify new → update `.env` →
+verify → revoke old → verify old dead). Because the old value no longer authenticates, **every
+cleartext copy of it (git history included) is now inert.**
+1. ✅ Generated a new API token and revoked `build` (verified: old → 401, new → authenticated).
+2. ✅ `STEP0/.env` updated to the new `JENKINS_CRED` (gitignored; both scripts source it; verified
+   end-to-end via `whoAmI` through the exact `.env` read path).
+3. ✅ Externalized the last live inline use (`restart-minikube.sh:123`, commit 4d05f12).
+4. ⏳ *Optional* cosmetic cleanup of the now-INERT cleartext copies (harmless — they can't auth):
+   the commented `delete_mem_leak_java` line `start-scratch.sh:153`, the literal tokens in
+   `docs/superpowers/plans/2026-06-30-restore-scratch.md` (6×, before/after reference), and `plan.md:18`.
+5. ✅ History rewrite **not needed** — a revoked token can't authenticate, so leaving it in history is harmless.
+
+> **Note:** the off-site backup's captured `.env` still holds the old (now-dead) token until the next
+> weekly backup runs; a restore from an older archive would need `JENKINS_CRED` re-set to the current
+> value. The `?token=<job>` per-job *build-trigger* tokens are unrelated and were not changed.
 
 **Fix — Splunk HEC token + Vault userpass password (same pattern):**
 - Move them to the untracked `STEP0/.env` (or a dedicated `secrets.env`) and `source`/grep them in.
