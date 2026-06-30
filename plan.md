@@ -250,9 +250,27 @@ R1+R2). Values derived from observed usage:
 | jenkins | 1 (or 0 idle) | 512Mi / 200m | 1.5Gi / 2 | 1872Mi | Xmx1g |
 | registry | 1 | 256Mi / 100m | 1Gi / 1 | 694Mi | + run blob GC |
 
-**R7. Disk hygiene.** Minikube's 40 G disk lives on `/var` (67% full); Jenkins builds + registry
-blobs fill it. Keep `delete-docker-reg-images.sh` + `reduce-docker-minikube-space.sh` scheduled, and
-point Jenkins workspaces / backups at the roomy `/mnt/minikube-backups` (432 G), not `/var`.
+**R7. Disk hygiene.** The `minikube` docker volume lives at `/var/lib/docker/volumes/minikube/_data`
+on `/var` (sda7); Jenkins builds + registry blobs fill it. Point Jenkins workspaces / backups at the
+roomy `/mnt/minikube-backups` (432 G), not `/var`.
+
+> **✅ PARTLY IMPLEMENTED 2026-06-30.** Two of the three legs are now closed:
+> - **Registry blobs off `/var`** — done via **R8** (now on sdb2 `/mnt/kachra`, confirmed live). The
+>   registry is no longer a `/var` consumer.
+> - **Build cache (the real residual grower)** — measured 2026-06-30: 13 G buildkit cache + dangling
+>   layers from Jenkins rebuilding every app image in the node's embedded docker. Dangling images free
+>   ~0 B (shared layers); the **build cache** is what creeps `/var` up. Now bounded by
+>   **`reduce-node-docker-cache.sh`** — a *surgical* daily prune (`docker builder prune --reserved-space 3GB`
+>   + dangling `image prune`, NO `-a`), wired into the **`cloud` crontab @ 04:30 local** (minikube is
+>   cloud-owned, so it can't be a root cron). This is the "scheduled" leg R7 always called for but that
+>   the empty crontab never actually had. Took `/var` 55% → 45% on first run.
+> - `reduce-docker-minikube-space.sh` / `reduce-var-space.sh` stay as the **manual emergency hammer
+>   only** — they use `docker system prune -a -f`, which deletes app+base images the node would then
+>   re-pull/rebuild. Do NOT schedule those.
+>
+> *Remaining (optional, backlog):* bake a buildkit `gc`/`reserved-space` policy into the node docker via
+> `start-scratch.sh` at cold boot, so the cache self-trims with no cron at all. The daily prune covers
+> ~95% of the benefit, so this is a nicety, not a need.
 
 **R8. Persist the registry on `/mnt/kachra`, off `/var`.** TODO (raised 2026-06-16). The
 `kube-system/registry` addon currently has **no volume** — image blobs live on the registry pod's
