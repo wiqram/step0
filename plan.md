@@ -26,11 +26,33 @@ per-app policies to least privilege and provisions scoped Jenkins AppRoles inste
 handing out root — see vault `plan.md`. **Still outstanding here in STEP0:** the Jenkins
 basic-auth/API token, the Splunk HEC token, and the Vault userpass password (line 15).
 
-**Fix (STEP0 side):**
-- Move the Jenkins + Splunk tokens (and the Vault userpass password) to a single untracked
-  `secrets.env` and `source` it: `curl ... "$JENKINS_USER:$JENKINS_TOKEN@..."`.
-- **Rotate every credential above** — they must be considered compromised now.
-- Add `.gitignore` rules for `secrets.env` and any `*-env-variables.sh` that land here.
+> **Partial progress 2026-06-30 (Jenkins token).** The token was **externalized** out of the
+> hot path: `trigger-app-builds.sh` and `start-scratch.sh`'s vault→Jenkins credential sync now
+> read it from the gitignored `STEP0/.env` (`JENKINS_CRED`), which `backup-minikube-mnt.sh`
+> captures and `restore-scratch.sh` restores. **But the token value is NOT yet rotated**, and it
+> still sits in cleartext at: `restart-minikube.sh:123` (a **live, uncommented** warm-restart curl),
+> commented examples (`start-scratch.sh:153`, `restart-minikube.sh:124`), the restore plan doc
+> (`docs/superpowers/plans/2026-06-30-restore-scratch.md`, 6×, reproduced as before/after reference),
+> and **git history**. Externalization alone does not undo any of those — **rotation is the fix.**
+
+**Fix — rotate the Jenkins token (do this; makes all the above moot):**
+1. In Jenkins (user `private-cloud` → Configure → API Token), **generate a new API token and revoke
+   `117c6b…`**. Once revoked, every cleartext copy above (incl. git history) is dead and harmless.
+2. Update the live config: set the new value in `STEP0/.env` as `JENKINS_CRED=private-cloud:<new-token>`
+   (gitignored; nothing else to change — both scripts already source it).
+3. Externalize the **last live inline use**: change `restart-minikube.sh:123` to read `JENKINS_CRED`
+   from `.env` the same way `trigger-app-builds.sh` does (grep `^JENKINS_CRED=` from `$(dirname …)/.env`).
+4. Scrub the now-dead cleartext copies: the commented `delete_mem_leak_java` lines
+   (`start-scratch.sh:153`, `restart-minikube.sh:124`) and, if desired, the literal tokens in the
+   restore plan doc (replace with `private-cloud:<token>` placeholders).
+5. History rewrite is **optional** once the token is revoked (the old value no longer authenticates);
+   skip the `git filter-repo` churn unless you also need to purge Splunk/Vault secrets at the same time.
+
+**Fix — Splunk HEC token + Vault userpass password (same pattern):**
+- Move them to the untracked `STEP0/.env` (or a dedicated `secrets.env`) and `source`/grep them in.
+- **Rotate both** — consider them compromised.
+- Add `.gitignore` rules for `secrets.env` and any `*-env-variables.sh` that land here (`.env` is
+  already ignored).
 - Going-forward, app secrets flow through the vault repo's declarative manifests +
   `vault-sync.sh` + the `vault-secrets-sync` Jenkins pipeline (AppRole auth), not the
   inline `*-env-variables.sh` seeding.
