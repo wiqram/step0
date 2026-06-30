@@ -386,6 +386,9 @@ CRON
     setsid "$SCRIPT_DIR/vault-auto-unseal.sh" >> "$SCRIPT_DIR/logs/vault-auto-unseal.log" 2>&1 < /dev/null &
     log "vault-auto-unseal loop launched"
   fi
+  # Re-arm autonomous agents' deploy-URL pointers from the restored central credential
+  # (agent repos were cloned in phase 5; their gitignored .env/break-glass files aren't in the backup).
+  run "'$SCRIPT_DIR/seed-agent-deploy-urls.sh' || true"
   mark_phase 8
 }
 
@@ -439,6 +442,9 @@ NEXT — required before app deploys:
   5. Per-app SOPS age keys: restored with Vault storage; on a fresh Vault, start-vault.sh
      re-seeds them from ~/.vault/age-keys/ (seed-age-keys.sh). The MASTER recovery key
      (~/.config/sops/age/keys.txt) is the anchor — keep it backed up off-box.
+  6. Autonomous agents (yolo/predictonomy/dyingpaleblue): deploy-URL pointers were re-armed
+     from the central JENKINS_CRED. They stay DISARMED until you set AGENT_PERMISSION_MODE in
+     each agent's .env. To re-arm manually: ./seed-agent-deploy-urls.sh
 ==================================================================
 DONE
   mark_phase 9

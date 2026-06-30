@@ -266,7 +266,7 @@ These are the touch-points OUTSIDE the app repo. Most are scripted in the vault 
 | 4 | **Jenkins job** | Jenkins UI (`:30380`, PV-backed, not in git) | Create a pipeline job named `<app>` → this repo + its `Jenkinsfile`; set a remote-build **token** (e.g. `<app>` short form). |
 | 5 | **NodePort** | app `deployment.yaml` Service | Pick a **free** `30000–32767` port. Check taken ports: `~/Ideaprojects/nginx/all proxy hosts.txt` and `grep -rn 'nodePort:' ~/IdeaProjects/*/deployment.yaml ~/IdeaProjects/*/compiled*.yaml`. Record the new one in `architecture.md §3`. |
 | 6 | **NPM proxy host** | NPM admin UI on `172.16.238.10:81` (MariaDB-backed — UI/API only, never edit conf files) | New proxy host: `your-domain.com` → forward `172.16.238.2:<nodeport>`, scheme `http`, **SSL forced + request a Let's Encrypt cert** (HTTP-01). `mysqldump -uroot -pnpm npm` first if scripting the DB. |
-| 7 | **Cold-boot build trigger** | `~/Ideaprojects/STEP0/trigger-app-builds.sh` | Add `echo "building <app>"` + `curl -X POST "$JENKINS/job/<app>/build?token=<jobtoken>"`. Auth comes from `.env` `JENKINS_CRED` — **never hardcode a token.** |
+| 7 | **Cold-boot build trigger** | `~/Ideaprojects/STEP0/jenkins-jobs.manifest` (+ `trigger-app-builds.sh`) | Add one row `<app> <job> <endpoint> <token>` to the manifest (`endpoint` = `build`, or `buildWithParameters` for a parameterised job), then `trigger <app>` in `trigger-app-builds.sh`. Agents assemble `JENKINS_DEPLOY_URL` via `STEP0/jenkins-deploy-url.sh <app>` from `.env` `JENKINS_CRED` — **never hardcode/store a token per-repo.** |
 | 8 | **DNS** | your registrar | Point `your-domain.com` A-record at the host's public IP. |
 
 Host prerequisite for all of it: the **master** age key at `~/.config/sops/age/keys.txt` — the
