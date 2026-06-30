@@ -44,6 +44,8 @@ curl -X POST "$JENKINS/job/ollama/build?token=ollama"
 
 echo "building yolo pipeline but before that sleeping for 1 min"
 sleep 1m
-curl -X POST "$JENKINS/job/trading-microservices/build?token=yolo"
+# trading-microservices is a PARAMETERISED job (RUN_SIGNAL_EVAL/DEPLOY_STAGING), so a plain
+# /build returns HTTP 400 — it must be triggered via /buildWithParameters (uses defaults).
+curl -X POST "$JENKINS/job/trading-microservices/buildWithParameters?token=yolo"
 
 echo "trigger-app-builds: all app build jobs triggered."
