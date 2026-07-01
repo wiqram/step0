@@ -67,6 +67,10 @@ minikube addons enable nvidia-gpu-device-plugin
 #MINIKUBEIP=$(minikube ip)
 #allow minikube to connect to local docker images
 #eval $(minikube -p minikube docker-env)
+# Re-arm dev-box → prod minikube API access over 10GbE. DOCKER-USER rules are wiped on docker
+# restart, so a warm restart must re-apply them. Best-effort (needs root); the installed
+# devbox-kube-access.service re-applies on every boot regardless. See enable-devbox-kube-access.sh.
+sudo -n "$HOME/Ideaprojects/STEP0/enable-devbox-kube-access.sh" || echo "devbox-kube-access: skipped (run 'sudo ./enable-devbox-kube-access.sh --install' once)"
 #################grafana-prometheus###########################
 #echo "deploying grafana prometheus"
 #cd $HOME/Ideaprojects/kube-prometheus/
