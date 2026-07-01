@@ -82,7 +82,10 @@ WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
   systemctl enable devbox-kube-access.service >/dev/null
-  echo "devbox-kube-access: systemd unit installed & enabled ($UNIT_PATH)"
+  # Run once via systemd too, so the unit's state reflects reality and the boot path is validated
+  # now rather than discovered broken at next reboot. (RemainAfterExit -> stays 'active'.)
+  systemctl restart devbox-kube-access.service
+  echo "devbox-kube-access: systemd unit installed, enabled & started ($UNIT_PATH)"
 }
 
 case "${1:-}" in
