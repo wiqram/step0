@@ -138,6 +138,31 @@ across this link — used from the CLI and from **IntelliJ Services → Kubernet
 > *public/DNS* path to the API; the dev box instead reaches `172.16.238.2:8443` **directly**
 > over 10GbE, bypassing NPM.
 
+### Triggering Jenkins deploys from the dev box
+
+Any app's Jenkins deploy job can be fired **directly from the dev box** — no operator
+action on prod required. Unlike kube-API access above, this path does **not** use the
+10GbE link: it goes to `https://jenkins.traderyolo.com` through NPM like any public
+client (prod runs no sshd, so SSH-back is not an option; verified 2026-07-01).
+
+```bash
+# on the dev box
+source ~/.jenkins-deploy-urls.env    # provides JENKINS_CRED (user:api-token), chmod 600
+curl -X POST "https://$JENKINS_CRED@jenkins.traderyolo.com/job/<job>/<endpoint>?token=<build-token>"
+```
+
+- **Per-app `<job>/<endpoint>/<build-token>`** come from `jenkins-jobs.manifest` (this
+  repo). All apps use `build` except yolo → job `trading-microservices` with
+  `buildWithParameters` (omitting params uses the job's defaults).
+- **`JENKINS_CRED`** lives canonically in gitignored `STEP0/.env` on prod; the dev-box
+  copy at `/home/vik/.jenkins-deploy-urls.env` (chmod 600) was seeded 2026-07-01. If the
+  token rotates (plan.md P0 #1), re-seed:
+  `grep '^JENKINS_CRED=' ~/Ideaprojects/STEP0/.env | ssh vik@10.10.10.2 'cat > ~/.jenkins-deploy-urls.env && chmod 600 ~/.jenkins-deploy-urls.env'`
+- On prod, `jenkins-deploy-url.sh <app>` prints the complete ready-to-curl URL and
+  `trigger-app-builds.sh` fires all apps.
+- End-to-end validated 2026-07-01: dyingpaleblue triggered from the dev box → HTTP 201 →
+  build #68 `SUCCESS` → new `dyingpaleblue-web` pods rolled out.
+
 ---
 
 ## 4. Bootstrap Flow — `start-scratch.sh`
