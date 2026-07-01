@@ -20,9 +20,12 @@
 #        this (no flag) so a cluster rebuild re-arms access.
 #
 # USAGE:
-#   sudo ./enable-devbox-kube-access.sh            # (re)apply the firewall rules now
-#   sudo ./enable-devbox-kube-access.sh --install  # apply now + install & enable the systemd unit
-#   sudo ./enable-devbox-kube-access.sh --remove    # delete the rules (leaves systemd unit alone)
+#   sudo ./enable-devbox-kube-access.sh                    # (re)apply the firewall rules now
+#   sudo ./enable-devbox-kube-access.sh --install          # apply now + install & enable the systemd unit
+#   sudo ./enable-devbox-kube-access.sh --remove           # delete the rules (leaves systemd unit alone)
+#        ./enable-devbox-kube-access.sh --emit-kubeconfig [path]  # write prod-minikube kubeconfig for the dev box (no root)
+#
+# DEV-BOX SIDE: after --install here, run devbox-connect-prod.sh on the dev box (route + kubeconfig).
 set -eu
 
 DEV_IP="${DEV_IP:-10.10.10.2}"        # dev box, other end of the enp4s0 /30
@@ -35,6 +38,20 @@ UNIT_PATH="/etc/systemd/system/devbox-kube-access.service"
 SYSCTL_DROPIN="/etc/sysctl.d/99-devbox-kube-forward.conf"
 
 need_root() { [ "$(id -u)" -eq 0 ] || { echo "must run as root (use sudo)" >&2; exit 1; }; }
+
+# Emit a portable, cert-embedded kubeconfig for the dev box. Cluster/user/context are all renamed
+# to 'prod-minikube' (anchored sed on full key lines only — never touches base64 cert blobs) so it
+# coexists with the dev box's own local 'minikube' context when merged. No root needed.
+emit_kubeconfig() {
+  local out="${1:-/home/cloud/prod-minikube.kubeconfig}"
+  kubectl config view --flatten --minify | sed -E '
+    s/^(-? *name: )minikube$/\1prod-minikube/;
+    s/^( *cluster: )minikube$/\1prod-minikube/;
+    s/^( *user: )minikube$/\1prod-minikube/;
+    s/^(current-context: )minikube$/\1prod-minikube/' > "$out"
+  chmod 600 "$out"
+  echo "devbox-kube-access: wrote prod-minikube kubeconfig -> $out (copy to the dev box; see devbox-connect-prod.sh)"
+}
 
 # Delete-then-insert so repeated runs never stack duplicate rules. `iptables -D` is idempotent
 # enough here: we loop until the exact rule is gone before (re)inserting.
@@ -89,8 +106,9 @@ EOF
 }
 
 case "${1:-}" in
-  --install) apply_rules; install_unit ;;
-  --remove)  remove_rules ;;
-  "")        apply_rules ;;
-  *) echo "usage: $0 [--install|--remove]" >&2; exit 1 ;;
+  --install)          apply_rules; install_unit ;;
+  --remove)           remove_rules ;;
+  --emit-kubeconfig)  emit_kubeconfig "${2:-}" ;;
+  "")                 apply_rules ;;
+  *) echo "usage: $0 [--install|--remove|--emit-kubeconfig [path]]" >&2; exit 1 ;;
 esac

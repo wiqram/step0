@@ -102,6 +102,42 @@ each hostname to a Kubernetes **NodePort** on `172.16.238.2`. Current routing ta
 NPM config/state lives in `~/Ideaprojects/nginx/` (`docker-compose.yml`, `data/`,
 `letsencrypt/`). Admin UI on port 81.
 
+### Dev box ↔ prod cluster over 10GbE
+
+There are **two physical machines**, wired point-to-point over a dedicated **10GbE**
+link (separate from the household LAN):
+
+| Box | Role | 10GbE NIC / IP | LAN NIC |
+|-----|------|----------------|---------|
+| **prod** (`private-cloud`) | runs Docker + minikube + everything in this repo | `enp4s0` → `10.10.10.1/30` | `enp6s0` (192.168.50.x) |
+| **dev** (`vik@10.10.10.2`) | developer workstation (IntelliJ, builds); **not** part of the cluster | `eno1` → `10.10.10.2/30` | `eno2` (192.168.50.x) |
+
+The dev box has **direct `kubectl` access to the prod Kubernetes API** (`172.16.238.2:8443`)
+across this link — used from the CLI and from **IntelliJ Services → Kubernetes**. Scope is
+**API-only** (no registry/NodePort/pod-network reachability). How it's wired:
+
+- **Prod host firewall** — the API lives on the `5million` docker bridge, so traffic from
+  `enp4s0` into it is *forwarded* traffic that Docker's `FORWARD` chain drops by default.
+  `enable-devbox-kube-access.sh` inserts two `DOCKER-USER` ACCEPT rules
+  (`10.10.10.2 → 172.16.238.2:8443` + established return), matched on **dest IP/port** (never
+  the `br-<id>` name, which changes when `5million` is recreated). Persisted by the
+  `devbox-kube-access.service` systemd unit (`After=docker.service`; `DOCKER-USER` is wiped on
+  docker restart) and re-armed by `start-scratch.sh` / `restart-minikube.sh`.
+- **Dev box route** — a persistent NetworkManager route `172.16.238.2/32 via 10.10.10.1`
+  on `eno1` (NM connection `"Wired connection 1"`) forces API traffic over the 10GbE link
+  instead of the LAN gateway.
+- **Dev box kubeconfig** — a flattened, cert-embedded copy of prod's admin kubeconfig, with
+  its cluster/user/context renamed to **`prod-minikube`** so it coexists with the dev box's
+  own local `minikube` context. The API cert already carries `IP Address:172.16.238.2` in its
+  SANs, so TLS validates unchanged.
+- From-scratch rebuild: prod side is `enable-devbox-kube-access.sh --install`; dev side is
+  `devbox-connect-prod.sh` (this repo). The exported kubeconfig is **cluster-admin** —
+  acceptable over the single-peer /30 cable.
+
+> Note the `minikube` / `minikube-private-cloud.com` NPM entry above (→ `8443`) is a
+> *public/DNS* path to the API; the dev box instead reaches `172.16.238.2:8443` **directly**
+> over 10GbE, bypassing NPM.
+
 ---
 
 ## 4. Bootstrap Flow — `start-scratch.sh`
