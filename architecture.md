@@ -146,7 +146,11 @@ action on prod required. Unlike kube-API access above, this path does **not** us
 client (prod runs no sshd, so SSH-back is not an option; verified 2026-07-01).
 
 ```bash
-# on the dev box
+# on the dev box — helper (on PATH; master copy is STEP0/devbox-jenkins-deploy.sh)
+jenkins-deploy <app>                 # qcguy | predictonomy | bestrentaladmin | dyingpaleblue | ollama | yolo
+jenkins-deploy <app> --dry-run       # print the job path without triggering
+
+# equivalent raw curl
 source ~/.jenkins-deploy-urls.env    # provides JENKINS_CRED (user:api-token), chmod 600
 curl -X POST "https://$JENKINS_CRED@jenkins.traderyolo.com/job/<job>/<endpoint>?token=<build-token>"
 ```
