@@ -166,6 +166,10 @@ curl -X POST "https://$JENKINS_CRED@jenkins.traderyolo.com/job/<job>/<endpoint>?
   `trigger-app-builds.sh` fires all apps.
 - End-to-end validated 2026-07-01: dyingpaleblue triggered from the dev box → HTTP 201 →
   build #68 `SUCCESS` → new `dyingpaleblue-web` pods rolled out.
+- **Dev-box AI agents** learn this automatically from the global `/home/vik/.claude/CLAUDE.md`
+  (created 2026-07-02): `jenkins-deploy <app>`, push-before-deploy, verify `result:SUCCESS`,
+  live-sites caution. If the dev box is ever rebuilt, recreate that file (and re-copy
+  `~/bin/jenkins-deploy` + re-seed `~/.jenkins-deploy-urls.env`) alongside `devbox-connect-prod.sh`.
 
 ---
 
