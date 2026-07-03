@@ -148,10 +148,16 @@ On top of that, `devbox-connect-prod.sh install-unit` installs **`devbox-connect
 `WantedBy=multi-user.target`) which runs `devbox-connect-prod.sh boot-check` on every boot to
 make access **self-verifying and logged** (`journalctl -u devbox-connect-prod.service`). Each
 boot it: (1) self-heals the 10GbE route if NM didn't reapply it, (2) verifies the dev **ollama
-endpoint** is serving for prod (see below), (3) waits up to `WAIT_SECS` (60) for the prod API to
-answer, then (4) logs a `kubectl --context prod-minikube get ns` result (run as the human user,
-so it uses their `~/.kube/config`). It is **advisory** — if prod is down it logs a `WARN` and
-exits 0 rather than failing the boot, since a down prod host is not something the dev box can fix.
+endpoint** is serving for prod (see below), (3) waits for the prod API to answer, then (4) logs a
+`kubectl --context prod-minikube get ns` result (run as the human user, so it uses their
+`~/.kube/config`). It is **advisory** — if prod is down it logs a `WARN` and exits 0 rather than
+failing the boot, since a down prod host is not something the dev box can fix.
+> **Boot-safety note:** `multi-user.target` is ordered *after* this oneshot, so it must never
+> block for long. The installed unit therefore uses a **short** prod-wait (`WAIT_SECS=10`, vs the
+> 60s default for manual `boot-check` runs) plus `TimeoutStartSec=45` as a hard backstop — so a
+> boot while prod is down adds at most ~10s and can't stall the login. Access itself doesn't
+> depend on the wait (the NM route + kubeconfig come up independently); the wait only makes the
+> health-check log meaningful.
 
 #### Dev ollama → prod yolo (reverse direction)
 

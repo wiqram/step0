@@ -30,7 +30,12 @@ set -eu
 API_IP="${API_IP:-172.16.238.2}"     # prod kube API (on the 5million docker bridge)
 GW="${GW:-10.10.10.1}"               # prod end of the 10GbE /30 link
 CTX="${CTX:-prod-minikube}"          # kube context name on this box
-WAIT_SECS="${WAIT_SECS:-60}"         # boot-check: how long to wait for the prod API to answer
+WAIT_SECS="${WAIT_SECS:-60}"         # boot-check: how long to wait for the prod API to answer (manual runs)
+BOOT_WAIT_SECS="${BOOT_WAIT_SECS:-10}"  # SAME wait but for the installed unit — kept SHORT on purpose:
+                                     # multi-user.target orders after this oneshot, so a long wait here
+                                     # would stall the boot/login by that long whenever prod is down.
+                                     # Access itself doesn't depend on this (NM route + kubeconfig are
+                                     # independent) — the wait only makes the health-check log meaningful.
 OLLAMA_ADDR="${OLLAMA_ADDR:-10.10.10.2:11434}"  # dev ollama endpoint prod yolo consumes (10GbE IP)
 UNIT_NAME="devbox-connect-prod.service"
 
@@ -150,11 +155,15 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+# multi-user.target waits for this oneshot, so bound the runtime: a short prod-wait keeps
+# boot fast when prod is down, and TimeoutStartSec is a hard backstop against any hang
+# (e.g. kubectl). boot-check always exits 0 (advisory), so the unit never enters 'failed'.
+TimeoutStartSec=45
 Environment=DEVBOX_USER=$user
 Environment=API_IP=$API_IP
 Environment=GW=$GW
 Environment=CTX=$CTX
-Environment=WAIT_SECS=$WAIT_SECS
+Environment=WAIT_SECS=$BOOT_WAIT_SECS
 ExecStart=$self boot-check
 
 [Install]
