@@ -138,6 +138,32 @@ across this link — used from the CLI and from **IntelliJ Services → Kubernet
 > *public/DNS* path to the API; the dev box instead reaches `172.16.238.2:8443` **directly**
 > over 10GbE, bypassing NPM.
 
+#### Boot persistence + health check (`devbox-connect-prod.service`)
+
+The dev-box side is **already durable across reboots without the systemd unit**: `eno1` is
+`autoconnect=yes` with the static `10.10.10.2/30` and the API route baked into the NM
+connection profile, so both come up on boot; the `prod-minikube` kubeconfig is just a file.
+On top of that, `devbox-connect-prod.sh install-unit` installs **`devbox-connect-prod.service`**
+(oneshot, `After=network-online.target NetworkManager.service ollama.service`,
+`WantedBy=multi-user.target`) which runs `devbox-connect-prod.sh boot-check` on every boot to
+make access **self-verifying and logged** (`journalctl -u devbox-connect-prod.service`). Each
+boot it: (1) self-heals the 10GbE route if NM didn't reapply it, (2) verifies the dev **ollama
+endpoint** is serving for prod (see below), (3) waits up to `WAIT_SECS` (60) for the prod API to
+answer, then (4) logs a `kubectl --context prod-minikube get ns` result (run as the human user,
+so it uses their `~/.kube/config`). It is **advisory** — if prod is down it logs a `WARN` and
+exits 0 rather than failing the boot, since a down prod host is not something the dev box can fix.
+
+#### Dev ollama → prod yolo (reverse direction)
+
+prod's **yolo** microservices consume LLM models served by **ollama on the dev box**. `ollama.service`
+on dev is `enabled` (auto-starts on boot) and binds the **10GbE IP** (`OLLAMA_HOST=10.10.10.2:11434`),
+so prod reaches it directly over the same /30 link — the reverse of the kube-API path above. The dev
+box runs no host firewall (`ufw` inactive, `INPUT` policy `ACCEPT`), so nothing blocks
+`10.10.10.1 → 10.10.10.2:11434`. The boot-check step above verifies this listener each boot and logs
+the model count. **ollama service/model changes are owned by the ollama project (`~/IdeaProjects/ollama-dev`)**,
+not this repo — STEP0's boot-check only observes the endpoint. The prod-side wiring (yolo pointing at
+`10.10.10.2:11434`, and prod-pod egress/route to the dev box) lives with the yolo app, not here.
+
 ### Triggering Jenkins deploys from the dev box
 
 Any app's Jenkins deploy job can be fired **directly from the dev box** — no operator
