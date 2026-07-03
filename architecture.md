@@ -138,6 +138,23 @@ across this link — used from the CLI and from **IntelliJ Services → Kubernet
 > *public/DNS* path to the API; the dev box instead reaches `172.16.238.2:8443` **directly**
 > over 10GbE, bypassing NPM.
 
+**Link stability — `10gbe-link-watchdog.sh`.** Both NICs are Aquantia/Marvell 10GBASE-T
+cards on the `atlantic` driver, and this direct point-to-point link intermittently *wedges*:
+`ethtool` reports "link detected: yes, 10Gb Full" and `carrier=1` on both ends, yet the
+datapath stops passing frames — ARP fails both directions and `kubectl`/IntelliJ from the dev
+box hang until it self-recovers minutes later (dev journal shows `atlantic … eno1: atlantic:
+link change old 10000 new 0` then `new 10000`). This is a **link/PHY problem, not a
+kube-access config fault** — the firewall rule, dev route, and kubeconfig above all work
+end-to-end whenever the link is up. `10gbe-link-watchdog.sh` runs as a `systemd` service on
+**both** ends: it pings the peer across the /30 and bounces the local NIC (re-training the
+link) after a few failed probes, cutting the outage to seconds. It auto-detects the local
+10GbE interface + NM connection from the /30, so the same script installs on prod (`enp4s0`)
+and the dev box (`eno1`). Install on both: `sudo ./10gbe-link-watchdog.sh --install`.
+Bouncing this NIC is safe on either host — it carries only the dev↔prod link (prod's
+cluster/LAN and the dev box's LAN/SSH are on separate NICs). If flaps persist, the deeper
+remedy is a shorter/better cable or pinning the link to 2.5G/5G (far more cable-tolerant than
+10GBASE-T). Out-of-band path to the dev box while 10GbE is dark: `ssh vik@192.168.50.161` (LAN).
+
 ### Triggering Jenkins deploys from the dev box
 
 Any app's Jenkins deploy job can be fired **directly from the dev box** — no operator
