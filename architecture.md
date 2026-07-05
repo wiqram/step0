@@ -435,41 +435,38 @@ To restore, unpack the relevant tree from the latest `private-cloud-*.tgz` back 
 place, then re-bootstrap via `start-scratch.sh` (which re-seeds Vault from the recovered
 `/mnt` secret scripts and redeploys the apps).
 
-### Off-site copy — Google Cloud Storage Coldline
+### Off-site copy — WD Cloud (LAN, NFS)
 
-After the local archive + prune, the **same script** pushes that run's `.tgz` **off-site**
-to **`gs://private_cloud_backup`** (storage class **Coldline**, **asia** multi-region,
-project `igtrader-296013`). This is the off-host leg of disaster recovery — a
-fire/theft/disk-loss that takes out `/dev/sdb1` no longer takes out every backup. (The
-existing local archives were backfilled to the bucket when this was first set up.)
+After the local archive + prune, the **same script** copies that run's `.tgz` **off-site**
+to the **WD Cloud 6TB NAS on the LAN** (`192.168.50.169`), mounted at **`/mnt/wdcloud`** over
+**NFS** (archives land in `/mnt/wdcloud/private-cloud/`). This is the off-host leg of disaster
+recovery — a disk-loss that takes out `/dev/sdb1` no longer takes out every backup. (This
+replaced the earlier GCS Coldline mirror; the GCS code is retained **commented-out** in
+`backup-minikube-mnt.sh` as a re-enable-able fallback.)
 
-- **No re-zip** — the local `.tgz` is already compressed; it is uploaded as-is.
-- **Auth** — a dedicated GCP service account
-  `step0-backup@igtrader-296013.iam.gserviceaccount.com` (role `roles/storage.objectAdmin`
-  on the bucket — needs object create **and** delete for the prune), via a key at
-  **`~/.gcp/step0-backup-key.json`** (0600, outside every repo, readable by the root cron).
-  The script activates it into an isolated `CLOUDSDK_CONFIG=~/.gcp/cloudsdk-config`.
-- **gcloud is a no-root (home) install** at `~/google-cloud-sdk`; the script calls it by
-  **absolute path** (`GCLOUD_BIN`) because the root cron's `PATH` won't include it.
-- **Bucket prune mirrors the local retention** (current + previous month, one per older
-  month) **plus a 90-day age floor** (`GCS_MIN_AGE_DAYS=93`). Coldline has a **90-day
-  minimum storage duration**, so deleting earlier incurs an early-deletion fee; a
-  delete-candidate younger than the floor is left until a later weekly run prunes it for
-  free. Object age is read from the **date in the filename** (uploaded the same day), so the
-  prune makes **no** extra GCS metadata/API calls.
-- **Fully additive + guarded** — a missing `gcloud`/key or any network failure only `WARN`s
-  to `/var/log/minikube-backup.log`; it never aborts or affects the local backup.
-
-One-time setup (create bucket → service account → `objectAdmin` binding → key) is documented
-verbatim in the script's header comment.
+- **No re-zip** — the local `.tgz` is already compressed; it is copied as-is.
+- **No credentials** — NFS on the trusted LAN needs none in the script (unlike the old GCS
+  service-account key). The mount is persistent via `/etc/fstab`
+  (`_netdev,nofail,soft,timeo=150,retrans=3,x-systemd.automount`) so a dark NAS never blocks
+  boot or wedges the cron.
+- **One-time format** — the WD 6TB volume is wiped **once, manually, in the WD My Cloud web
+  dashboard** (Settings → Utilities → Format Volume / Full Factory Restore); the host cannot
+  `mkfs` a network appliance. Then its NFS share is enabled and mounted (see the script's
+  header setup band; confirm the export path with `showmount -e 192.168.50.169`).
+- **Share prune mirrors the local retention** (current + previous month, one per older month)
+  with **no age floor** — it is our own disk, so deletes are always free (the 90-day floor
+  only ever existed to dodge Coldline's minimum-storage early-deletion fee). Dates are read
+  from the **filename**, reusing the local prune's YYMM parsing.
+- **Fully additive + guarded** — if `/mnt/wdcloud` is not mounted or not writable the step
+  only `WARN`s to `/var/log/minikube-backup.log`; it never aborts or affects the local backup.
 
 **Restoring from the off-site copy.** `restore-scratch.sh` is the documented inverse: on a bare Ubuntu
-box it picks the newest `private-cloud-*.tgz` from the bucket (date parsed from the filename, like the
-prune) via an interactive `gcloud auth login` — note the SA key (`~/.gcp/step0-backup-key.json`) is
-**not** in the bucket or the tar, so the first pull uses your own Google identity. Two things are not in
-the archive and are reconstructed on restore: the **registry blobs** (they live on sdb2/`/mnt/kachra`,
-re-pushed by Jenkins on a single-disk rebuild) and the **ollama models** (`*/ollama/models` excluded,
-re-pulled). See `docs/superpowers/specs/2026-06-30-restore-scratch-design.md`.
+box (phase 1 installs `nfs-common`) it **mounts the WD NFS share** and picks the newest
+`private-cloud-*.tgz` from `/mnt/wdcloud/private-cloud/` (date parsed from the filename, like the
+prune) — no cloud auth needed on the LAN. Two things are not in the archive and are reconstructed on
+restore: the **registry blobs** (they live on sdb2/`/mnt/kachra`, re-pushed by Jenkins on a single-disk
+rebuild) and the **ollama models** (`*/ollama/models` excluded, re-pulled). See
+`docs/superpowers/specs/2026-06-30-restore-scratch-design.md`.
 
 ### Backup retention convention — apply to **every** backup cron job
 
@@ -527,7 +524,7 @@ done
 | `start-scratch.sh` | Cold bootstrap of the whole stack |
 | `restart-minikube.sh` | Warm restart (reuse cluster, idempotent vault, apps commented out) |
 | `minikube-delete-and-upgrade.sh` | Delete cluster, reinstall latest Minikube (kvm2 + GPU addons) |
-| `backup-minikube-mnt.sh` | **Weekly `root` cron** (Mon ~05:00): compress shared volume (secrets + DB snapshots) + nginx + STEP0 + qcguy → dated `.tgz` in `/mnt/minikube-backups`, prune (keep weekly for current+previous month, one per older month), then push the archive **off-site to GCS Coldline** (`gs://private_cloud_backup`) with a 90-day-floor prune. See §7 "Off-site copy". |
+| `backup-minikube-mnt.sh` | **Weekly `root` cron** (Mon ~05:00): compress shared volume (secrets + DB snapshots) + nginx + STEP0 + qcguy → dated `.tgz` in `/mnt/minikube-backups`, prune (keep weekly for current+previous month, one per older month), then copy the archive **off-site to the WD Cloud NAS** (`192.168.50.169`, NFS at `/mnt/wdcloud`) with the same month-retention prune (no age floor). See §7 "Off-site copy". |
 | `reduce-docker-minikube-space.sh` | apt/journal clean + `docker system prune` on host **and** inside Minikube |
 | `reduce-var-space.sh` | Truncate logs, vacuum journald, prune docker |
 | `delete-docker-reg-images.sh` | GC orphaned blobs in the registry |
