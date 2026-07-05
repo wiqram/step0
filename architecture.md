@@ -438,21 +438,34 @@ place, then re-bootstrap via `start-scratch.sh` (which re-seeds Vault from the r
 ### Off-site copy — WD Cloud (LAN, NFS)
 
 After the local archive + prune, the **same script** copies that run's `.tgz` **off-site**
-to the **WD Cloud 6TB NAS on the LAN** (`192.168.50.169`), mounted at **`/mnt/wdcloud`** over
-**NFS** (archives land in `/mnt/wdcloud/private-cloud/`). This is the off-host leg of disaster
-recovery — a disk-loss that takes out `/dev/sdb1` no longer takes out every backup. (This
-replaced the earlier GCS Coldline mirror; the GCS code is retained **commented-out** in
-`backup-minikube-mnt.sh` as a re-enable-able fallback.)
+to the **WD Cloud 6TB NAS on the LAN** (`192.168.50.169`) over **NFS**. The dedicated export is
+**`/nfs/private-cloud`** (device-side path `/mnt/HD/HD_a2/private-cloud`), mounted at
+**`/mnt/wdcloud`**; archives land at the **mount root** (`/mnt/wdcloud/private-cloud-<date>.tgz`),
+since the share is dedicated to these backups. This is the off-host leg of disaster recovery — a
+disk-loss that takes out `/dev/sdb1` no longer takes out every backup. (This replaced the earlier
+GCS Coldline mirror; the GCS code is retained **commented-out** in `backup-minikube-mnt.sh` as a
+re-enable-able fallback.)
 
 - **No re-zip** — the local `.tgz` is already compressed; it is copied as-is.
 - **No credentials** — NFS on the trusted LAN needs none in the script (unlike the old GCS
-  service-account key). The mount is persistent via `/etc/fstab`
-  (`_netdev,nofail,soft,timeo=150,retrans=3,x-systemd.automount`) so a dark NAS never blocks
-  boot or wedges the cron.
-- **One-time format** — the WD 6TB volume is wiped **once, manually, in the WD My Cloud web
-  dashboard** (Settings → Utilities → Format Volume / Full Factory Restore); the host cannot
-  `mkfs` a network appliance. Then its NFS share is enabled and mounted (see the script's
-  header setup band; confirm the export path with `showmount -e 192.168.50.169`).
+  service-account key). Writes are permitted (`sec=sys`, no root_squash); the export maps them
+  to the share owner **uid 501** on the device — harmless, files stay readable.
+- **`hard` mount, not `soft`** — the persistent `/etc/fstab` entry is
+  `192.168.50.169:/nfs/private-cloud /mnt/wdcloud nfs _netdev,nofail,hard,timeo=600,retrans=3,x-systemd.automount 0 0`.
+  `hard` was chosen deliberately: a live 21 GB copy-test on a `soft,timeo=150` mount returned
+  `Input/output error` on `close()` when the WD's fsync outran the soft timeout — a `soft` mount
+  can **truncate/corrupt a backup**. `hard` retries instead (re-verified byte-perfect, md5 match).
+  `nofail` + `x-systemd.automount` keep a dark NAS from ever blocking boot — it mounts on first
+  access, so the mount survives reboots/crashes without wedging startup.
+- **One-time manual setup (dashboard, not scripted)** — the WD is a network appliance, so two
+  steps are done **once, by hand in the WD My Cloud web dashboard** and then persist on the device:
+  (1) **format** the 6 TB volume (Settings → Utilities → Format Volume / Full Factory Restore) —
+  the host cannot `mkfs` a NAS; (2) **create the private `private-cloud` share with NFS access on**.
+  These are not automatable in practice: the OS3 dashboard login *is* scriptable
+  (`POST /nas/v1/auth`, JSON `{"username","password":<base64>}`), but the share-management CGIs use
+  per-request rotating/replay-protected tokens and the admin account **locks after 5 failed logins**,
+  so a one-time hand-click is safer than scripting it. Confirm the export with
+  `showmount -e 192.168.50.169`.
 - **Share prune mirrors the local retention** (current + previous month, one per older month)
   with **no age floor** — it is our own disk, so deletes are always free (the 90-day floor
   only ever existed to dodge Coldline's minimum-storage early-deletion fee). Dates are read
@@ -461,8 +474,8 @@ replaced the earlier GCS Coldline mirror; the GCS code is retained **commented-o
   only `WARN`s to `/var/log/minikube-backup.log`; it never aborts or affects the local backup.
 
 **Restoring from the off-site copy.** `restore-scratch.sh` is the documented inverse: on a bare Ubuntu
-box (phase 1 installs `nfs-common`) it **mounts the WD NFS share** and picks the newest
-`private-cloud-*.tgz` from `/mnt/wdcloud/private-cloud/` (date parsed from the filename, like the
+box (phase 1 installs `nfs-common`) it **mounts the WD NFS share** (`hard,timeo=600,retrans=3`) and
+picks the newest `private-cloud-*.tgz` from `/mnt/wdcloud/` (date parsed from the filename, like the
 prune) — no cloud auth needed on the LAN. Two things are not in the archive and are reconstructed on
 restore: the **registry blobs** (they live on sdb2/`/mnt/kachra`, re-pushed by Jenkins on a single-disk
 rebuild) and the **ollama models** (`*/ollama/models` excluded, re-pulled). See

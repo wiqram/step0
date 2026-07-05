@@ -375,3 +375,23 @@ and `ls .../private-cloud-*.tgz | pick_latest_archive` lines — no `gcloud auth
 
 - [ ] **Step 6: Report results** — confirm the copy landed and the dry-run shows the WD path.
 ```
+
+---
+
+## Implementation notes / deviations from plan (2026-07-05, as-built)
+
+The plan above was written from the design; live verification changed three concrete details.
+The scripts + `architecture.md` §7 reflect the **as-built** state below:
+
+- **Export path:** confirmed via `showmount` as **`/nfs/private-cloud`** (device-side
+  `/mnt/HD/HD_a2/private-cloud`). The `__CONFIRM_WITH_showmount…__` placeholder is gone.
+- **Archives at the share root**, not a `private-cloud/` subdir: since the share is dedicated,
+  `WD_DEST="$WD_MOUNT"` (`/mnt/wdcloud/private-cloud-<date>.tgz`). Simpler than `private-cloud/private-cloud/`.
+- **`hard` mount, not `soft`:** a live 21 GB copy-test on `soft,timeo=150` threw `Input/output
+  error` on `close()` (WD fsync outran the soft timeout — risks truncation). Switched to
+  `hard,timeo=600,retrans=3` (backup) and the same in restore-scratch phase 2; re-verified
+  byte-perfect (md5 match). `/etc/fstab` uses `_netdev,nofail,hard,timeo=600,retrans=3,x-systemd.automount`.
+- **Format + NFS-share creation were one-time manual dashboard steps.** The WD My Cloud OS3 login
+  is scriptable (`POST /nas/v1/auth`) but its share-management CGIs use rotating/replay-protected
+  tokens and the account locks after 5 failed logins, so automating a one-time action wasn't worth
+  the lockout risk. See memory `wdcloud-offsite-backup`.

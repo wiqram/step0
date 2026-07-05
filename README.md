@@ -39,7 +39,7 @@ forwards it to a Kubernetes NodePort on `172.16.238.2`.
 | Durable registry blobs | `container-registry-images/` (separate `/dev/sdb2` mount) |
 | Private registry | `container-registry.traderyolo.com` → `172.16.238.2:5000` |
 | Vault keys (only copy) | `~/.vault/cluster-keys.json` (0600, outside any repo) |
-| Weekly DR backup | `root` cron, **Mon 05:00** → `private-cloud-<date>.tgz` in `/mnt/minikube-backups`, log `/var/log/minikube-backup.log`; then off-site to **GCS Coldline** `gs://private_cloud_backup` |
+| Weekly DR backup | `root` cron, **Mon 05:00** → `private-cloud-<date>.tgz` in `/mnt/minikube-backups`, log `/var/log/minikube-backup.log`; then off-site to the **WD Cloud NAS** `192.168.50.169:/nfs/private-cloud` (NFS, mounted `/mnt/wdcloud`) |
 | One-app conventions | one namespace · one NodePort · `kv/<app>/*` + policy + role + `jenkins-<app>` AppRole · one Jenkins job · one NPM host |
 
 ## Documentation map

@@ -98,7 +98,8 @@ curl -s -o /dev/null -w '%{http_code}\n' https://predictonomy.com   # 200
   Jenkins.
 - **Total host loss (bare-metal rebuild):** if the *machine* is gone, not just the cluster — on a
   fresh Ubuntu box, `git clone https://github.com/wiqram/step0.git` then run **`./restore-scratch.sh`**.
-  It installs all tooling, pulls the latest GCS Coldline backup (interactive `gcloud auth login`),
+  It installs all tooling (incl. `nfs-common`), mounts the WD Cloud NFS share
+  (`192.168.50.169:/nfs/private-cloud`) and pulls the latest backup from it,
   restores Vault keys + data + nginx proxy-hosts/certs + secrets, clones every app repo, brings up the
   platform (`SKIP_APP_BUILDS=1 start-scratch.sh`), re-arms cron, then **pauses**. Repoint DNS at the new
   host, then `./trigger-app-builds.sh`. Resumable (`--from-phase N`), inspectable (`--dry-run`). Registry
