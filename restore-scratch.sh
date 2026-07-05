@@ -2,7 +2,7 @@
 ####################################
 #
 # restore-scratch.sh — COLD disaster recovery: bare Ubuntu -> fully wired private cloud
-# from the latest GCS Coldline backup. Inverse of backup-minikube-mnt.sh; ends by
+# from the latest WD Cloud (LAN NFS) backup. Inverse of backup-minikube-mnt.sh; ends by
 # running start-scratch.sh (SKIP_APP_BUILDS=1) then pausing before app deploys.
 #
 # Design: docs/superpowers/specs/2026-06-30-restore-scratch-design.md
@@ -79,8 +79,8 @@ phase0_preflight() {
 restore-scratch.sh — COLD disaster recovery. Before continuing, confirm:
   1. GitHub auth is configured for this user (SSH key or token) so the
      private wiqram/* repos can be cloned. (You already cloned STEP0 to get here.)
-  2. You can complete an interactive `gcloud auth login` with an account that
-     has read on gs://private_cloud_backup (project igtrader-296013).
+  2. The WD Cloud NAS (192.168.50.169) is reachable on the LAN and its NFS share
+     holds the latest private-cloud-*.tgz backup (this box will mount it to copy).
   3. You control DNS for the app domains / *.traderyolo.com — the script PAUSES
      before app deploys so you can repoint them at this host.
 This box will be heavily modified (docker, minikube, NVIDIA drivers installed;
@@ -98,11 +98,11 @@ PRE
 # ============================== PHASE 1: HOST TOOLING ==============================
 phase1_tooling() {
   should_run 1 || { log "phase 1 already done, skipping"; return; }
-  log "PHASE 1 — install host tooling (docker, kubectl, minikube, helm, jq, gcloud, NVIDIA)"
+  log "PHASE 1 — install host tooling (docker, kubectl, minikube, helm, jq, nfs-common, NVIDIA)"
 
   # base packages
   run "sudo apt-get update -y"
-  run "sudo apt-get install -y ca-certificates curl gnupg jq git apt-transport-https"
+  run "sudo apt-get install -y ca-certificates curl gnupg jq git apt-transport-https nfs-common"
 
   # docker (official convenience repo)
   if ! command -v docker >/dev/null 2>&1; then
@@ -145,7 +145,9 @@ phase1_tooling() {
     run "sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker"
   fi
 
-  # gcloud SDK (no-root, home install) to ~/google-cloud-sdk
+  # gcloud SDK (no-root, home install) to ~/google-cloud-sdk — kept for the
+  # commented-out GCS Coldline fallback in backup-minikube-mnt.sh; the live DR
+  # pull now comes from the WD Cloud NFS share (phase 2), not GCS.
   if [ ! -x "$HOME/google-cloud-sdk/bin/gcloud" ]; then
     run "curl -fsSL https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-x86_64.tar.gz -o /tmp/gcloud.tgz"
     run "tar -xzf /tmp/gcloud.tgz -C \"$HOME\""
@@ -157,41 +159,41 @@ phase1_tooling() {
 }
 
 # ============================== PHASE 2: PULL BACKUP ==============================
-GCLOUD="$HOME/google-cloud-sdk/bin/gcloud"
-GCS_BUCKET="private_cloud_backup"
-GCS_PROJECT="igtrader-296013"
+WD_HOST="192.168.50.169"                       # WD Cloud 6TB on the LAN
+WD_EXPORT="__CONFIRM_WITH_showmount_-e_192.168.50.169__"   # NFS export path (see backup-minikube-mnt.sh setup)
+WD_MOUNT="/mnt/wdcloud"
+WD_DEST="$WD_MOUNT/private-cloud"
 BACKUP_DIR="/mnt/minikube-backups"
 ARCHIVE_PATH=""   # set by phase2, consumed by phase4
 
 phase2_pull() {
   should_run 2 || { log "phase 2 already done, skipping"; ARCHIVE_PATH="$(cat "$BACKUP_DIR/.restore-archive" 2>/dev/null)"; return; }
-  log "PHASE 2 — gcloud login + pull latest backup"
-  [ -x "$GCLOUD" ] || die "gcloud not found at $GCLOUD (phase 1 must complete first)"
+  log "PHASE 2 — mount WD Cloud (NFS) + pull latest backup"
   run "sudo mkdir -p '$BACKUP_DIR' && sudo chown cloud:cloud '$BACKUP_DIR'"
+  run "sudo mkdir -p '$WD_MOUNT'"
 
-  # Interactive login (operator's own Google identity). Skipped under --dry-run.
+  # Mount the WD NFS share if it is not already mounted.
   if [ "$DRY_RUN" = 1 ]; then
-    echo "  DRYRUN> $GCLOUD auth login   (interactive)"
-    echo "  DRYRUN> $GCLOUD config set project $GCS_PROJECT"
-  else
-    "$GCLOUD" auth login || die "gcloud auth login failed"
-    "$GCLOUD" config set project "$GCS_PROJECT" || die "gcloud set project failed"
+    echo "  DRYRUN> sudo mount -t nfs -o soft,timeo=150,retrans=3 $WD_HOST:$WD_EXPORT $WD_MOUNT"
+    echo "  DRYRUN> ls $WD_DEST/private-cloud-*.tgz | pick_latest_archive"
+    ARCHIVE_PATH="$BACKUP_DIR/<latest>.tgz"; return
+  fi
+  if ! mountpoint -q "$WD_MOUNT"; then
+    run "sudo mount -t nfs -o soft,timeo=150,retrans=3 '$WD_HOST:$WD_EXPORT' '$WD_MOUNT'" \
+      || die "cannot mount WD Cloud $WD_HOST:$WD_EXPORT at $WD_MOUNT"
   fi
 
   # Find newest archive by date embedded in filename (restore-lib pick_latest_archive).
   local listing latest
-  if [ "$DRY_RUN" = 1 ]; then
-    echo "  DRYRUN> $GCLOUD storage ls gs://$GCS_BUCKET/private-cloud-*.tgz | pick_latest_archive"
-    ARCHIVE_PATH="$BACKUP_DIR/<latest>.tgz"; return
-  fi
-  listing="$("$GCLOUD" storage ls "gs://$GCS_BUCKET/private-cloud-*.tgz")" || die "cannot list bucket"
+  listing="$(ls "$WD_DEST"/private-cloud-*.tgz 2>/dev/null)" || true
+  [ -n "$listing" ] || die "no private-cloud-*.tgz found in $WD_DEST"
   latest="$(printf '%s\n' "$listing" | pick_latest_archive)"
-  [ -n "$latest" ] || die "no private-cloud-*.tgz found in gs://$GCS_BUCKET"
+  [ -n "$latest" ] || die "no private-cloud-*.tgz found in $WD_DEST"
   log "latest backup: $latest"
-  "$GCLOUD" storage cp "$latest" "$BACKUP_DIR/" || die "download failed"
+  cp "$latest" "$BACKUP_DIR/" || die "copy from WD Cloud failed"
   ARCHIVE_PATH="$BACKUP_DIR/$(basename "$latest")"
   echo "$ARCHIVE_PATH" > "$BACKUP_DIR/.restore-archive"
-  [ -s "$ARCHIVE_PATH" ] || die "downloaded archive is empty: $ARCHIVE_PATH"
+  [ -s "$ARCHIVE_PATH" ] || die "copied archive is empty: $ARCHIVE_PATH"
   log "downloaded: $ARCHIVE_PATH ($(du -h "$ARCHIVE_PATH" | awk '{print $1}'))"
   mark_phase 2
 }
