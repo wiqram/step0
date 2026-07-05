@@ -142,14 +142,14 @@ ls -lh $dest
 #   showmount -e 192.168.50.169
 #   # 2. Persistent, boot-safe mount (nofail+soft => a dark NAS never blocks boot):
 #   sudo mkdir -p /mnt/wdcloud
-#   #   add to /etc/fstab (replace <WD_EXPORT> with the path from showmount):
-#   #   192.168.50.169:<WD_EXPORT>  /mnt/wdcloud  nfs  _netdev,nofail,soft,timeo=150,retrans=3,x-systemd.automount  0 0
-#   sudo mount /mnt/wdcloud && mkdir -p /mnt/wdcloud/private-cloud
+#   #   add to /etc/fstab:
+#   #   192.168.50.169:/nfs/private-cloud  /mnt/wdcloud  nfs  _netdev,nofail,soft,timeo=150,retrans=3,x-systemd.automount  0 0
+#   sudo mount /mnt/wdcloud    # archives land at the share root
 ##############################################
 WD_HOST="192.168.50.169"                 # WD Cloud 6TB on the LAN
-WD_EXPORT="__CONFIRM_WITH_showmount_-e_192.168.50.169__"   # informational; mount is via /etc/fstab
+WD_EXPORT="/nfs/private-cloud"            # dedicated NFS share (backed by /mnt/HD/HD_a2/private-cloud)
 WD_MOUNT="/mnt/wdcloud"                   # persistent NFS mount (see setup above)
-WD_DEST="$WD_MOUNT/private-cloud"         # archives live here
+WD_DEST="$WD_MOUNT"                       # dedicated share — archives live at the mount root
 
 echo
 echo "Off-site: copying $archive_file to $WD_DEST (WD Cloud, NFS)"

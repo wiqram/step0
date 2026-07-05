@@ -160,9 +160,9 @@ phase1_tooling() {
 
 # ============================== PHASE 2: PULL BACKUP ==============================
 WD_HOST="192.168.50.169"                       # WD Cloud 6TB on the LAN
-WD_EXPORT="__CONFIRM_WITH_showmount_-e_192.168.50.169__"   # NFS export path (see backup-minikube-mnt.sh setup)
+WD_EXPORT="/nfs/private-cloud"                  # dedicated NFS share (see backup-minikube-mnt.sh setup)
 WD_MOUNT="/mnt/wdcloud"
-WD_DEST="$WD_MOUNT/private-cloud"
+WD_DEST="$WD_MOUNT"                             # dedicated share — archives at the mount root
 BACKUP_DIR="/mnt/minikube-backups"
 ARCHIVE_PATH=""   # set by phase2, consumed by phase4
 
