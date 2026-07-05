@@ -140,10 +140,13 @@ ls -lh $dest
 #   # 1. Install the NFS client and confirm the export path:
 #   sudo apt-get install -y nfs-common
 #   showmount -e 192.168.50.169
-#   # 2. Persistent, boot-safe mount (nofail+soft => a dark NAS never blocks boot):
+#   # 2. Persistent, boot-safe mount. hard => writes retry instead of erroring
+#   #    (a soft mount can return EIO / truncate a large archive if the NAS is slow
+#   #    to fsync — unacceptable for a backup); nofail + x-systemd.automount keep a
+#   #    dark NAS from ever blocking boot (it mounts on first access instead).
 #   sudo mkdir -p /mnt/wdcloud
 #   #   add to /etc/fstab:
-#   #   192.168.50.169:/nfs/private-cloud  /mnt/wdcloud  nfs  _netdev,nofail,soft,timeo=150,retrans=3,x-systemd.automount  0 0
+#   #   192.168.50.169:/nfs/private-cloud  /mnt/wdcloud  nfs  _netdev,nofail,hard,timeo=600,retrans=3,x-systemd.automount  0 0
 #   sudo mount /mnt/wdcloud    # archives land at the share root
 ##############################################
 WD_HOST="192.168.50.169"                 # WD Cloud 6TB on the LAN

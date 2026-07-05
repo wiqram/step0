@@ -174,12 +174,12 @@ phase2_pull() {
 
   # Mount the WD NFS share if it is not already mounted.
   if [ "$DRY_RUN" = 1 ]; then
-    echo "  DRYRUN> sudo mount -t nfs -o soft,timeo=150,retrans=3 $WD_HOST:$WD_EXPORT $WD_MOUNT"
+    echo "  DRYRUN> sudo mount -t nfs -o hard,timeo=600,retrans=3 $WD_HOST:$WD_EXPORT $WD_MOUNT"
     echo "  DRYRUN> ls $WD_DEST/private-cloud-*.tgz | pick_latest_archive"
     ARCHIVE_PATH="$BACKUP_DIR/<latest>.tgz"; return
   fi
   if ! mountpoint -q "$WD_MOUNT"; then
-    run "sudo mount -t nfs -o soft,timeo=150,retrans=3 '$WD_HOST:$WD_EXPORT' '$WD_MOUNT'" \
+    run "sudo mount -t nfs -o hard,timeo=600,retrans=3 '$WD_HOST:$WD_EXPORT' '$WD_MOUNT'" \
       || die "cannot mount WD Cloud $WD_HOST:$WD_EXPORT at $WD_MOUNT"
   fi
 
