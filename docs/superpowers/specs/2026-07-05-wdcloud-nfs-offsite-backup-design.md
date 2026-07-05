@@ -26,13 +26,31 @@ one-time add.
 
 ## Decisions (locked)
 
+- **WD Cloud is the default/active off-site target**, fully replacing GCS Coldline as the live copy.
+- **Format the WD 6 TB first, once, manually via the WD dashboard** (device is empty; full wipe is
+  intended). Not scripted — the host cannot format a network appliance. See "One-time setup — Step 0".
 - **Keep the GCS block as a commented-out fallback** (not deleted) — re-enable a cloud copy later
   without rewriting. Existing GCS bucket data is left untouched (delete manually whenever).
 - **Update `restore-scratch.sh` in the same change** so the DR restore path stays working.
 - No 90-day age floor on the WD prune — the Coldline early-deletion fee it guarded against does
   not exist on our own disk.
 
-## One-time host setup (operator, documented in-script)
+## One-time setup (operator, documented in-script)
+
+### Step 0 — format the WD Cloud 6 TB (manual, in the WD dashboard)
+
+The device is a network appliance — the STEP0 host has **no block device** to `mkfs` (it's only
+reachable over NFS/SMB; SSH is closed). So the format is a **manual one-time operator step**, done
+in the **WD My Cloud web dashboard**, before the mount below:
+
+- Dashboard → **Settings → Utilities → Format Volume** (or Full Factory Restore) to wipe the 6 TB
+  volume for a clean, dedicated backup disk. Confirmed intent: the device is empty; a full wipe is fine.
+- After formatting, (re)create/enable the NFS share that `WD_EXPORT` will point at.
+
+This is **not scripted** and never runs from the cron — it is a documented prerequisite, called out
+in the script's setup comment band the same way the GCS bucket-creation steps were.
+
+### Step 1 — host mount
 
 ```bash
 sudo apt-get install -y nfs-common
@@ -99,6 +117,7 @@ The old GCS block (vars + upload + floored prune) is moved into a `# ---- GCS Co
 ## Out of scope
 
 - Deleting existing objects in `gs://private_cloud_backup` (left as-is).
+- Scripting the WD format — it is a **manual dashboard step** (Step 0), never a cron/script action.
 - The retention *convention* itself (unchanged; WD simply drops the Coldline-only floor).
 - Local archive build + local `/mnt/minikube-backups` prune (unchanged).
 - SMB/CIFS or rsync paths (NFS chosen).
