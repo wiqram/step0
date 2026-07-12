@@ -528,6 +528,23 @@ done
 
 `backup-minikube-mnt.sh` is the canonical example of this convention.
 
+### Tenant job — WD My Cloud 8TB → 16TB backup (nightly 02:00, not cluster-related)
+
+This host also runs a backup job with **nothing to do with the cluster**: a nightly
+rsync-over-CIFS **delta** backup of the **8TB WD My Cloud** (`192.168.50.68`,
+`MYCLOUD-JGN6VM`) to the **16TB WD My Cloud** (`192.168.50.251`, `MYCLOUD-320969`).
+Neither of these is the DR NAS used above (`192.168.50.169`). It lives at
+`/home/cloud/wd-backup/` (script + config + own README) and runs as root from
+`/etc/cron.d/wd-backup` at 02:00, logging to `/home/cloud/wd-backup/logs/`.
+
+**Moved here from the dev box (`vik@10.10.10.2`) on 2026-07-12** because the dev box is
+not always powered on, so its cron was unreliable; prod is up 24/7 and reaches both NAS
+on the same 192.168.50.x LAN. The backup is **additive** (no `--delete` — the 16TB only
+grows), i.e. a mirror rather than dated archives, so the retention convention above does
+not apply to it. To redeploy or update it, pull the directory from the dev box over the
+10GbE link and re-run the idempotent installer — see the header of
+`/home/cloud/wd-backup/install-on-prod.sh`.
+
 ---
 
 ## 8. Maintenance Scripts

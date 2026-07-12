@@ -40,6 +40,7 @@ forwards it to a Kubernetes NodePort on `172.16.238.2`.
 | Private registry | `container-registry.traderyolo.com` → `172.16.238.2:5000` |
 | Vault keys (only copy) | `~/.vault/cluster-keys.json` (0600, outside any repo) |
 | Weekly DR backup | `root` cron, **Mon 05:00** → `private-cloud-<date>.tgz` in `/mnt/minikube-backups`, log `/var/log/minikube-backup.log`; then off-site to the **WD Cloud NAS** `192.168.50.169:/nfs/private-cloud` (NFS, mounted `/mnt/wdcloud`) |
+| Nightly WD NAS backup | **Not cluster-related.** `/etc/cron.d/wd-backup`, **02:00 daily** — rsync delta of the **8TB WD My Cloud** (`192.168.50.68`) → **16TB** (`192.168.50.251`), additive (never deletes). Lives at `/home/cloud/wd-backup/` (own README; moved from the dev box 2026-07-12 — prod is always on), logs in `/home/cloud/wd-backup/logs/` |
 | One-app conventions | one namespace · one NodePort · `kv/<app>/*` + policy + role + `jenkins-<app>` AppRole · one Jenkins job · one NPM host |
 
 ## Documentation map
@@ -72,6 +73,7 @@ kubectl get po -A               # all workloads
 docker ps                       # nginx-proxy-manager + minikube container
 docker network inspect 5million # fixed-IP layout
 sudo crontab -l -u root         # the weekly backup + (host) cron jobs
+cat /etc/cron.d/wd-backup       # nightly 02:00 WD My Cloud 8TB→16TB backup (/home/cloud/wd-backup)
 ```
 
 ## Common operations

@@ -89,6 +89,12 @@ to a Kubernetes NodePort on `172.16.238.2`.
     floor only ever mattered for GCS Coldline's minimum-storage duration and is gone; if a
     future off-site target is cloud storage with the same constraint, restore that floor.
     Details: `architecture.md` §7 ("Off-site copy — WD Cloud").
+  - **Separate nightly WD NAS job (not cluster-related):** this host also runs the
+    8TB→16TB WD My Cloud rsync backup nightly at 02:00 via `/etc/cron.d/wd-backup`
+    (script + README in `/home/cloud/wd-backup/`; moved from the dev box 2026-07-12
+    because prod is always on). It is an **additive mirror** — no dated archives — so
+    the retention convention above does not apply. Its two NAS (`.68` → `.251`) are
+    **not** the DR NAS (`.169`). See `architecture.md` §7 ("Tenant job — WD My Cloud").
 
 ## Working norms
 
