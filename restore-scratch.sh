@@ -263,6 +263,21 @@ phase4_extract() {
   run "mkdir -p '$SCRIPT_DIR/logs'"
   [ -d "$stage/home/cloud/Ideaprojects/STEP0/logs" ] && run "cp -a '$stage/home/cloud/Ideaprojects/STEP0/logs/.' '$SCRIPT_DIR/logs/' || true"
 
+  # 4g. WD My Cloud nightly-backup toolkit (~/wd-backup): the rsync script, its config
+  #     AND the SMB credential files (.smb-cred-*), which live OUTSIDE STEP0 and are in
+  #     NO git repo — so the DR archive is their only restore source. Captured by
+  #     backup-minikube-mnt.sh (logs excluded). Phase 8 re-arms it (install-on-prod.sh
+  #     + the 02:00 cron). If absent (archive predates the change) phase 8 warns with the
+  #     dev-box re-pull command.
+  if [ -d "$stage/home/cloud/wd-backup" ]; then
+    run "mkdir -p '$HOME/wd-backup'"
+    run "cp -a '$stage/home/cloud/wd-backup/.' '$HOME/wd-backup/'"
+    run "chmod 600 '$HOME/wd-backup'/.smb-cred* 2>/dev/null || true"
+    log "wd-backup toolkit restored (~/wd-backup)"
+  else
+    log "WARN: ~/wd-backup not in this archive (predates the change) — phase 8 will note the dev-box re-pull."
+  fi
+
   run "rm -rf '$stage'"
   mark_phase 4
 }
@@ -357,6 +372,30 @@ phase8_automation() {
       | sudo crontab -u root - && log "root backup cron installed" || log "WARN: root cron install failed"
   fi
 
+  # Re-arm the nightly WD My Cloud rsync backup (8TB .68 -> 16TB .251). Its toolkit
+  # (~/wd-backup: script + conf + SMB creds) was restored from the DR archive in phase 4.
+  # install-on-prod.sh installs deps (cifs-utils/rsync/smbclient), fixes cred perms,
+  # adapts paths and installs /etc/cron.d/wd-backup (02:00). It preflights the NAS under
+  # `set -e`, so a momentarily-dark NAS would abort it BEFORE the cron is written — hence
+  # the fallback: force `wd-backup.sh install-cron` (which never touches the NAS) so the
+  # nightly job is armed regardless. Wholly best-effort — a separate tenant job must never
+  # fail the cluster restore.
+  if [ -x /home/cloud/wd-backup/install-on-prod.sh ]; then
+    if [ "$DRY_RUN" = 1 ]; then
+      echo "  DRYRUN> sudo /home/cloud/wd-backup/install-on-prod.sh  (deps+creds+NAS preflight+02:00 cron)"
+    elif sudo /home/cloud/wd-backup/install-on-prod.sh; then
+      log "WD My Cloud nightly backup re-armed (install-on-prod.sh OK)"
+    else
+      log "WARN: install-on-prod.sh failed (NAS unreachable?) — forcing cron install; run 'sudo ~/wd-backup/wd-backup.sh check' once the NAS is up."
+      sudo /home/cloud/wd-backup/wd-backup.sh install-cron \
+        && log "WD My Cloud cron installed (fallback, no NAS preflight)" \
+        || log "WARN: WD My Cloud cron install failed too — re-arm manually: sudo ~/wd-backup/install-on-prod.sh"
+    fi
+  else
+    log "WARN: ~/wd-backup/install-on-prod.sh missing — WD My Cloud nightly backup NOT re-armed."
+    log "      Re-pull from the dev box, then install: rsync -av --exclude logs vik@10.10.10.2:wd-backup/ ~/wd-backup/ && sudo ~/wd-backup/install-on-prod.sh"
+  fi
+
   # Start the unseal loop NOW (don't wait for @reboot) so Vault unseals immediately.
   run "mkdir -p '$SCRIPT_DIR/logs'"
   if [ "$DRY_RUN" = 1 ]; then
@@ -395,12 +434,21 @@ phase9_handoff() {
       log "      in $SCRIPT_DIR/.env (Jenkins UI: user 'private-cloud' -> Configure -> API Token ->"
       log "      generate), then run ./trigger-app-builds.sh."
     fi
+
+    # Read-only environment survey: confirms the facts a fresh box can silently get
+    # wrong (fixed cluster IPs, NAS reachability/exports, the 10GbE link, host/DNS/cron).
+    # Advisory — never fails the restore; the operator reads the WARN/FAIL lines.
+    if [ -x "$SCRIPT_DIR/verify-recovery.sh" ]; then
+      log "running verify-recovery.sh (read-only survey)..."
+      "$SCRIPT_DIR/verify-recovery.sh" || log "verify-recovery.sh flagged issues (see above) — advisory, restore not aborted."
+    fi
   fi
   cat <<'DONE'
 ==================================================================
 RESTORE COMPLETE — platform is up; apps are NOT yet deployed.
 
 Verify:
+  ./verify-recovery.sh                            # full survey: IPs, NAS, 10GbE, DNS, cron
   minikube status                                 # Running
   kubectl -n vault exec vault-0 -- vault status   # Sealed = false
   kubectl get po -A                               # platform pods Running

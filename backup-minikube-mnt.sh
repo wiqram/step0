@@ -26,6 +26,14 @@ backup_files4="/home/cloud/Ideaprojects/qcguy-ghost"
 # 2026-06-16 start-vault.sh race that zeroed it) on an already-initialized Vault
 # would be unrecoverable. Back it up here. Runs as root cron; can read the 0600 file.
 backup_files5="/home/cloud/.vault"
+# The nightly WD My Cloud rsync backup toolkit (8TB .68 -> 16TB .251) lives OUTSIDE
+# STEP0 in ~/wd-backup: the script (wd-backup.sh), its config (wd-backup.conf) AND the
+# SMB credential files (.smb-cred-*) that are NOT in any git repo. Capture it so a
+# bare-metal restore-scratch can re-arm that job (install-on-prod.sh + 02:00 cron)
+# without needing the dev box online. Its logs/ are excluded from the tar below
+# (regenerable churn). Same trust level as ~/.vault above — the archive already
+# carries the Vault root token, so these creds ride along consistently.
+backup_files6="/home/cloud/wd-backup"
 
 #First refresh the live vault config files into minikube-mnt so the backup captures
 #the current per-app secrets (these can't live in GitHub).
@@ -51,7 +59,7 @@ hostname=$(hostname -s)
 archive_file="$hostname-$day.tgz"
 
 # Print start status message.
-echo "Backing up $backup_files and $backup_files2 and $backup_files3 and $backup_files4 and $backup_files5 to $dest/$archive_file"
+echo "Backing up $backup_files and $backup_files2 and $backup_files3 and $backup_files4 and $backup_files5 and $backup_files6 to $dest/$archive_file"
 date
 echo
 
@@ -62,7 +70,7 @@ echo
 # each weekly archive from ~5G to ~40G and fill /dev/sdb1 under the retention
 # policy. ollama's identity key (id_ed25519) + config live outside models/ and
 # ARE still captured.
-tar -czf $dest/$archive_file --exclude='*/ollama/models' $backup_files $backup_files2 $backup_files3 $backup_files4 $backup_files5
+tar -czf $dest/$archive_file --exclude='*/ollama/models' --exclude='*/wd-backup/logs' $backup_files $backup_files2 $backup_files3 $backup_files4 $backup_files5 $backup_files6
 
 # Print end status message.
 echo
