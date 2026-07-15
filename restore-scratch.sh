@@ -100,9 +100,15 @@ phase1_tooling() {
   should_run 1 || { log "phase 1 already done, skipping"; return; }
   log "PHASE 1 — install host tooling (docker, kubectl, minikube, helm, jq, nfs-common, NVIDIA)"
 
-  # base packages
+  # Reproduce the host identity (a bare box keeps its installer-chosen hostname). The
+  # 127.0.1.1 /etc/hosts line and any hostname-derived config assume `private-cloud`.
+  if [ "$(hostname -s 2>/dev/null)" != "private-cloud" ]; then
+    run "sudo hostnamectl set-hostname private-cloud"
+  fi
+
+  # base packages (ethtool is needed in phase 8 to find the atlantic 10GbE NIC by driver)
   run "sudo apt-get update -y"
-  run "sudo apt-get install -y ca-certificates curl gnupg jq git apt-transport-https nfs-common"
+  run "sudo apt-get install -y ca-certificates curl gnupg jq git apt-transport-https nfs-common ethtool"
 
   # docker (official convenience repo)
   if ! command -v docker >/dev/null 2>&1; then
@@ -110,6 +116,29 @@ phase1_tooling() {
     run "sudo sh /tmp/get-docker.sh"
     run "sudo usermod -aG docker cloud"
     log "NOTE: docker group membership for 'cloud' applies on next login; this run uses sudo where needed."
+  fi
+
+  # Reproduce the host docker daemon config the live cluster was built on: cgroupfs cgroup
+  # driver (minikube's docker driver negotiated this on the live box), a 100m per-container
+  # log cap (single-disk box — uncapped json logs can fill /), and overlay2. nvidia-ctk
+  # (below) then MERGES the nvidia runtime into this same file. Only write on a FRESH box
+  # (no existing daemon.json) so a re-run never clobbers the nvidia runtime stanza.
+  if [ ! -f /etc/docker/daemon.json ]; then
+    if [ "$DRY_RUN" = 1 ]; then
+      echo "  DRYRUN> write /etc/docker/daemon.json (cgroupfs, log max-size 100m, overlay2) + restart docker"
+    else
+      sudo mkdir -p /etc/docker
+      sudo tee /etc/docker/daemon.json >/dev/null <<'JSON'
+{
+  "exec-opts": ["native.cgroupdriver=cgroupfs"],
+  "log-driver": "json-file",
+  "log-opts": {"max-size": "100m"},
+  "storage-driver": "overlay2"
+}
+JSON
+      sudo systemctl restart docker 2>/dev/null || true
+      log "wrote /etc/docker/daemon.json (cgroupfs + 100m log cap + overlay2)"
+    fi
   fi
 
   # kubectl (pinned-stable via official pkg repo)
@@ -201,7 +230,38 @@ phase2_pull() {
 # ============================== PHASE 3: STORAGE LAYOUT ==============================
 phase3_dirs() {
   should_run 3 || { log "phase 3 already done, skipping"; return; }
-  log "PHASE 3 — recreate storage directories (single-disk layout)"
+  log "PHASE 3 — recreate storage directories + mount the dedicated backup disk"
+
+  # --- Dedicated backup disk (NON-destructive) --------------------------------------
+  # The live prod box is TWO-disk: a separate ~638G disk holds /mnt/minikube-backups
+  # (label 'minikube-backups', ~150G+ of cluster state) and /mnt/kachra (label 'Kachra',
+  # registry blobs). A 44G root disk canNOT hold the restored minikube-mnt. We NEVER
+  # auto-format (destructive); instead: if the labelled filesystem already exists, mount it
+  # (+ persist an fstab line); if it does NOT, WARN loudly with the exact prep commands so
+  # the operator attaches/formats the disk before the bulk extract (phase 4) targets root.
+  ensure_labeled_mount() {   # $1=label  $2=mountpoint
+    local label="$1" mp="$2"
+    # Detect via the udev by-label symlink (no root needed) or an existing mount.
+    if mountpoint -q "$mp" 2>/dev/null || [ -e "/dev/disk/by-label/$label" ]; then
+      if [ "$DRY_RUN" = 1 ]; then echo "  DRYRUN> ensure $mp is mounted from label '$label' (+fstab)"; return; fi
+      if ! mountpoint -q "$mp"; then
+        sudo mkdir -p "$mp"
+        grep -q " $mp " /etc/fstab 2>/dev/null \
+          || echo "/dev/disk/by-label/$label $mp auto nosuid,nodev,nofail,x-gvfs-show 0 0" | sudo tee -a /etc/fstab >/dev/null
+        sudo mount "$mp" 2>/dev/null || true
+      fi
+      log "backup disk: label '$label' -> $mp OK"
+    else
+      log "WARN: no filesystem labelled '$label' found — $mp would live on the ROOT disk."
+      log "      Root is ~44G; the backup alone is ~150G+ and will NOT fit. Attach the disk, then:"
+      log "        sudo mkfs.ext4 -L $label /dev/sdXN   &&   sudo mkdir -p $mp"
+      log "        echo '/dev/disk/by-label/$label $mp auto nosuid,nodev,nofail 0 0' | sudo tee -a /etc/fstab"
+      log "        sudo mount $mp   # then re-run: ./restore-scratch.sh --from-phase 3"
+    fi
+  }
+  ensure_labeled_mount minikube-backups /mnt/minikube-backups
+  ensure_labeled_mount Kachra           /mnt/kachra
+
   run "sudo mkdir -p /mnt/minikube-backups/minikube-mnt"
   run "sudo mkdir -p /mnt/kachra/container-registry-images"
   run "sudo mkdir -p /mnt/predictonomy-postgres /mnt/predictonomy-backups"
@@ -362,7 +422,7 @@ phase7_nginx() {
 # ============================== PHASE 8: RE-ARM AUTOMATION ==============================
 phase8_automation() {
   should_run 8 || { log "phase 8 already done, skipping"; return; }
-  log "PHASE 8 — re-arm restart policy, crontabs, unseal loop"
+  log "PHASE 8 — re-arm restart policy, crontabs, host units/network, unseal loop"
 
   # Keep the cluster across host reboots.
   run "docker update --restart=unless-stopped minikube || true"
@@ -408,6 +468,64 @@ phase8_automation() {
   else
     log "WARN: ~/wd-backup/install-on-prod.sh missing — WD My Cloud nightly backup NOT re-armed."
     log "      Re-pull from the dev box, then install: rsync -av --exclude logs vik@10.10.10.2:wd-backup/ ~/wd-backup/ && sudo ~/wd-backup/install-on-prod.sh"
+  fi
+
+  # --- Reproduce host-level config the DR archive does NOT carry -------------------------
+  # These live in /etc + NetworkManager (outside every backed-up path). Their source scripts
+  # ARE cloned with STEP0 (phase 5) but nothing ran their installers, so a fresh box would
+  # boot without the 10GbE link config, the boot-time watchdog/firewall units, or the
+  # persistent off-site-backup mount.
+
+  # (a) Static 10GbE /30 profile (prod side = 10.10.10.1/30). Only the LINK is flaky; the
+  #     ADDRESSING must exist for the watchdog to bounce and for dev<->prod traffic. The
+  #     watchdog only bounces an existing link — it never creates the /30. Auto-detect the
+  #     atlantic (Aquantia 10GBASE-T) NIC by driver so a NIC rename on the new box is
+  #     tolerated. Idempotent: skip if a 10.10.10.x address is already present.
+  if ip -o -f inet addr show 2>/dev/null | awk '$4 ~ /^10\.10\.10\./{print}' | grep -q .; then
+    log "10GbE /30 already configured — skipping NM profile creation"
+  else
+    ten_if=""
+    for i in $(ls /sys/class/net 2>/dev/null); do
+      [ "$(ethtool -i "$i" 2>/dev/null | awk -F': ' '/^driver:/{print $2}')" = "atlantic" ] && { ten_if="$i"; break; }
+    done
+    if [ -z "$ten_if" ]; then
+      log "WARN: no 'atlantic' 10GbE NIC found — dev<->prod 10GbE link cannot be configured on this box."
+    elif [ "$DRY_RUN" = 1 ]; then
+      echo "  DRYRUN> nmcli connection add ethernet ifname $ten_if ipv4.method manual ipv4.addresses 10.10.10.1/30"
+    else
+      sudo nmcli connection add type ethernet ifname "$ten_if" con-name "$ten_if" \
+        ipv4.method manual ipv4.addresses 10.10.10.1/30 autoconnect yes >/dev/null 2>&1 \
+        && sudo nmcli connection up "$ten_if" >/dev/null 2>&1 \
+        && log "10GbE /30 profile created on $ten_if (10.10.10.1/30)" \
+        || log "WARN: could not create 10GbE /30 profile on $ten_if — set by hand: sudo nmcli con add type ethernet ifname $ten_if ipv4.method manual ipv4.addresses 10.10.10.1/30"
+    fi
+  fi
+
+  # (b) Boot-time systemd units (source cloned with STEP0; installers were never run):
+  #     the 10GbE link watchdog and the dev-box kube-access firewall re-applier. The latter
+  #     MUST be the unit (not start-scratch's one-shot rule apply) because DOCKER-USER is
+  #     wiped on every dockerd restart, so only the boot unit keeps dev-box API access alive.
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "  DRYRUN> sudo $SCRIPT_DIR/10gbe-link-watchdog.sh --install ; sudo $SCRIPT_DIR/enable-devbox-kube-access.sh --install"
+  else
+    sudo "$SCRIPT_DIR/10gbe-link-watchdog.sh" --install >/dev/null 2>&1 \
+      && log "10gbe-link-watchdog.service installed" || log "WARN: 10gbe-link-watchdog --install failed (re-run by hand)."
+    sudo "$SCRIPT_DIR/enable-devbox-kube-access.sh" --install >/dev/null 2>&1 \
+      && log "devbox-kube-access.service installed" || log "WARN: enable-devbox-kube-access --install failed (re-run by hand)."
+  fi
+
+  # (c) Persist the WD Cloud NFS off-site mount in fstab (phase 2 only mounted it transiently
+  #     to pull the backup). Without this line the share is unmounted after the next reboot
+  #     and the weekly off-site copy silently skips (backup-minikube-mnt.sh only WARNs).
+  if ! grep -q "$WD_HOST:$WD_EXPORT" /etc/fstab 2>/dev/null; then
+    if [ "$DRY_RUN" = 1 ]; then
+      echo "  DRYRUN> append WD Cloud NFS automount line to /etc/fstab"
+    else
+      echo "$WD_HOST:$WD_EXPORT  $WD_MOUNT  nfs  _netdev,nofail,hard,timeo=600,retrans=3,x-systemd.automount  0 0" \
+        | sudo tee -a /etc/fstab >/dev/null \
+        && { sudo systemctl daemon-reload 2>/dev/null || true; log "WD Cloud NFS automount persisted to /etc/fstab"; } \
+        || log "WARN: could not append WD Cloud NFS line to /etc/fstab (add by hand; see backup-minikube-mnt.sh)."
+    fi
   fi
 
   # Start the unseal loop NOW (don't wait for @reboot) so Vault unseals immediately.
@@ -486,6 +604,24 @@ NEXT — required before app deploys:
   6. Autonomous agents (yolo/predictonomy/dyingpaleblue): deploy-URL pointers were re-armed
      from the central JENKINS_CRED. They stay DISARMED until you set AGENT_PERMISSION_MODE in
      each agent's .env. To re-arm manually: ./seed-agent-deploy-urls.sh
+
+MANUAL host-level steps NOT auto-reconstructed (credentials / can't be scripted safely):
+  A. GitHub auth (REQUIRED before phase 5 clones): the gh token is in the OS keyring, not
+     the backup. If phase 5 clones failed, run `gh auth login` (or drop a PAT) and re-run
+     --from-phase 5.
+  B. docker registry logins (~/.docker/config.json is NOT backed up): `docker login`
+     (Docker Hub PAT avoids pull-rate limits mid-bootstrap) and, if used, the private
+     registry. Not fatal — Jenkins rebuilds images — but avoids rate-limit stalls.
+  C. Dedicated backup disk: if phase 3 WARNed "no filesystem labelled ..." the restore is
+     targeting the 44G root and the ~150G+ minikube-mnt will NOT fit. Attach + format the
+     backup disk (see the phase-3 WARN) before continuing.
+  D. /etc/hosts: the live box has custom LAN names (nginx/jenkins/jenkins-slave-private-cloud.com
+     -> the host's LAN IP; container-registry-private-cloud.com -> 127.0.0.1). Not auto-added
+     (the LAN IP changes per box). Re-add by hand IF any build/tooling still resolves them.
+  E. App wiring: some running apps are NOT in the auto-deploy path (e.g. qcx is cloned but has
+     no build trigger; aisucks has no repo/job at all). Register their Jenkins job +
+     trigger-app-builds.sh line + NPM host, or deploy them by hand. (Confirm which apps should
+     survive — see the DR audit.)
 ==================================================================
 DONE
   mark_phase 9
