@@ -49,29 +49,60 @@ need_root() { [ "$(id -u)" -eq 0 ] || { echo "must run as root (use sudo)" >&2; 
 
 # Discover our own 10GbE address on the /30, the peer (the other usable host), the interface, and
 # the NetworkManager connection bound to it. Re-derived on every bounce so it survives NIC renames.
+# Reset all four each call so a failed discovery never leaves stale values from a previous loop.
 discover() {
-  SELF_IP="$(ip -o -f inet addr show | awk -v c="$LINK_CIDR" '$4 ~ /^10\.10\.10\./ {sub(/\/.*/,"",$4); print $4; exit}')"
-  [ -n "${SELF_IP:-}" ] || { echo "no address on $LINK_CIDR found on this host (is the 10GbE NIC up?)" >&2; return 1; }
+  SELF_IP=""; PEER_IP=""; IFACE=""; CONN=""
+  # Preferred: read the live /30 address straight off the interface (present when the link is up).
+  SELF_IP="$(ip -o -f inet addr show | awk '$4 ~ /^10\.10\.10\./ {sub(/\/.*/,"",$4); print $4; exit}')"
+  [ -n "$SELF_IP" ] && IFACE="$(ip -o -f inet addr show | awk -v s="$SELF_IP" '$4 ~ ("^" s "/") {print $2; exit}')"
+  # Fallback: when the NIC is fully DOWN (NO-CARRIER), NetworkManager marks the device "unavailable"
+  # and strips its live address — so the lookup above finds nothing. But the connection PROFILE still
+  # statically holds the /30 address, so recover self-IP + iface + conn from it. This is what lets the
+  # watchdog identify and bounce a *dead* link (previously it crashed on an unbound PEER_IP instead).
+  if [ -z "$SELF_IP" ]; then
+    local c addr
+    while IFS= read -r c; do
+      [ -n "$c" ] || continue
+      addr="$(nmcli -t -g ipv4.addresses connection show "$c" 2>/dev/null)"
+      case "$addr" in
+        10.10.10.*)
+          SELF_IP="${addr%%/*}"
+          CONN="$c"
+          IFACE="$(nmcli -t -g connection.interface-name connection show "$c" 2>/dev/null)"
+          break ;;
+      esac
+    done < <(nmcli -t -f NAME connection show 2>/dev/null)
+  fi
+  [ -n "$SELF_IP" ] || { echo "no 10.10.10.x/30 address on any device or NM profile (is the 10GbE NIC present?)" >&2; return 1; }
   # /30 usable hosts are .1 and .2 — the peer is whichever we are not.
   case "$SELF_IP" in
     *.1) PEER_IP="${SELF_IP%.1}.2" ;;
     *.2) PEER_IP="${SELF_IP%.2}.1" ;;
     *)   echo "self IP $SELF_IP is not .1/.2 of a /30 — set LINK_CIDR/peer manually" >&2; return 1 ;;
   esac
-  IFACE="$(ip -o -f inet addr show | awk -v s="$SELF_IP" '$4 ~ ("^" s "/") {print $2; exit}')"
-  CONN="$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null | awk -F: -v d="$IFACE" '$2==d{print $1; exit}')"
+  # Resolve the NM connection if the fallback didn't already give it: prefer the active binding, else
+  # any profile bound to this iface (so we can bounce even when the device is currently down).
+  if [ -z "$CONN" ] && [ -n "$IFACE" ]; then
+    CONN="$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null | awk -F: -v d="$IFACE" '$2==d{print $1; exit}')"
+    [ -n "$CONN" ] || CONN="$(nmcli -t -f NAME,DEVICE connection show 2>/dev/null | awk -F: -v d="$IFACE" '$2==d{print $1; exit}')"
+  fi
 }
 
 # Force the point-to-point link to re-train. Prefer NM (reapplies IP + the static route to the API);
 # fall back to a raw interface bounce if NM isn't managing the device.
 bounce() {
-  log "peer $PEER_IP unreachable ${FAIL_THRESHOLD}x over $IFACE — bouncing to re-train the 10GbE link"
+  # Defensive: if discovery couldn't identify the link at all, there's nothing to bounce — log and
+  # bail instead of dereferencing an unbound var (which crash-looped the service under `set -eu`).
+  if [ -z "${IFACE:-}" ] && [ -z "${CONN:-}" ]; then
+    log "cannot bounce: 10GbE link not identified (no /30 addr on any device or NM profile)"; return 0
+  fi
+  log "peer ${PEER_IP:-?} unreachable ${FAIL_THRESHOLD}x over ${IFACE:-<conn:${CONN}>} — bouncing to re-train the 10GbE link"
   if [ -n "${CONN:-}" ] && command -v nmcli >/dev/null 2>&1; then
-    nmcli connection up "$CONN" >/dev/null 2>&1 || { nmcli device disconnect "$IFACE" >/dev/null 2>&1 || true; nmcli connection up "$CONN" >/dev/null 2>&1 || true; }
-  else
+    nmcli connection up "$CONN" >/dev/null 2>&1 || { [ -n "${IFACE:-}" ] && nmcli device disconnect "$IFACE" >/dev/null 2>&1 || true; nmcli connection up "$CONN" >/dev/null 2>&1 || true; }
+  elif [ -n "${IFACE:-}" ]; then
     ip link set "$IFACE" down; sleep 2; ip link set "$IFACE" up
   fi
-  log "bounce issued on $IFACE (conn='${CONN:-<none>}'); cooling down ${COOLDOWN}s"
+  log "bounce issued on ${IFACE:-<conn:${CONN}>} (conn='${CONN:-<none>}'); cooling down ${COOLDOWN}s"
 }
 
 probe_once() {
