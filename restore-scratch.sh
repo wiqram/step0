@@ -249,9 +249,10 @@ phase4_extract() {
   run "mkdir -p '$HOME/Ideaprojects/qcguy-ghost'"
   run "cp -a '$stage/home/cloud/Ideaprojects/qcguy-ghost/.' '$HOME/Ideaprojects/qcguy-ghost/'"
 
-  # 4e. nginx: data/ + letsencrypt/ are runtime-only (gitignored) and live ONLY in the
-  #     backup. The repo (compose file) is cloned in phase 5; here we stage the data so
-  #     phase 5 can overlay it after the clone. Stash to a known spot.
+  # 4e. nginx: data/ + letsencrypt/ AND docker-compose.yml are runtime-only and live ONLY
+  #     in the backup (the compose was never committed to wiqram/nginx — the clone brings
+  #     just the docs). Stage the WHOLE nginx dir here so phase 5 can overlay data/,
+  #     letsencrypt/ AND the compose onto the clone. Stash to a known spot.
   run "rm -rf /mnt/minikube-backups/nginx-data-restore && mkdir -p /mnt/minikube-backups/nginx-data-restore"
   run "cp -a '$stage/home/cloud/Ideaprojects/nginx/.' /mnt/minikube-backups/nginx-data-restore/"
 
@@ -310,11 +311,24 @@ phase5_clone() {
     fi
   done < <(restore_repo_manifest)
 
-  # Overlay the restored nginx runtime data (from phase 4e) onto the freshly-cloned repo.
+  # Overlay the restored nginx RUNTIME (from phase 4e) onto the freshly-cloned repo.
+  # data/ + letsencrypt/ are gitignored and live ONLY in the backup. docker-compose.yml
+  # ALSO lives only in the backup — it was NEVER committed to wiqram/nginx (the clone
+  # brings just the docs), so without this phase 7's `docker compose up` would die on a
+  # missing compose. The backup staging holds the last-known-good compose (it defines the
+  # nginx-proxy-manager @172.16.238.10 + mariadb @.11 on the 5million net), so place it
+  # here. mkdir guards the case where the clone failed outright (empty/unreachable remote):
+  # nginx then comes up wholly from the backup.
   if [ -d /mnt/minikube-backups/nginx-data-restore ] && [ "$DRY_RUN" != 1 ]; then
+    run "mkdir -p /home/cloud/Ideaprojects/nginx"
     run "cp -a /mnt/minikube-backups/nginx-data-restore/data /home/cloud/Ideaprojects/nginx/ 2>/dev/null || true"
     run "cp -a /mnt/minikube-backups/nginx-data-restore/letsencrypt /home/cloud/Ideaprojects/nginx/ 2>/dev/null || true"
-    log "nginx data/ + letsencrypt/ overlaid onto cloned nginx repo"
+    if [ -f /mnt/minikube-backups/nginx-data-restore/docker-compose.yml ]; then
+      run "cp -a /mnt/minikube-backups/nginx-data-restore/docker-compose.yml /home/cloud/Ideaprojects/nginx/"
+      log "nginx data/ + letsencrypt/ + docker-compose.yml overlaid onto cloned nginx repo"
+    else
+      log "WARN: docker-compose.yml absent from nginx backup staging — phase 7 will fail. Place ~/Ideaprojects/nginx/docker-compose.yml by hand before continuing."
+    fi
   fi
   mark_phase 5
 }
