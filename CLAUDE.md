@@ -49,6 +49,15 @@ to a Kubernetes NodePort on `172.16.238.2`.
 
 ## Conventions & facts to respect
 
+- **Vault storage is a pre-created durable PV — never let it go dynamic again.**
+  `k8s/vault-backup/vault-data-pv.yaml` (Retain, hostPath `/mnt/vault-data` =
+  host `/mnt/minikube-backups/minikube-mnt/vault-data`) MUST be applied before
+  `start-vault.sh` (start-scratch does this) so the `data-vault-0` PVC binds it.
+  The pre-2026-07-20 dynamic `/tmp` PV silently destroyed all runtime-written KV
+  (follower broker secrets, admin platform keys) on a minikube rebuild. Daily
+  snapshot CronJob `vault/vault-data-backup` → `minikube-mnt/vault-backups/`
+  (swept by the weekly DR tar + WD off-site). Old Retained PV `pvc-cca2a54b-…`
+  is the rollback copy — safe to delete after a clean week (~2026-07-27).
 - **Single host, single node.** No multi-node K8s. "private cloud" = Docker + one
   Minikube + Nginx, all co-located on `172.16.238.x`.
 - **Fixed IPs:** Minikube node `172.16.238.2` (API/NodePorts/registry:5000),

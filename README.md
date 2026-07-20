@@ -62,6 +62,7 @@ forwards it to a Kubernetes NodePort on `172.16.238.2`.
 | `restart-minikube.sh` | Warm restart (reuse cluster, idempotent vault, most apps commented out). |
 | `cluster-autostart.sh` / `vault-auto-unseal.sh` | Host crons that auto-heal the cluster + keep Vault unsealed after a reboot. |
 | `backup-minikube-mnt.sh` | **Weekly `root` cron** DR backup (see [architecture.md §7](./architecture.md#7-persistence--backups)). |
+| `k8s/vault-backup/` | Vault durability (2026-07-20): the durable Retain PV/PVC for Vault's file backend + the daily in-cluster snapshot CronJob (`vault/vault-data-backup`, 04:30 UTC → `minikube-mnt/vault-backups/`). Applied by `start-scratch.sh` **before** `start-vault.sh`. |
 | `minikube-delete-and-upgrade.sh`, `reduce-*.sh`, `delete-docker-reg-images.sh`, `remove-old-snaps.sh` | Rebuild / disk-space maintenance. |
 
 ## Quick orientation

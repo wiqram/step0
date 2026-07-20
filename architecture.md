@@ -267,6 +267,15 @@ ordering (Vault before Jenkins/apps) is what matters here. The vault repo owns i
 `architecture.md` / `plan.md` / `CLAUDE.md` — defer to those for detail. Current shape:
 - Installed via Helm into the `vault` namespace; images **pinned** (vault `2.0.2`,
   vault-k8s `1.7.4` — no longer `latest`).
+- **Durable storage (2026-07-20):** the file backend lives on the pre-created
+  `vault-data-pv` (Retain, hostPath `/mnt/vault-data` on the sdb1 shared mount —
+  STEP0 `k8s/vault-backup/vault-data-pv.yaml`), which `start-scratch.sh` applies
+  **before** `start-vault.sh` so the StatefulSet adopts the pinned `data-vault-0`
+  PVC instead of dynamic-provisioning an ephemeral `/tmp` hostPath. (The old
+  dynamic PV destroyed all runtime-written KV on the ~07-14 minikube rebuild —
+  per-follower broker secrets, admin platform keys; see §7 + RESTART-RECOVERY.)
+  A daily in-cluster snapshot CronJob (`vault/vault-data-backup`) is the
+  consistent-copy layer on top.
 - `start-vault.sh`: init 1 share / threshold 1, unseal, `admin` policy, `userpass`
   (user `privatecloud`) + `kubernetes` auth, KV-v2 at `kv/`.
 - **Per-app least-privilege policies** (`<app>-policy.hcl`): each app role reads only
