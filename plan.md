@@ -72,6 +72,13 @@ auto-unseal (transit/cloud KMS) so the key never sits in a file on the host.
 
 ## P1 — Reliability & idempotency
 
+- **Vault storage durability (root cause of the 2026-07-20 KV-loss finding):** the
+  Helm chart's PVC binds a dynamic hostPath under the VM's `/tmp` with reclaim
+  Delete — a rebuild destroys the file backend. The daily `vault-data-backup`
+  CronJob (k8s/vault-backup/) closes the DR window to ≤24h, but the real fix is a
+  pre-created PV with `Retain` on the shared mount (like k8s/registry/00-pv.yaml)
+  + a one-time data migration, so Vault data survives rebuilds natively.
+
 ### 3. Replace fixed `sleep` waits with readiness checks
 The script blocks on `sleep 1m` (yolo) and `sleep 3m` (splunk x2) — ~7 minutes of guessing.
 If a pod is slow, the next step still fires; if it's fast, time is wasted. With `set -e`,

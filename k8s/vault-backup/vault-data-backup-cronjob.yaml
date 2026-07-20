@@ -1,0 +1,81 @@
+# vault-data-backup — daily crash-consistent snapshot of Vault's FILE-backend data
+# into the shared mount, closing the DR gap found 2026-07-20: the Helm-provisioned
+# Vault PV is a dynamic hostPath at /tmp/hostpath-provisioner/vault/data-vault-0
+# INSIDE the minikube VM with reclaimPolicy Delete — a `minikube delete`/upgrade
+# wipes it, and the weekly backup-minikube-mnt.sh never saw it (it captures
+# ~/.vault keys + minikube-mnt only). That is how ALL runtime-written Vault data
+# (kv/yolo/followers/* broker secrets, kv/yolo/platform-data-sources admin keys)
+# was lost in the ~07-14 rebuild: declarative per-service paths were re-seeded by
+# the apps' vaultSync deploys, runtime paths were re-seeded by nothing.
+#
+# Design:
+#  - Runs IN-CLUSTER (no host cron to install; applied by start-scratch.sh with
+#    the other k8s manifests) at 04:30 UTC daily — 30 min before the Monday
+#    05:00 weekly DR tar, so every weekly archive carries a fresh snapshot.
+#  - Reads the node's Vault data dir hostPath READ-ONLY; writes the tgz to
+#    /mnt/vault-backups on the node, which is the host's
+#    /mnt/minikube-backups/minikube-mnt/vault-backups (shared sdb1 mount) →
+#    swept into the weekly archive + WD Cloud off-site automatically.
+#  - file-backend tar of a RUNNING Vault is crash-consistent (same tier as the
+#    hot Mongo/pg file copies this cloud already relies on; a restore replays to
+#    the snapshot moment). Acceptable at this scale; the real fix (durable PV
+#    with Retain under the shared mount) is tracked in plan.md.
+#  - Retention: keep the newest 14 dailies here (the weekly archive + WD carry
+#    the long tail per the month-retention convention in architecture.md §7).
+#  - Restore: RESTART-RECOVERY.md "Vault data lost" entry — scale vault to 0,
+#    untar the newest vault-data-*.tgz back into the node path, scale up, unseal.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vault-data-backup
+  namespace: vault
+spec:
+  schedule: "30 4 * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: snapshot
+              image: busybox:1.36
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  day=$(date +%m-%d-%y)
+                  out="/backup/vault-data-$day.tgz"
+                  if [ -s "$out" ]; then echo "snapshot for $day already exists — done"; exit 0; fi
+                  [ -d /vault-data/core ] || { echo "ERROR: /vault-data does not look like a Vault file backend (no core/)"; exit 1; }
+                  mkdir -p /backup
+                  tar -czf "$out.tmp" -C /vault-data . && mv "$out.tmp" "$out"
+                  echo "wrote $out ($(du -h "$out" | cut -f1))"
+                  # keep the newest 14 dailies; weekly DR archive carries the long tail
+                  ls -1t /backup/vault-data-*.tgz 2>/dev/null | tail -n +15 | while read -r f; do
+                    echo "prune $f"; rm -f "$f"
+                  done
+              volumeMounts:
+                - name: vault-data
+                  mountPath: /vault-data
+                  readOnly: true
+                - name: backup-dest
+                  mountPath: /backup
+          volumes:
+            - name: vault-data
+              hostPath:
+                # The dynamic hostPath the Helm PVC (vault/data-vault-0) provisioned.
+                # If the PVC is ever re-created this path changes — re-check with:
+                #   kubectl -n vault get pv $(kubectl -n vault get pvc data-vault-0 -o jsonpath='{.spec.volumeName}') -o jsonpath='{.spec.hostPath.path}'
+                path: /tmp/hostpath-provisioner/vault/data-vault-0
+                type: Directory
+            - name: backup-dest
+              hostPath:
+                # Node /mnt == host /mnt/minikube-backups/minikube-mnt (shared sdb1
+                # mount) → captured by backup-minikube-mnt.sh weekly + WD off-site.
+                path: /mnt/vault-backups
+                type: DirectoryOrCreate

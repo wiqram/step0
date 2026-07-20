@@ -427,6 +427,17 @@ secret_ids under `jenkins-approle/`) — but the bulk of the value is inside the
 - **Database snapshots** (for restoring app state) — `yolo-db-snapshots`,
   `predictonomy-backups` + `predictonomy-postgres`, and the MongoDB `storage.bson`
   dumps under `trading-microservices/` and `helpmepdf/`.
+- **Vault data snapshots** — `vault-backups/vault-data-MM-DD-YY.tgz`, written daily
+  (04:30 UTC, 30 min before the Monday weekly tar) by the in-cluster CronJob
+  `vault/vault-data-backup` (STEP0 `k8s/vault-backup/`, applied by start-scratch.sh).
+  ⚠️ This exists because the Helm-provisioned Vault PV is a **dynamic hostPath in
+  the VM's `/tmp` with reclaimPolicy Delete** — NOT on this shared mount — so a
+  minikube rebuild silently destroys Vault's file backend. That is exactly how all
+  runtime-written Vault data (per-follower broker secrets `kv/yolo/followers/*`,
+  admin platform keys `kv/yolo/platform-data-sources`) was lost in the ~2026-07-14
+  rebuild: apps' vaultSync re-seeded only the declarative per-service paths.
+  Restore: see RESTART-RECOVERY.md "Vault KV data missing". Root-cause fix (durable
+  Retain PV under the shared mount) is tracked in plan.md.
 - **App data & platform state** — `qcguy-ghost` (Ghost content), `ollama`, `jenkins`,
   `container-registry`, `splunk-hsbc`, `tatesremedies`.
 - **Ingress + bootstrap config** — the NPM tree (`nginx/`) and the STEP0 scripts.
