@@ -41,6 +41,7 @@ EXP_10G_PEER="${EXP_10G_PEER:-10.10.10.2}"         # dev box across the /30
 EXP_10G_DRIVER="${EXP_10G_DRIVER:-atlantic}"       # Aquantia/Marvell 10GBASE-T
 WATCHDOG_SVC="${WATCHDOG_SVC:-10gbe-link-watchdog.service}"
 KUBEACCESS_SVC="${KUBEACCESS_SVC:-devbox-kube-access.service}"
+DEV_OOB_SSH="${DEV_OOB_SSH:-vik@192.168.50.161}"   # dev box over the LAN (OOB) — to verify its egress back to us
 
 EXP_HOSTNAME="${EXP_HOSTNAME:-private-cloud}"
 DNS_NAME="${DNS_NAME:-jenkins.traderyolo.com}"     # public entry point; should resolve to us
@@ -149,6 +150,38 @@ if [ -n "$self10" ]; then
   fi
   ping_ok "$EXP_10G_PEER" && pass "dev-box peer $EXP_10G_PEER reachable over 10GbE" \
     || warn "peer $EXP_10G_PEER unreachable — link wedged or dev box down. OOB via LAN: ssh vik@192.168.50.161"
+
+  # Egress-path check. A stray more-specific route (e.g. a /32 for the peer, or the prod
+  # route mis-pinned to the 1GbE LAN NM profile) silently sends dev<->prod traffic over the
+  # 1GbE LAN instead of this /30 — the link is "up" and everything works, just ~10x slower.
+  # This bit us once (dev egress pinned to the LAN via a /32; a full day to spot). So verify
+  # BOTH directions actually leave via the 10GbE iface, not just that the peer pings.
+  if [ -n "${iface10:-}" ]; then
+    self_rt="$(ip route get "$EXP_10G_PEER" 2>/dev/null | head -1)"
+    self_oif="$(printf '%s' "$self_rt" | sed -n 's/.* dev \([^ ]*\).*/\1/p')"
+    note "our route to $EXP_10G_PEER: ${self_rt:-<none>}"
+    if [ "$self_oif" = "$iface10" ]; then pass "our route to $EXP_10G_PEER egresses the 10GbE iface ($iface10)"
+    else fail "our route to $EXP_10G_PEER egresses '${self_oif:-?}', not the 10GbE iface $iface10 — a stray/more-specific route is sending dev traffic over the wrong NIC (silent ~10x throttle). Check: ip route get $EXP_10G_PEER"; fi
+  fi
+
+  # The reverse direction is the one that actually bit us, and it lives on the DEV box — so
+  # ask it (best-effort, read-only) how it routes back to us. Its src IP must be on the /30
+  # (10.10.10.x); a LAN src means dev->prod is silently on the 1GbE.
+  if have ssh; then
+    peer_rt="$(ssh -n -o BatchMode=yes -o ConnectTimeout=4 -o StrictHostKeyChecking=no \
+                   -o UserKnownHostsFile=/dev/null "$DEV_OOB_SSH" "ip route get $EXP_10G_SELF" 2>/dev/null | head -1)"
+    if [ -z "$peer_rt" ]; then
+      warn "could not check dev-box egress to us (ssh $DEV_OOB_SSH failed — dev down or no key). By hand: ssh $DEV_OOB_SSH ip route get $EXP_10G_SELF (src must be 10.10.10.x)"
+    else
+      peer_src="$(printf '%s' "$peer_rt" | sed -n 's/.* src \([0-9.]*\).*/\1/p')"
+      note "dev-box route to $EXP_10G_SELF: $peer_rt"
+      case "$peer_src" in
+        10.10.10.*) pass "dev box routes back to us via the 10GbE /30 (src $peer_src) — not the LAN" ;;
+        "")         warn "dev-box egress src to $EXP_10G_SELF unknown: $peer_rt" ;;
+        *)          fail "dev box routes to us via a NON-10GbE path (src $peer_src) — dev->prod traffic is on the LAN, silently ~10x throttled. Remove the stray route from the dev box's LAN NM profile, e.g.: nmcli con mod \"Wired connection 3\" -ipv4.routes \"$EXP_NODE_IP/32 $EXP_10G_SELF\" && nmcli dev reapply <lan-iface>. The prod route belongs ONLY on the 10GbE connection (see devbox-connect-prod.sh)." ;;
+      esac
+    fi
+  fi
 else
   warn "no 10.10.10.x/30 address on any interface — 10GbE NIC absent/down (config survives reboots; the LINK is the flaky part)"
   note "10GbE: no /30 address present"
