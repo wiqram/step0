@@ -101,15 +101,15 @@ kubectl wait \
 kubectl apply -f manifests/
 #################vault###########################
 echo "deploying vault"
+# Durable Vault storage + daily snapshot (see k8s/vault-backup/). MUST apply
+# BEFORE start-vault.sh: the pre-created data-vault-0 PVC (pinned to the Retain
+# PV on the shared mount) has to exist so the helm StatefulSet ADOPTS it instead
+# of dynamic-provisioning an ephemeral /tmp hostPath — the 2026-07-14 failure
+# mode that destroyed all runtime-written Vault data on a minikube rebuild.
+kubectl create namespace vault --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -f "$(dirname "$SCRIPT_PATH")/k8s/vault-backup/"
 cd $HOME/Ideaprojects/vault/
 bash start-vault.sh
-# Daily in-cluster snapshot of Vault's file-backend data into the shared mount
-# (minikube-mnt/vault-backups → weekly DR archive + WD off-site). Closes the
-# 2026-07-20 DR gap: the Helm PV is a dynamic hostPath in the VM's /tmp with
-# reclaimPolicy Delete — a minikube rebuild silently wiped ALL runtime-written
-# Vault data (per-follower broker secrets, admin platform keys) because no
-# backup ever captured it. See k8s/vault-backup/vault-data-backup-cronjob.yaml.
-kubectl apply -f "$(dirname "$SCRIPT_PATH")/k8s/vault-backup/"
 #################jenkins###########################
 #create a customer jenkins/inbound-agent with k8s and curl and wget pre-installed and pushed to private repo
 #if [[ "$(docker image inspect 172.16.238.2:5000/jenkins-inbound-agent-vik:cloud 2> /dev/null)" == "" ]]; then

@@ -72,12 +72,15 @@ auto-unseal (transit/cloud KMS) so the key never sits in a file on the host.
 
 ## P1 — Reliability & idempotency
 
-- **Vault storage durability (root cause of the 2026-07-20 KV-loss finding):** the
-  Helm chart's PVC binds a dynamic hostPath under the VM's `/tmp` with reclaim
-  Delete — a rebuild destroys the file backend. The daily `vault-data-backup`
-  CronJob (k8s/vault-backup/) closes the DR window to ≤24h, but the real fix is a
-  pre-created PV with `Retain` on the shared mount (like k8s/registry/00-pv.yaml)
-  + a one-time data migration, so Vault data survives rebuilds natively.
+- **Vault storage durability — DONE 2026-07-20:** migrated Vault's file backend
+  off the dynamic `/tmp` hostPath (reclaim Delete) onto the pre-created
+  `vault-data-pv` (Retain, hostPath `/mnt/vault-data` on the shared mount —
+  k8s/vault-backup/vault-data-pv.yaml, applied before start-vault.sh so fresh
+  installs bind durably from day one). Live-verified: unseal with existing key,
+  app-level KV write/read/clear. Old Retained PV
+  `pvc-cca2a54b-59d7-432d-98d4-1833678a5c32` (`/tmp/hostpath-provisioner/vault/
+  data-vault-0`) kept as rollback — delete after a week of clean operation.
+  The daily `vault-data-backup` CronJob remains the consistent-copy layer.
 
 ### 3. Replace fixed `sleep` waits with readiness checks
 The script blocks on `sleep 1m` (yolo) and `sleep 3m` (splunk x2) — ~7 minutes of guessing.

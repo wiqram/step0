@@ -430,9 +430,12 @@ secret_ids under `jenkins-approle/`) — but the bulk of the value is inside the
 - **Vault data snapshots** — `vault-backups/vault-data-MM-DD-YY.tgz`, written daily
   (04:30 UTC, 30 min before the Monday weekly tar) by the in-cluster CronJob
   `vault/vault-data-backup` (STEP0 `k8s/vault-backup/`, applied by start-scratch.sh).
-  ⚠️ This exists because the Helm-provisioned Vault PV is a **dynamic hostPath in
-  the VM's `/tmp` with reclaimPolicy Delete** — NOT on this shared mount — so a
-  minikube rebuild silently destroys Vault's file backend. That is exactly how all
+  ⚠️ This existed because the Helm-provisioned Vault PV was a **dynamic hostPath
+  in the VM's `/tmp` with reclaimPolicy Delete** — NOT on this shared mount — so a
+  minikube rebuild silently destroyed Vault's file backend. **Fixed 2026-07-20:**
+  Vault now runs on the pre-created `vault-data-pv` (Retain, `/mnt/vault-data` on
+  this shared mount — `k8s/vault-backup/vault-data-pv.yaml`, applied before
+  start-vault.sh); the daily snapshot stays as the consistent-copy layer. That is exactly how all
   runtime-written Vault data (per-follower broker secrets `kv/yolo/followers/*`,
   admin platform keys `kv/yolo/platform-data-sources`) was lost in the ~2026-07-14
   rebuild: apps' vaultSync re-seeded only the declarative per-service paths.

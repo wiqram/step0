@@ -1,0 +1,48 @@
+# vault-data-pv — durable, pre-created PV for Vault's file backend (plan.md P1
+# root-cause fix, migrated 2026-07-20). Replaces the Helm-era DYNAMIC hostPath
+# under the VM's /tmp (reclaim Delete) that a minikube rebuild silently destroyed
+# — the 2026-07-14 loss of all runtime-written KV (follower broker secrets,
+# admin platform keys). Same pattern as k8s/registry/00-pv.yaml:
+#   - hostPath /mnt/vault-data (node /mnt == host /mnt/minikube-backups/minikube-mnt,
+#     the sdb1 shared mount) → data survives minikube delete/upgrade natively AND
+#     rides the weekly DR tar as a hot copy (the consistent copy remains the daily
+#     vault-data-backup snapshot).
+#   - reclaimPolicy Retain + claimRef pin → deleting the PVC never deletes data.
+# Applied by start-scratch.sh BEFORE start-vault.sh so a fresh install binds the
+# durable volume from day one (the STS adopts the pre-created data-vault-0 PVC).
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: vault-data-pv
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  claimRef:
+    namespace: vault
+    name: data-vault-0
+  hostPath:
+    path: /mnt/vault-data
+    type: DirectoryOrCreate
+---
+# The PVC the vault StatefulSet's volumeClaimTemplate names (data-vault-0 for
+# replica 0). Pre-created and pinned to the durable PV: the STS controller only
+# creates a claim when one is missing, so it adopts this and never dynamic-
+# provisions an ephemeral /tmp volume again. NOTE: the vault namespace must exist
+# (start-scratch applies this right before start-vault.sh, which needs it too).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data-vault-0
+  namespace: vault
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: manual
+  volumeName: vault-data-pv
+  resources:
+    requests:
+      storage: 10Gi

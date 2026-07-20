@@ -68,10 +68,9 @@ spec:
           volumes:
             - name: vault-data
               hostPath:
-                # The dynamic hostPath the Helm PVC (vault/data-vault-0) provisioned.
-                # If the PVC is ever re-created this path changes — re-check with:
-                #   kubectl -n vault get pv $(kubectl -n vault get pvc data-vault-0 -o jsonpath='{.spec.volumeName}') -o jsonpath='{.spec.hostPath.path}'
-                path: /tmp/hostpath-provisioner/vault/data-vault-0
+                # The durable pre-created PV (vault-data-pv.yaml) — migrated here
+                # 2026-07-20 from the ephemeral dynamic hostPath in the VM's /tmp.
+                path: /mnt/vault-data
                 type: Directory
             - name: backup-dest
               hostPath:
