@@ -240,6 +240,13 @@ placeholders — stack still boots); ③ optional `~/.jenkins-deploy-urls.env` (
 prod, see above). Tests: `tests/test-restore-scratch-dev.sh` (syntax, ensure_line
 idempotency, mutation-free full dry-run).
 
+**Dev-key recovery copy (2026-07-22):** the dev-box age key is backed up on prod at
+`/mnt/minikube-backups/minikube-mnt/keys-sops-dev-box.txt` (0600, sha256-verified at
+write) — the same dir as `keys-sops-IMPORTANT.txt`, so it rides the weekly root backup
+cron → WD Cloud archive and is restored by `restore-scratch.sh` phase 4b automatically.
+Written from the dev box via a short-lived hostPath-`/mnt` busybox pod against
+prod-minikube (prod runs no sshd); fetch it back the same way.
+
 ---
 
 ## 4. Bootstrap Flow — `start-scratch.sh`
