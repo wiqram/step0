@@ -222,6 +222,9 @@ curl -X POST "https://$JENKINS_CRED@jenkins.traderyolo.com/job/<job>/<endpoint>?
 
 ### Dev-box from-scratch rebuild — `restore-scratch-dev.sh` (2026-07-22)
 
+> Operator runbook (daily commands, break-glass inventory + prod recovery copies, DB
+> seed, troubleshooting): **`docs/DEV_BOX.md` in the IG-Trading-Microservices repo**.
+
 The dev-box analogue of prod's `restore-scratch.sh`: bootstraps a **fresh Ubuntu
 workstation** to a working YOLO dev stack (`./dockerup-dev.sh` 20/20 verify-green) with
 no manual steps beyond three break-glass items. Same conventions (set -u, ratcheting
