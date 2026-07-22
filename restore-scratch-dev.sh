@@ -242,6 +242,8 @@ Residual operator checklist (cannot be scripted):
   [ ] ~/.jenkins-deploy-urls.env seeded from prod (deploys from dev box)
   [ ] prod kubeconfig imported if kubectl access wanted (devbox-connect-prod.sh)
   [ ] Gmail OAuth token.json files (only if exercising real Gmail ingestion locally)
+  [ ] OPTIONAL one-off DB seed (restores the captured dev users/signals/ledger):
+      cd <IG repo> && ./restore-database-seed.sh   (needs the dev age key; guarded)
 UI:      http://localhost:3000   (demo logins: scripts/seed/seed.py)
 Gateway: http://localhost:9090/healthz
 =============================================================
