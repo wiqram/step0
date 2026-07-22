@@ -220,6 +220,26 @@ curl -X POST "https://$JENKINS_CRED@jenkins.traderyolo.com/job/<job>/<endpoint>?
   live-sites caution. If the dev box is ever rebuilt, recreate that file (and re-copy
   `~/bin/jenkins-deploy` + re-seed `~/.jenkins-deploy-urls.env`) alongside `devbox-connect-prod.sh`.
 
+### Dev-box from-scratch rebuild — `restore-scratch-dev.sh` (2026-07-22)
+
+The dev-box analogue of prod's `restore-scratch.sh`: bootstraps a **fresh Ubuntu
+workstation** to a working YOLO dev stack (`./dockerup-dev.sh` 20/20 verify-green) with
+no manual steps beyond three break-glass items. Same conventions (set -u, ratcheting
+phase marker `~/.yolo-dev-restore-phase`, `--dry-run`, `--from-phase N`); scope is
+workstation-only — **no minikube/K8s on dev**. Phases: preflight → toolchain (docker +
+compose v2, pinned Go 1.19 + protoc plugins go v1.28.1/go-grpc v1.3.0/gateway v2.11.3,
+NodeSource node + grpc-tools, repo `.venv` grpcio-tools 1.81.1, sops + age, jq) →
+repos + robin_stocks submodule → env materialisation (IG repo
+`scripts/dev-env-sync.sh` decrypts committed `vault/dev/*.secret.sops.env` SOPS
+manifests) → docker prep (`5million` network) → `dockerup-dev.sh` (codegen, builds,
+postgres ledger auto-migrate, idempotent demo seed, `scripts/verify-dev.sh`) →
+optional prod links (`~/bin/jenkins-deploy`) → verify + handoff checklist.
+Break-glass (only unscriptables): ① GitHub auth; ② the **dev-box SOPS age key**
+(`~/.config/sops/age/keys.txt`; without it env files fall back to `*.example`
+placeholders — stack still boots); ③ optional `~/.jenkins-deploy-urls.env` (seed from
+prod, see above). Tests: `tests/test-restore-scratch-dev.sh` (syntax, ensure_line
+idempotency, mutation-free full dry-run).
+
 ---
 
 ## 4. Bootstrap Flow — `start-scratch.sh`
