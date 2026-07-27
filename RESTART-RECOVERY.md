@@ -71,6 +71,13 @@ curl -s -o /dev/null -w '%{http_code}\n' https://predictonomy.com   # 200
   logs in `STEP0/logs/`. The ntfy topic is in the gitignored `STEP0/.env` (`NTFY_URL`). The
   app-specific `check-backup.sh` stays in the **Predictonomy** repo (`ops/agent/`, logs in
   `ops/agent/logs/`) because it checks a Predictonomy CronJob.
+- **The other five ntfy channels are a separate, public registry** (`ntfy-lib.sh`,
+  `architecture.md` §7a): backups (weekly + nightly WD), `start-scratch` / `restore-scratch`
+  runs, and `yolo-private-cloud-resource-crunch`. That last one is the useful companion to
+  this document — it names *which* resource ran out before a pod gets OOM-killed. It is
+  deliberately silent when the cluster is DOWN: that case is `cluster-autostart.sh`'s
+  `NTFY_URL` alert above, not a resource crunch. `./resource-crunch-watch.sh --status`
+  prints every metric on demand.
 - **Schedule:** host crontab (`crontab -l`) — `@reboot` + watchdog for each. Idempotent
   (flock-guarded, re-enforce drift). The crontab is host state, not in any repo.
 - **Docker restart policy:** `docker update --restart=unless-stopped minikube` (re-apply after any

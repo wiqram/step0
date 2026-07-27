@@ -600,6 +600,101 @@ not apply to it. To redeploy or update it, pull the directory from the dev box o
 
 ---
 
+## 7a. Push notifications — ntfy channels
+
+Everything on this host runs unattended: the weekly DR backup fires from a `root` cron at
+05:00 on a Monday, the WD mirror at 02:00 nightly, the resource watcher every 5 minutes.
+Nobody reads a cron log until something has already been lost, so each of those jobs pushes
+to a **[ntfy.sh](https://ntfy.sh) topic** you can subscribe to from a phone.
+
+**Numbered like §11a in the yolo repo because a half-wired alert channel is invisible** —
+a dead channel and a healthy system look identical. yolo lost that argument four times; the
+mechanical causes (an unregistered topic, a non-latin1 byte in an HTTP header, a publisher
+whose push was never actually reachable) are all removed by construction here.
+
+### The channels
+
+| Topic | Publisher | When it speaks |
+|---|---|---|
+| `yolo-private-cloud-backup` | `backup-minikube-mnt.sh` (Mon 05:00, root cron) | Every run. Status + tar rc, this archive's size and duration, how many backups exist locally and on the WD Cloud with totals and free space, and any warning collected along the way (empty `cluster-keys.json`, NAS dark, off-site copy failed). |
+| `yolo-wd-cloud-backup` | `~/wd-backup/wd-backup.sh run` (02:00, `/etc/cron.d/wd-backup`) | Every run. Bytes copied this run (summed from rsync's own `stats2` blocks) and bytes on the wire, used/free on the 16TB destination, duration. Also on any FATAL *before* rsync starts — a NAS that is off, a mount that won't authenticate — which is precisely when the end-of-run summary would never fire. |
+| `yolo-private-cloud-start-scratch` | `start-scratch.sh` | STARTED at the top, then COMPLETED (with duration and whether app builds were triggered or skipped) or FAILED. `set -e` is on, so an ERR trap names the aborting line and command; the EXIT trap guarantees exactly one closing message either way. |
+| `yolo-private-cloud-restore-scratch` | `restore-scratch.sh` | STARTED, then COMPLETE (with the DNS → `trigger-app-builds.sh` steps that still remain) or FAILED via `die()` with the `--from-phase` resume hint. An EXIT trap catches a run that stops *without* either — a Ctrl-C or a killed session at 03:00. **`--dry-run` sends nothing**: it exists to be re-read repeatedly. |
+| `yolo-private-cloud-resource-crunch` | `resource-crunch-watch.sh` (`*/5`, cloud crontab) | Only when the node is out of headroom, and only after it has *stayed* that way. See below. |
+
+Topics are **not secrets** — ntfy.sh topics are world-readable *and* world-writable, which is
+why they are committed in the clear and why **no message body may carry a secret, token or
+PII**. ntfy allows `[-_A-Za-z0-9]{1,64}` with no hierarchy, so the `yolo-` prefix is a naming
+convention, not a namespace.
+
+> The separate, private `NTFY_URL` in the gitignored `.env` is **not** part of this registry.
+> It is a single random topic used by `cluster-autostart.sh` / `vault-auto-unseal.sh` for
+> cluster up/down alerts, predates the registry, and is deliberately left alone.
+
+### `ntfy-lib.sh` — one publisher, one registry
+
+Every publisher sources it; nothing hand-rolls a `curl`. It provides:
+
+* the five `NTFY_TOPIC_*` variables and `NTFY_TOPICS` — **the source of truth**;
+* `ntfy_topic_valid` — rejects both malformed *and* unregistered topics, so a typo like
+  `…-backups` (a perfectly legal topic nobody is subscribed to) cannot silently swallow alerts;
+* `ntfy_header_safe` — folds em dashes, smart quotes and ellipses to ASCII and strips
+  newlines. HTTP headers are latin1; a `—` in a Title is a hard client-side failure *before
+  the request is sent*, and this repo's prose is full of them;
+* `ntfy_push` — **always returns 0 and never writes stdout**. A notification must never abort
+  a backup, a bootstrap or a two-hour DR run. `NTFY_DRY_RUN=1` prints instead of sending;
+  `NTFY_ENABLED=0` disables the lot.
+
+Every publisher sources it *defensively* — if the lib is missing, stub functions make pushes
+a silent no-op and the job runs exactly as it did before. `wd-backup.sh` lives outside this
+repo and does this deliberately: it is a NAS-to-NAS job with no other STEP0 dependency.
+
+**`./ntfy-topic-check.sh` is the gate.** It fails if a registered publisher stops sourcing the
+lib, if a topic is hardcoded as a bare URL outside the registry, or if a `ntfy_push` call uses
+a string literal instead of a `$NTFY_TOPIC_*` variable. Run it after touching any of this.
+Unit tests: `tests/test-ntfy-lib.sh`, `tests/test-backup-notification.sh`,
+`tests/test-run-notifications.sh`, `tests/test-resource-crunch-watch.sh` — all offline.
+
+### `resource-crunch-watch.sh` — and why it is not just a set of `if`s
+
+There is one node. Jenkins builds, ollama on the single RTX 3080 Ti, and every app share it
+with IntelliJ and Chrome outside the cgroup, so pressure surfaces as a slow website or an
+OOM-killed pod with nothing to say why. Watched every 5 minutes:
+
+| Metric | Default limit | Source |
+|---|---|---|
+| node CPU % / memory % | 90 / 90 | `kubectl top node` (metrics-server — §5, *not* prometheus-adapter) |
+| kubelet Memory/Disk/PID pressure | any `True` | node conditions — the kubelet's own verdict; DiskPressure precedes image GC and evictions |
+| unschedulable pods | ≥ 1 | Pending **with** `PodScheduled=False/Unschedulable` — the scheduler has already given up. Plain "Pending" is not used; that also covers image pulls |
+| GPU utilisation / memory / temp | 98 % / 90 % / 85 °C | `nvidia-smi` |
+| CPU package temp | 90 °C | `coretemp` hwmon, falling back to the `x86_pkg_temp` zone — **lm-sensors is not installed** |
+| disk `/`, `/var`, `/mnt/minikube-backups` | 90 % | `df` |
+
+All limits are env-overridable (`RC_MEM_PCT`, `RC_GPU_TEMP_C`, …).
+
+Three rules keep the channel worth reading — a channel you mute is worse than none:
+
+1. **Sustained.** A metric must breach `RC_NEED_CONSEC` runs in a row (default 3 = **15
+   minutes**) before it says anything. A build spike is not a crunch.
+2. **Cooldown.** While it stays breached it repeats at most every `RC_COOLDOWN` (default 1h),
+   not every 5 minutes.
+3. **Recovery.** One "cleared" note when it ends, so an alert never leaves you guessing.
+
+One aggregated push per run, not one per metric — when memory runs short several metrics trip
+together and they are the same event. State lives in `logs/.resource-crunch-state`; deleting
+that file just re-arms everything.
+
+Two deliberate non-alerts: **the cluster being down** is `cluster-autostart.sh`'s channel, so
+a failing `kubectl top` skips the cluster metrics (host metrics still run) rather than paging
+here; and **an unreadable sensor is never a breach** — a missing GPU or hwmon reads as calm.
+GPU *utilisation* is the weakest signal of the set (ollama pegs the card at 100% during
+inference and that is the machine working), which is why its limit sits at the
+"nothing else can get a slot" line while GPU memory and temperature carry the real warning.
+
+Inspect without sending anything: `./resource-crunch-watch.sh --status`.
+
+---
+
 ## 8. Maintenance Scripts
 
 | Script | Purpose |
@@ -608,6 +703,9 @@ not apply to it. To redeploy or update it, pull the directory from the dev box o
 | `restart-minikube.sh` | Warm restart (reuse cluster, idempotent vault, apps commented out) |
 | `minikube-delete-and-upgrade.sh` | Delete cluster, reinstall latest Minikube (kvm2 + GPU addons) |
 | `backup-minikube-mnt.sh` | **Weekly `root` cron** (Mon ~05:00): compress shared volume (secrets + DB snapshots) + nginx + STEP0 + qcguy → dated `.tgz` in `/mnt/minikube-backups`, prune (keep weekly for current+previous month, one per older month), then copy the archive **off-site to the WD Cloud NAS** (`192.168.50.169`, NFS at `/mnt/wdcloud`) with the same month-retention prune (no age floor). See §7 "Off-site copy". |
+| `ntfy-lib.sh` | Sourceable push-notification library: the five-channel registry, latin1-safe header sanitising, fail-soft `ntfy_push`. See §7a. |
+| `ntfy-topic-check.sh` | Read-only gate over §7a — unregistered topics, publishers that stopped sourcing the lib, hardcoded URLs. Exit 1 on a violation. |
+| `resource-crunch-watch.sh` | `*/5` cloud cron: node CPU/memory, kubelet pressure, unschedulable pods, GPU util/memory/temp, CPU temp, disk → ntfy when sustained. `--status` prints everything without sending. See §7a. |
 | `reduce-docker-minikube-space.sh` | apt/journal clean + `docker system prune` on host **and** inside Minikube |
 | `reduce-var-space.sh` | Truncate logs, vacuum journald, prune docker |
 | `delete-docker-reg-images.sh` | GC orphaned blobs in the registry |

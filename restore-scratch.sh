@@ -21,6 +21,13 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/restore-lib.sh"
+# Push notifications -> ntfy `yolo-private-cloud-restore-scratch`. Best-effort source:
+# on a bare Ubuntu box STEP0 is cloned by hand before this runs, so the lib is normally
+# right here — but a DR must never fail for want of a notification.
+# shellcheck source=/dev/null
+if [ -r "$SCRIPT_DIR/ntfy-lib.sh" ]; then source "$SCRIPT_DIR/ntfy-lib.sh"; else
+  ntfy_push() { :; }; NTFY_TOPIC_RESTORE_SCRATCH=""
+fi
 
 MARKER="/mnt/minikube-backups/.restore-phase"   # last COMPLETED phase number
 DRY_RUN=0
@@ -44,7 +51,46 @@ fi
 
 # ---- helpers ----
 log()  { echo "[restore $(date '+%H:%M:%S')] $*"; }
-die()  { echo "[restore FATAL] $*" >&2; exit 1; }
+
+# rs_notify <title> <body> [priority] [tags] — the restore-scratch channel's single
+# entry point. Silent under --dry-run: that mode mutates nothing and exists to be run
+# repeatedly while reading the plan, so it must not page anyone. RS_NOTIFIED records
+# that a terminal message (done or failed) has gone out, so the EXIT trap below only
+# speaks when the run ended some OTHER way — a Ctrl-C, a SIGTERM, an `exit` added
+# later. A DR run that stops silently at 03:00 is the case worth catching.
+RS_START=$(date +%s)
+RS_NOTIFIED=0
+rs_notify() {
+  [ "$DRY_RUN" = 1 ] && return 0
+  ntfy_push "$NTFY_TOPIC_RESTORE_SCRATCH" "$1" "$2" "${3:-default}" "${4:-cloud}"
+  return 0
+}
+rs_elapsed() { local e=$(( $(date +%s) - RS_START )); echo "$(( e / 3600 ))h $(( (e % 3600) / 60 ))m"; }
+rs_phase() { cat "$MARKER" 2>/dev/null || echo "none"; }
+
+die()  {
+  echo "[restore FATAL] $*" >&2
+  RS_NOTIFIED=1
+  rs_notify "restore-scratch FAILED" \
+"$*
+
+Host: $(hostname -s). Elapsed: $(rs_elapsed). Last completed phase: $(rs_phase).
+Resume after fixing with:  ./restore-scratch.sh --from-phase <n>" \
+    "urgent" "rotating_light,floppy_disk"
+  exit 1
+}
+rs_on_exit() {
+  local rc=$?
+  [ "$RS_NOTIFIED" = 1 ] && return 0
+  [ "$DRY_RUN" = 1 ] && return 0
+  rs_notify "restore-scratch ENDED early (rc=$rc)" \
+"The run stopped without reaching the handoff and without a FATAL - interrupted, killed,
+or the host went down. Host: $(hostname -s). Elapsed: $(rs_elapsed).
+Last completed phase: $(rs_phase). Resume with:  ./restore-scratch.sh --from-phase <n>" \
+    "high" "warning,floppy_disk"
+  return 0
+}
+trap rs_on_exit EXIT
 need() { command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"; }
 # run: execute unless --dry-run (then just print). Use for every mutating command.
 # shellcheck disable=SC2086,SC2294
@@ -625,11 +671,26 @@ MANUAL host-level steps NOT auto-reconstructed (credentials / can't be scripted 
 ==================================================================
 DONE
   mark_phase 9
+  RS_NOTIFIED=1
+  rs_notify "restore-scratch COMPLETE (platform up, apps NOT deployed)" \
+"All 9 phases finished on $(hostname -s) in $(rs_elapsed).
+
+The cluster is up but NOTHING is deployed yet. Still required, in order:
+  1. re-point DNS at this host's public IP
+  2. confirm https://jenkins.traderyolo.com resolves here
+  3. ./trigger-app-builds.sh
+Then: ./verify-recovery.sh, and re-pull the ollama models (excluded from backups)." \
+    "high" "white_check_mark,floppy_disk"
   log "restore-scratch: ALL PHASES COMPLETE."
 }
 
 # ============================== MAIN ==============================
 mkdir -p "$(dirname "$MARKER")" 2>/dev/null || true
+rs_notify "restore-scratch STARTED" \
+"Bare-metal disaster recovery beginning on $(hostname -s) as $(whoami).
+Resuming from phase: ${FROM_PHASE:-auto (last completed: $(rs_phase))}
+This takes hours and pauses before app deploys. Expect a COMPLETE or FAILED note here." \
+  "default" "hourglass_flowing_sand,floppy_disk"
 phase0_preflight
 phase1_tooling
 phase2_pull

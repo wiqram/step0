@@ -5,6 +5,63 @@ set -e
 # into kube-prometheus/ then vault/). Later steps grep this file for the inline
 # Jenkins credential; a relative $0 would no longer resolve after those cds.
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+
+##############################################
+# Push notifications -> ntfy `yolo-private-cloud-start-scratch`.
+#
+# A cold bring-up is the single most consequential thing that happens on this host: it
+# rebuilds the cluster, and it is sometimes started by someone (or something) other
+# than the person watching. So the channel answers "did start-scratch run, and how did
+# it end" without anyone tailing a terminal for the ~30 minutes it takes.
+#
+# `set -e` is on, so ANY failing command aborts mid-bootstrap and would otherwise be
+# silent. The ERR trap records where, and the EXIT trap turns that into the failure
+# push — one notification per run either way. `set -E` (errtrace) is added so the ERR
+# trap is still inherited inside the functions/subshells this script uses; it changes
+# nothing about which commands abort the run.
+##############################################
+set -E
+# shellcheck source=/dev/null
+if [ -r "$(dirname "$SCRIPT_PATH")/ntfy-lib.sh" ]; then source "$(dirname "$SCRIPT_PATH")/ntfy-lib.sh"; else
+  echo "WARN: ntfy-lib.sh not found — this bring-up will send no notification." >&2
+  ntfy_push() { :; }; NTFY_TOPIC_START_SCRATCH=""
+fi
+SS_START=$(date +%s)
+SS_ERR_LINE=""; SS_ERR_CMD=""
+# Resolved once so both the start and the end message agree about what this run did.
+if [ -n "${SKIP_APP_BUILDS:-}" ]; then
+  SS_APPS_PLAN="will be SKIPPED (SKIP_APP_BUILDS set)"
+  SS_APPS_DONE="SKIPPED - run ./trigger-app-builds.sh once DNS is confirmed"
+else
+  SS_APPS_PLAN="will be deployed via Jenkins at the end"
+  SS_APPS_DONE="Jenkins build triggers fired"
+fi
+trap 'SS_ERR_LINE=$LINENO; SS_ERR_CMD=$BASH_COMMAND' ERR
+ss_finish() {
+  local rc=$? elapsed=$(( $(date +%s) - SS_START ))
+  local mins=$(( elapsed / 60 )) secs=$(( elapsed % 60 ))
+  if [ "$rc" -eq 0 ]; then
+    ntfy_push "$NTFY_TOPIC_START_SCRATCH" "start-scratch COMPLETED (${mins}m ${secs}s)" \
+"Cold bring-up finished on $(hostname -s).
+apps: $SS_APPS_DONE
+Check: minikube status / kubectl get po -A / ./verify-recovery.sh" \
+      "default" "rocket,cloud"
+  else
+    ntfy_push "$NTFY_TOPIC_START_SCRATCH" "start-scratch FAILED (rc=$rc) after ${mins}m ${secs}s" \
+"Aborted on $(hostname -s) at line ${SS_ERR_LINE:-?} of start-scratch.sh:
+  ${SS_ERR_CMD:-unknown command}
+
+set -e means the cluster is HALF-BUILT - it is not safe to assume anything past that
+line ran. Re-run after fixing; see RESTART-RECOVERY.md before reaching for a delete." \
+      "urgent" "rotating_light,cloud"
+  fi
+}
+trap ss_finish EXIT
+ntfy_push "$NTFY_TOPIC_START_SCRATCH" "start-scratch STARTED" \
+"Cold bring-up beginning on $(hostname -s) as $(whoami).
+apps: $SS_APPS_PLAN
+Expect a COMPLETED or FAILED note on this channel when it ends." \
+  "default" "hourglass_flowing_sand,cloud"
 #echo "in UP.sh >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"-e url=https://www.qcguy.com
 #./build.sh
 #setup the 5million external network on docker

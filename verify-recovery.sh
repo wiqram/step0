@@ -243,6 +243,19 @@ if sudo -n true 2>/dev/null; then
   else warn "root weekly DR backup cron MISSING — reinstall (see restore-scratch.sh phase 8)"; fi
 else info "root crontab check skipped (needs sudo) — re-run with: sudo ./verify-recovery.sh, or check: sudo crontab -u root -l"; fi
 
+# Push notifications (architecture.md §7a). A dead alert channel is indistinguishable
+# from a healthy system, so a restore that silently dropped it is exactly the thing a
+# post-restore survey should catch. Checked separately from the crontab line above
+# because an OLD cloud-crontab installs cleanly and still lacks the watcher.
+if crontab -l 2>/dev/null | grep -q resource-crunch-watch; then pass "resource-crunch watcher cron present (ntfy yolo-private-cloud-resource-crunch)"
+else warn "resource-crunch watcher NOT in the cloud crontab — re-run ./install-cron.sh"; fi
+
+VR_SELFDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -x "$VR_SELFDIR/ntfy-topic-check.sh" ]; then
+  if "$VR_SELFDIR/ntfy-topic-check.sh" >/dev/null 2>&1; then pass "ntfy channel registry consistent (./ntfy-topic-check.sh)"
+  else warn "ntfy channel registry has violations — run ./ntfy-topic-check.sh for detail"; fi
+fi
+
 # ============================== SUMMARY ==============================
 section "Detected environment-specific values (what a new box can change)"
 for d in "${DETECTED[@]}"; do printf "  • %s\n" "$d"; done

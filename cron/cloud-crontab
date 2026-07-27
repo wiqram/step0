@@ -13,10 +13,21 @@ CRON_TZ=UTC
 # (Docker unless-stopped does the restart; this reconciles k8s health + alerts on failure). N-0006 #3
 @reboot sleep 30 && /home/cloud/Ideaprojects/STEP0/cluster-autostart.sh >> /home/cloud/Ideaprojects/STEP0/logs/cluster-autostart.log 2>&1
 */10 * * * * /home/cloud/Ideaprojects/STEP0/cluster-autostart.sh >> /home/cloud/Ideaprojects/STEP0/logs/cluster-autostart.log 2>&1
-# YOLO Improvement Agent — one scoped cycle every 3h (see ops/agent/README.md)
-17 */3 * * * /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/run-cycle.sh >> /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/logs/cron.log 2>&1
+# YOLO Improvement Agent — one scoped cycle every 12h (see ops/agent/README.md)
+# 2026-07-27: was `*/3` here but `*/12` on the live host — someone ran `crontab -e` instead
+# of editing this file. Reconciled TO THE LIVE VALUE so re-running install-cron.sh could not
+# silently quadruple the agent's run rate. If */3 was the intent, change it back here and
+# re-run ./install-cron.sh.
+17 */12 * * * /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/run-cycle.sh >> /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/logs/cron.log 2>&1
 # dyingpaleblue Improvement Agent - one scoped cycle every 3h (see ops/agent/README.md)
 41 */3 * * * /home/cloud/IdeaProjects/dyingpaleblue/ops/agent/run-cycle.sh >> /home/cloud/IdeaProjects/dyingpaleblue/ops/agent/logs/cron.log 2>&1
+
+# Resource-crunch watch — push to ntfy `yolo-private-cloud-resource-crunch` when the node
+# runs out of headroom (CPU/memory/GPU/temperature/disk/unschedulable pods). Every 5 min;
+# the script itself debounces (3 consecutive samples = 15 sustained minutes before it
+# speaks, then at most hourly, plus one "cleared" note), so this cadence is sampling
+# frequency, NOT notification frequency. Cheap: ~1s of kubectl + nvidia-smi + df.
+*/5 * * * * /home/cloud/Ideaprojects/STEP0/resource-crunch-watch.sh >> /home/cloud/Ideaprojects/STEP0/logs/resource-crunch-watch.cron.log 2>&1
 
 # Node docker build-cache cap — bound /var against Jenkins build churn (plan.md R7). Daily 04:30 local.
 CRON_TZ=Europe/London

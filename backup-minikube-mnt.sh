@@ -15,6 +15,24 @@ LOCKFILE="/tmp/backup-minikube-mnt.lock"
 exec 200>"$LOCKFILE"
 flock -n 200 || { echo "Another backup-minikube-mnt run holds $LOCKFILE; exiting."; exit 0; }
 
+# Push notifications -> channel `yolo-private-cloud-backup` (ntfy-lib.sh registry).
+# This job runs from a root cron on a Monday at 05:00 and nobody reads the cron log
+# until something is already lost, so the weekly note IS the verification: it carries
+# the run status, this archive's size, and how many backups exist locally + off-site.
+# $0 is the absolute cron path, so dirname resolves even though this file is invoked
+# by root from /. Sourcing is best-effort: a missing lib must not stop the backup.
+SELFDIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
+if [ -r "$SELFDIR/ntfy-lib.sh" ]; then source "$SELFDIR/ntfy-lib.sh"; else
+  echo "WARNING: $SELFDIR/ntfy-lib.sh not readable — this run will send no notification." >&2
+  ntfy_push() { :; }; ntfy_human_bytes() { echo "?"; }; NTFY_TOPIC_BACKUP=""
+fi
+# Warnings accumulate here and are folded into the final push, so a degraded-but-
+# completed backup (e.g. WD dark) is visible on the phone rather than only in the log.
+NTFY_WARNINGS=""
+note_warn() { NTFY_WARNINGS="$NTFY_WARNINGS
+- $1"; }
+
 # What to backup.
 backup_files="/mnt/minikube-backups/minikube-mnt"
 backup_files2="/home/cloud/Ideaprojects/nginx"
@@ -48,6 +66,7 @@ cp /home/cloud/Ideaprojects/vault/ollama-env-variables.sh $backup_files
 keys_file="$backup_files5/cluster-keys.json"
 if [ ! -s "$keys_file" ]; then
     echo "WARNING: $keys_file is missing or EMPTY — Vault unseal key/root token will NOT be in this backup." >&2
+    note_warn "cluster-keys.json missing/EMPTY — no Vault unseal key in this archive"
 fi
 
 # Where to backup to.
@@ -70,7 +89,18 @@ echo
 # each weekly archive from ~5G to ~40G and fill /dev/sdb1 under the retention
 # policy. ollama's identity key (id_ed25519) + config live outside models/ and
 # ARE still captured.
+# tar's exit code was previously discarded; the weekly push reports it, so a truncated
+# or partial archive (rc=2 on a read error, rc=1 on files changing mid-read) now
+# surfaces on the phone instead of only in the cron log.
+tar_start=$(date +%s)
 tar -czf $dest/$archive_file --exclude='*/ollama/models' --exclude='*/wd-backup/logs' $backup_files $backup_files2 $backup_files3 $backup_files4 $backup_files5 $backup_files6
+tar_rc=$?
+tar_elapsed=$(( $(date +%s) - tar_start ))
+if [ "$tar_rc" -eq 1 ]; then
+    note_warn "tar exited 1 (some files changed while being read) — archive is usable but not a point-in-time snapshot"
+elif [ "$tar_rc" -ne 0 ]; then
+    note_warn "tar FAILED (rc=$tar_rc) — this archive may be incomplete"
+fi
 
 # Print end status message.
 echo
@@ -165,15 +195,21 @@ WD_DEST="$WD_MOUNT"                       # dedicated share — archives live at
 echo
 echo "Off-site: copying $archive_file to $WD_DEST (WD Cloud, NFS)"
 
+WD_STATUS="skipped"     # -> reported in the weekly push: copied | skipped | FAILED
 if ! mountpoint -q "$WD_MOUNT"; then
     echo "WARNING: $WD_MOUNT is not mounted — skipping off-site WD backup. See setup notes above." >&2
+    note_warn "off-site SKIPPED: $WD_MOUNT not mounted (WD Cloud NAS dark?) — this week exists on ONE disk only"
 elif ! mkdir -p "$WD_DEST" 2>/dev/null || [ ! -w "$WD_DEST" ]; then
     echo "WARNING: $WD_DEST missing/unwritable — skipping off-site WD backup." >&2
+    note_warn "off-site SKIPPED: $WD_DEST unwritable — this week exists on ONE disk only"
 else
     if cp "$dest/$archive_file" "$WD_DEST/"; then
         echo "Off-site copy OK: $WD_DEST/$archive_file"
+        WD_STATUS="copied"
     else
         echo "WARNING: off-site copy of $archive_file to $WD_DEST failed." >&2
+        WD_STATUS="FAILED"
+        note_warn "off-site copy to the WD Cloud FAILED — this week exists on ONE disk only"
     fi
 
     # --- WD prune: same month retention as local, NO age floor (our own disk). ---
@@ -288,3 +324,53 @@ fi
 #
 #     unset gcs_latest_day gcs_latest_file
 # fi
+
+##############################################
+#
+# Weekly push notification -> ntfy `yolo-private-cloud-backup`.
+#
+# Runs LAST, after the local prune and the off-site copy+prune, so the counts and
+# totals it reports are the post-retention truth rather than a mid-run snapshot.
+# The message answers the three questions you actually have on a Monday morning:
+# did it run, how big was it, and how many restore points do I still have (here AND
+# off-site). Any warning collected along the way is appended, and its presence — not
+# the tar exit code alone — is what raises the priority.
+#
+##############################################
+# Local: post-prune count + total bytes across every retained archive.
+local_count=$(ls -1 "$dest/$hostname"-*.tgz 2>/dev/null | wc -l)
+local_total=$(du -cb "$dest/$hostname"-*.tgz 2>/dev/null | tail -1 | cut -f1)
+this_size=$(stat -c %s "$dest/$archive_file" 2>/dev/null)
+local_avail=$(df -B1 --output=avail "$dest" 2>/dev/null | tail -1 | tr -d ' ')
+
+# Off-site: only meaningful while the NFS mount is up. Guarded so a dark NAS yields
+# "n/a" instead of a stat error (and the WARNING above already explains why).
+if mountpoint -q "$WD_MOUNT" 2>/dev/null; then
+    wd_count=$(ls -1 "$WD_DEST/$hostname"-*.tgz 2>/dev/null | wc -l)
+    wd_total=$(du -cb "$WD_DEST/$hostname"-*.tgz 2>/dev/null | tail -1 | cut -f1)
+    wd_avail=$(df -B1 --output=avail "$WD_MOUNT" 2>/dev/null | tail -1 | tr -d ' ')
+    wd_line="off-site (WD Cloud): $wd_count backups, $(ntfy_human_bytes "$wd_total") total, $(ntfy_human_bytes "$wd_avail") free"
+else
+    wd_count=0
+    wd_line="off-site (WD Cloud): n/a — NAS not mounted"
+fi
+
+if [ "$tar_rc" -eq 0 ] && [ -z "$NTFY_WARNINGS" ]; then
+    ntfy_title="Weekly backup OK - $(ntfy_human_bytes "$this_size")"
+    ntfy_prio="default"; ntfy_tags="floppy_disk,cloud"
+elif [ "$tar_rc" -ne 0 ] && [ "$tar_rc" -ne 1 ]; then
+    ntfy_title="Weekly backup FAILED (tar rc=$tar_rc)"
+    ntfy_prio="urgent"; ntfy_tags="rotating_light,floppy_disk"
+else
+    ntfy_title="Weekly backup completed with warnings - $(ntfy_human_bytes "$this_size")"
+    ntfy_prio="high"; ntfy_tags="warning,floppy_disk"
+fi
+
+ntfy_push "$NTFY_TOPIC_BACKUP" "$ntfy_title" \
+"$archive_file
+this run: $(ntfy_human_bytes "$this_size") in ${tar_elapsed}s (tar rc=$tar_rc)
+local ($dest): $local_count backups, $(ntfy_human_bytes "$local_total") total, $(ntfy_human_bytes "$local_avail") free
+$wd_line
+off-site copy: $WD_STATUS${NTFY_WARNINGS:+
+warnings:$NTFY_WARNINGS}" \
+    "$ntfy_prio" "$ntfy_tags"
