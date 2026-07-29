@@ -122,6 +122,15 @@ else
   #echo "now sleeping for 3 minutes to allow for nginx to be updted with latest minikube kvm ip"
   #sleep 3m
 fi
+#################cri-dockerd deadline#############################
+# MUST run after `minikube start` (a fresh node has no drop-in) and BEFORE anything
+# starts creating containers. /var/lib/docker sits on the ageing sda SATA SSD, so under
+# build+rollout load a single CreateContainer can outrun cri-dockerd's default 2m
+# deadline — which then orphans a container and wedges the pod in a
+# "container name already in use" retry loop. See the script header for the full trace.
+# Best-effort: a tuning miss must not abort the bootstrap.
+"$(dirname "$SCRIPT_PATH")/tune-cri-dockerd-timeout.sh" \
+  || echo "WARN: cri-dockerd timeout tuning failed; container creates may time out under IO load."
 #to install docker container registry — R8: self-managed + durable on sdb2 (NOT the ephemeral addon).
 # The addon stored blobs on the pod's ephemeral /var/lib/registry, so every cluster stop wiped all
 # images (cluster-wide ImagePullBackOff — the 2026-06-16 outage). We disable it and run our own

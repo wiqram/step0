@@ -53,6 +53,13 @@ else
   #echo "now sleeping for 3 minutes to allow for nginx to be updted with latest minikube kvm ip"
   #sleep 3m
 fi
+#################cri-dockerd deadline#############################
+# Re-applied after every start: a rebuilt node has no drop-in. /var/lib/docker sits on
+# the ageing sda SATA SSD, so under build+rollout load a CreateContainer can outrun
+# cri-dockerd's default 2m deadline and wedge pods in a "container name already in use"
+# retry loop. Idempotent + best-effort. See tune-cri-dockerd-timeout.sh for the trace.
+"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tune-cri-dockerd-timeout.sh" \
+  || echo "WARN: cri-dockerd timeout tuning failed; container creates may time out under IO load."
 #to install docker container registry
 minikube addons enable registry
 # Resource metrics for `kubectl top` / HPAs. prometheus-adapter can't serve pod
