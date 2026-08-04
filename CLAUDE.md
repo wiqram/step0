@@ -60,8 +60,14 @@ to a Kubernetes NodePort on `172.16.238.2`.
   The pre-2026-07-20 dynamic `/tmp` PV silently destroyed all runtime-written KV
   (follower broker secrets, admin platform keys) on a minikube rebuild. Daily
   snapshot CronJob `vault/vault-data-backup` → `minikube-mnt/vault-backups/`
-  (swept by the weekly DR tar + WD off-site). Old Retained PV `pvc-cca2a54b-…`
-  is the rollback copy — safe to delete after a clean week (~2026-07-27).
+  (swept by the weekly DR tar + WD off-site).
+  **Proven under the real failure condition (verified 2026-08-04):** the minikube
+  container was rebuilt on 2026-07-29 — exactly what wiped Vault on 07-14 — and the
+  KV survived intact. Snapshots run unbroken Jul 22 → Aug 4 with no size dip across
+  the rebuild (21.4 → 23.2 → 25.3 MB), 14 kept, prune working, and `kv/` still holds
+  every app path including the runtime-written `age-keys/`. The rollback PV
+  `pvc-cca2a54b-…` is **gone** — it lived in the VM's `/tmp` and went with the old
+  cluster's etcd on that rebuild. Nothing left to clean up; don't go looking for it.
 - **Single host, single node.** No multi-node K8s. "private cloud" = Docker + one
   Minikube + Nginx, all co-located on `172.16.238.x`.
 - **Fixed IPs:** Minikube node `172.16.238.2` (API/NodePorts/registry:5000),
