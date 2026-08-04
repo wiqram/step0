@@ -100,10 +100,18 @@ to a Kubernetes NodePort on `172.16.238.2`.
   controller access — do not add a redundant binding (`kubectl auth can-i` misleadingly says
   "no" because it can't resolve these subresources in discovery; a `SubjectAccessReview`
   says `allowed: true`). Full reference: kube-prometheus `manifests/CUSTOM-METRICS.md`.
-- **An app namespace must ship its own `prometheus-k8s` Role + RoleBinding.** The Prometheus
-  CR selects ServiceMonitors across all namespaces, but kube-prometheus grants that Role only
-  in `default`, `kube-system` and `monitoring`. Without it the ServiceMonitor is accepted,
-  shows up in the operator's config, and **never produces a target — with no error anywhere**.
+- **An app namespace must ship its own `prometheus-k8s` Role + RoleBinding, and it MUST grant
+  `discovery.k8s.io/endpointslices`.** The Prometheus CR selects ServiceMonitors across all
+  namespaces, but kube-prometheus grants that Role only in `default`, `kube-system` and
+  `monitoring`. Without it the ServiceMonitor is accepted, shows up in the operator's config,
+  and **never produces a target — with no error anywhere**.
+  ⚠️ **As of the 2026-08-04 upgrade to kube-prometheus 0.18 / prometheus-operator 0.92,
+  service discovery uses `EndpointSlice`, not the deprecated core `Endpoints`.** A Role that
+  still lists only `services/endpoints/pods` silently yields ZERO targets — this is exactly
+  what happened to `yolo` during the upgrade. The only evidence is in the `prometheus-k8s`
+  pod's own log (`failed to list *v1.EndpointSlice: ... forbidden`), not the operator's.
+  Verify per namespace with:
+  `kubectl auth can-i list endpointslices.discovery.k8s.io --as=system:serviceaccount:monitoring:prometheus-k8s -n <ns>`
   ServiceMonitors, dashboards, alert rules and HPAs belong to the app repos; the adapter,
   APIServices, datasources and Grafana mounts belong to kube-prometheus (see that repo's
   `manifests/YOLO-OWNERSHIP.md`). Never ship a competing copy from an app repo.

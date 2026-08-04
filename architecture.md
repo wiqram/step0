@@ -327,15 +327,35 @@ ordering (Vault before Jenkins/apps) is what matters here. The vault repo owns i
 
 ### Monitoring — kube-prometheus (`~/Ideaprojects/kube-prometheus/`)
 - Full Prometheus Operator + Grafana + Alertmanager stack in the `monitoring` ns.
+- **Versions (upgraded 2026-08-04):** kube-prometheus **release-0.18** — Prometheus **3.13.2**,
+  Grafana **13.1.1**, Alertmanager 0.33.1, prometheus-operator 0.92.0, prometheus-adapter 0.12.0,
+  node-exporter 1.11.1, kube-state-metrics 2.19.0. Was ~release-0.12 (prometheus 2.41.0 /
+  grafana 9.3.2 / operator 0.61.1), which predated this node's Kubernetes **1.35** by nine
+  minor versions and was outside upstream's support matrix entirely. Grafana, Prometheus and
+  Alertmanager are pinned one point release **ahead** of what 0.18 ships, at current latest
+  stable; same major in each case, so the operator's generated config stays valid.
 - **The Prometheus CR selects across ALL namespaces** (`serviceMonitorSelector: {}` and
   `serviceMonitorNamespaceSelector: {}`), so an app's ServiceMonitor is picked up with no
   change to this stack. But kube-prometheus only grants its `prometheus-k8s` ServiceAccount a
   namespace `Role` in `default`, `kube-system` and `monitoring` — **an app namespace must ship
-  its own `prometheus-k8s` Role + RoleBinding** (`services`/`endpoints`/`pods`: get/list/watch)
-  or the ServiceMonitor is accepted, appears in the operator's config, and simply never
-  produces a target. No error, no event, nothing. `yolo` ships its own in
-  `k8s/monitoring/servicemonitors.yaml`. Check with:
-  `kubectl auth can-i list endpoints --as=system:serviceaccount:monitoring:prometheus-k8s -n <ns>`.
+  its own `prometheus-k8s` Role + RoleBinding** or the ServiceMonitor is accepted, appears in
+  the operator's config, and simply never produces a target. No error, no event, nothing.
+  `yolo` ships its own in `k8s/monitoring/servicemonitors.yaml`.
+  ⚠️ **That Role must grant `discovery.k8s.io/endpointslices`.** Operator 0.92 moved Kubernetes
+  service discovery off the deprecated core `Endpoints` API onto `EndpointSlice`, and
+  kube-prometheus's own namespace Role now grants endpointslices and drops endpoints. During
+  the 2026-08-04 upgrade this took every `yolo` target offline with the operator logging
+  nothing — the only evidence was in the `prometheus-k8s` pod's log:
+  `failed to list *v1.EndpointSlice: endpointslices.discovery.k8s.io is forbidden`.
+  Check per namespace with:
+  `kubectl auth can-i list endpointslices.discovery.k8s.io --as=system:serviceaccount:monitoring:prometheus-k8s -n <ns>`.
+- **kube-state-metrics 2.19 parses CronJob schedules strictly and panics on an invalid one.**
+  `yolo/delete-publisher` carried `*/120 * * * *` (a minutes-field step must be < 60);
+  Kubernetes' lenient parser had accepted it and was running it hourly. On upgrade it
+  crash-looped kube-state-metrics **cluster-wide** — one bad schedule in one namespace takes
+  out kube-state metrics for every namespace. Fixed to `0 * * * *` (identical behaviour) in the
+  yolo repo. Worth checking `kubectl get cronjob -A -o custom-columns=NS:.metadata.namespace,N:.metadata.name,S:.spec.schedule`
+  before any future kube-state-metrics bump.
 - **Grafana's admin login is pinned from Vault** — see "Grafana admin login" below. Its
   `/var/lib/grafana` is an `emptyDir`, so anything set in the UI (users, passwords, ad-hoc
   dashboards) is destroyed on every pod restart. Only *provisioned* content survives.
