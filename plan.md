@@ -234,7 +234,7 @@ than (a)–(c) and pointless while the source of truth is still ambiguous. Seque
 > Do (b) first — it is the only one that can lose work silently, and it is nearly free
 > (a README note buys safety immediately). Then (a), then (c), then reassess (d).
 
-### 17. No GPU metrics in Prometheus — the RTX 3080 Ti is invisible to Grafana (added 2026-08-04)
+### 17. No GPU metrics in Prometheus — ✅ RESOLVED 2026-08-04 (dcgm-exporter)
 
 The box's whole reason for existing is GPU work (ollama, and the quant paths in yolo), and
 Prometheus holds **zero** GPU series. `count({__name__=~".*(DCGM|nvidia|gpu|GPU).*"})` returns
@@ -247,14 +247,22 @@ pushes to ntfy `yolo-private-cloud-resource-crunch`. That is a threshold alarm, 
 there is no way to answer "was the GPU saturated when ollama got slow last Tuesday", and the
 `Platform / Ollama` dashboard has to carry a text panel explaining the gap.
 
-**Fix:** deploy `dcgm-exporter` (DaemonSet) + a ServiceMonitor in `monitoring`, then add a GPU
-row to `manifests/grafana-dashboardDefinitions-platform.yaml`. Worth checking whether DCGM
-works against this driver/runtime combination before committing to it — on a single-node
-minikube-in-docker setup with GPU passthrough it may need the same `nvidia` runtime the device
-plugin uses. Fallback if DCGM is awkward: a tiny sidecar scraping `nvidia-smi --query-gpu`
-into a textfile for node-exporter's textfile collector.
+**Done:** `dcgm-exporter` DaemonSet + Service + ServiceMonitor in kube-prometheus
+`manifests/dcgmExporter.yaml`, and a GPU row on the `Platform / Ollama` dashboard. Live:
+utilisation, VRAM used/free, temperature, power, SM/memory clocks, memory-copy utilisation,
+encoder/decoder and **XID error counters**.
 
-### 18. Ollama exposes no application metrics at all (added 2026-08-04)
+Two findings worth keeping:
+- **It must NOT request `nvidia.com/gpu`.** The node advertises exactly one and ollama holds
+  it, so a resource request would leave the DaemonSet permanently Pending or take the GPU from
+  ollama. It works because the node's dockerd sets `"default-runtime": "nvidia"`, so
+  `NVIDIA_VISIBLE_DEVICES=all` gets the device injected without consuming the allocation.
+- DCGM runs fine on this consumer GeForce card, but its *profiling* fields (PCIE throughput,
+  DRAM active) are unavailable and it logs a WARN per field at startup. Expected, not a fault.
+  The first deploy was also OOMKilled at a 256Mi limit — it embeds the DCGM host engine and
+  NVML; 512Mi plus `GOMAXPROCS=2` is the working shape.
+
+### 18. Ollama exposes no application metrics — ✅ MOSTLY RESOLVED 2026-08-04 (router metrics)
 
 `/metrics` returns **404** on both `ollama:11434` and `ollama-router-stats:8080` (checked
 2026-08-04); the router's stats endpoint serves an HTML table, not a Prometheus exposition.
@@ -262,11 +270,25 @@ So the `Platform / Ollama` dashboard can only show what the kernel and Kubernete
 CPU, memory, throttling, disk, PSI — and nothing about tokens/sec, queue depth, model load
 time, or per-model request counts.
 
-**Fix:** add a Prometheus exposition to `ollama-router` (it already tracks requests by box
-and model for its HTML page, so the data exists — it just is not exposed in a scrapeable
-format), then a ServiceMonitor **plus a `prometheus-k8s` Role granting
-`discovery.k8s.io/endpointslices`** in the `ollama` namespace (see the CLAUDE.md note — without
-that Role the ServiceMonitor is accepted and silently never produces a target).
+**Done (at the proxy):** the ollama repo now exposes two endpoints, both scraped —
+- `ollama-router:8405` — **HAProxy's built-in Prometheus exporter** (no sidecar, no image
+  build; HAProxy 2.0+ ships it as a service). 127 metrics including request rate, responses by
+  code, connect/response time, queue depth and `haproxy_server_status{server="dev"}`. That last
+  one finally makes the 10GbE dev-box failover visible — it was previously silent, since
+  inference keeps working via the prod backup, just slower.
+- `ollama-router-stats:8080/metrics` — `ollama_router_requests_total{box,model}` from the stats
+  sidecar, which decodes the model out of the request body (HAProxy cannot: the model is not in
+  the URL). Exported alongside `ollama_router_stats_since_timestamp_seconds` so a lost stats PVC
+  is distinguishable from a counter reset.
+
+Plus the `prometheus-k8s` Role/RoleBinding in the `ollama` namespace **with
+`discovery.k8s.io/endpointslices`**, and labels on both Services — they had none, and a
+ServiceMonitor selects on SERVICE labels, so it would have matched nothing and failed silently.
+
+**Still open:** the Ollama *server* remains unmeasured — `/metrics` on `ollama:11434` is still
+404, so tokens/sec, prompt-vs-generation split, model load time and in-server queue depth are
+unavailable. That needs upstream Ollama to expose an endpoint (or a shim in front of it);
+everything measurable from outside the process is now measured.
 
 ---
 
