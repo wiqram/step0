@@ -34,6 +34,8 @@ EXP_NET="${EXP_NET:-5million}"                     # docker network name
 EXP_SUBNET="${EXP_SUBNET:-172.16.0.0/16}"          # 5million subnet (fixed IPs 172.16.238.x live inside it)
 EXP_REG_PORT="${EXP_REG_PORT:-5000}"               # in-cluster registry
 EXP_API_PORT="${EXP_API_PORT:-8443}"               # kube API
+EXP_AM_PORT="${EXP_AM_PORT:-30333}"                 # alertmanager NodePort (infra alerts -> ntfy)
+EXP_GRAFANA_PORT="${EXP_GRAFANA_PORT:-30330}"       # grafana NodePort (root_url check)
 
 WD_DR_NAS="${WD_DR_NAS:-192.168.50.169}"           # WD Cloud DR NAS (NFS)
 WD_DR_EXPORT="${WD_DR_EXPORT:-/nfs/private-cloud}"  # its NFS export
@@ -301,6 +303,41 @@ if have kubectl; then
   else
     warn "monitoring/grafana-admin MISSING — Grafana is on admin/admin; run ./sync-grafana-admin.sh"
   fi
+
+  # ---- Alertmanager is actually WIRED to a notifier (architecture.md §7b) ----------
+  # THE reason this check exists: upstream kube-prometheus ships Default/Watchdog/Critical/
+  # null as BARE NAMES with no configuration, and in that state every one of its ~138
+  # alerting rules evaluates, fires, reaches Alertmanager and is silently DISCARDED. That
+  # was true on this box for months — six alerts firing, two of them critical, nothing ever
+  # sent anywhere — and it is indistinguishable from a healthy cluster from the outside.
+  # ntfy-topic-check.sh cannot catch it: that validates the manifest TEXT, whereas this
+  # asks the running Alertmanager what config it actually loaded.
+  # NOTE the status API redacts webhook URLs to "<secret>", so presence of a receiver
+  # block is the only thing assertable here — which is exactly what was missing.
+  _am="http://$EXP_NODE_IP:${EXP_AM_PORT:-30333}"
+  if curl -s -m 5 -o /dev/null "$_am/-/healthy" 2>/dev/null; then
+    if curl -s -m 5 "$_am/api/v2/status" 2>/dev/null | grep -q 'webhook_configs'; then
+      pass "Alertmanager receivers are wired to a notifier (ntfy) — infra alerts can reach you"
+    else
+      fail "Alertmanager is running but its receivers are EMPTY — all ~138 kube-prometheus alert rules are firing into a void. Re-apply kube-prometheus manifests/alertmanager-secret.yaml"
+    fi
+  else
+    warn "Alertmanager not answering on $_am — cannot confirm infra alerts have anywhere to go"
+  fi
+
+  # ---- Grafana root_url is not the default localhost --------------------------------
+  # Unset, Grafana advertises http://localhost:3000/ to every client. A desktop browser
+  # never notices (it navigates with relative paths); phones, alert-notification deep
+  # links and share/snapshot URLs all break. Asked over the NODEPORT deliberately, so this
+  # still works mid-restore before DNS/NPM are back.
+  _gf="http://$EXP_NODE_IP:${EXP_GRAFANA_PORT:-30330}"
+  _appurl="$(curl -s -m 5 "$_gf/login" 2>/dev/null | grep -o '"appUrl":"[^"]*"' | head -1 | cut -d'"' -f4)"
+  case "$_appurl" in
+    "")             warn "could not read Grafana appUrl from $_gf — Grafana down?" ;;
+    *localhost*)    fail "Grafana root_url is unset (appUrl=$_appurl) — phones, alert deep links and share URLs will all point at localhost. Fix in kube-prometheus manifests/grafana-config.yaml" ;;
+    *)              pass "Grafana root_url set (appUrl=$_appurl)"
+                    note "Grafana appUrl: $_appurl" ;;
+  esac
 fi
 
 # ---- DR manifest drift: the branch restore-scratch would clone vs what prod runs ----

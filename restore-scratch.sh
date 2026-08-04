@@ -668,6 +668,17 @@ MANUAL host-level steps NOT auto-reconstructed (credentials / can't be scripted 
      no build trigger; aisucks has no repo/job at all). Register their Jenkins job +
      trigger-app-builds.sh line + NPM host, or deploy them by hand. (Confirm which apps should
      survive — see the DR audit.)
+  F. ntfy SUBSCRIPTIONS on your phone: the restored cluster alerts correctly, but a topic
+     nobody is subscribed to is just silence. Subscribe in the ntfy app to at least
+     `yolo-private-cloud-platform` (Alertmanager — every infra alert, incl. CPU/GPU temp,
+     disk, pods) and `yolo-private-cloud-resource-crunch` (the out-of-cluster watchdog that
+     fires when the alerting pipeline ITSELF is broken). Full list: ntfy-lib.sh NTFY_TOPICS.
+  G. nginx-proxy-manager websockets — ONLY if NPM was rebuilt rather than restored from the
+     archive. The per-host "Websockets Support" toggle lives in NPM's own database, not in
+     any repo. grafana.traderyolo.com needs it ON or Grafana Live (/api/live/ws) 400s in a
+     retry loop. Verify with a FORCED HTTP/1.1 upgrade — over HTTP/2 the classic handshake
+     is invalid and 400s regardless, which reads as a false failure. See architecture.md
+     "Grafana public access".
 ==================================================================
 DONE
   mark_phase 9
