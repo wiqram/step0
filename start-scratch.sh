@@ -157,6 +157,22 @@ minikube addons enable nvidia-gpu-device-plugin
 # devbox-kube-access.service re-applies on every boot regardless. See enable-devbox-kube-access.sh.
 sudo -n "$HOME/Ideaprojects/STEP0/enable-devbox-kube-access.sh" || echo "devbox-kube-access: skipped (run 'sudo ./enable-devbox-kube-access.sh --install' once)"
 ###########x`######grafana-prometheus###########################
+# Grafana's /var/lib/grafana is a DURABLE hostPath PV (kube-prometheus
+# manifests/grafana-dataVolume.yaml -> node /mnt/grafana-data == host
+# /mnt/minikube-backups/minikube-mnt/grafana-data). Pre-create it with the right owner
+# BEFORE applying the manifests:
+#   - the PV uses type: DirectoryOrCreate, and a kubelet-created dir lands root:root 0755;
+#   - Grafana runs as uid/gid 65534 with readOnlyRootFilesystem, so it could not write and
+#     would crash-loop on "failed to open sqlite database" — a failure that reads like a
+#     Grafana bug rather than a permissions one.
+# It is re-asserted on EVERY bootstrap on purpose: restore-scratch.sh phase 3 runs a
+# recursive `chown -R cloud:cloud /mnt/minikube-backups`, which would otherwise leave this
+# directory owned by uid 1000 after a resumed restore.
+# Done THROUGH THE NODE, not with host sudo: the node's /mnt is the same host directory
+# (--mount-string above), the node shell is already root, and this box has no passwordless
+# sudo — so a `sudo mkdir` here would silently fail inside an unattended bootstrap.
+docker exec minikube sh -c 'mkdir -p /mnt/grafana-data && chown -R 65534:65534 /mnt/grafana-data' \
+  || echo "WARN: could not prepare /mnt/grafana-data; Grafana may fail to write its SQLite DB."
 echo "deploying grafana prometheus"
 cd $HOME/Ideaprojects/kube-prometheus/
 kubectl apply --server-side -f manifests/setup

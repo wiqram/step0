@@ -279,7 +279,31 @@ if have kubectl; then
   fi
 fi
 
+# ---- DR manifest drift: the branch restore-scratch would clone vs what prod runs ----
+# This is the quietest failure in the whole restore path. A stale branch here clones a repo
+# that builds and deploys perfectly while missing whatever prod actually runs — no error at
+# any point. It was wrong for `ollama` on 2026-08-04 (manifest said `main`, prod had been on
+# `Claude-agent-update` for weeks), which would have restored a cluster with no ollama
+# metrics shim, no router metrics and no ServiceMonitors.
 VR_SELFDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -r "$VR_SELFDIR/restore-lib.sh" ]; then
+  # shellcheck source=/dev/null
+  . "$VR_SELFDIR/restore-lib.sh" 2>/dev/null || true
+  if command -v restore_repo_manifest >/dev/null 2>&1; then
+    _drift=0
+    while read -r _dir _url _br; do
+      [ -n "$_dir" ] || continue
+      [ -d "$_dir/.git" ] || continue          # not cloned yet: phase 5's job, not a drift
+      _actual="$(git -C "$_dir" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+      if [ -n "$_actual" ] && [ "$_actual" != "$_br" ]; then
+        warn "restore manifest drift: $(basename "$_dir") is on '$_actual' but restore-lib.sh says '$_br' — a bare-metal restore would clone the WRONG branch"
+        _drift=$((_drift+1))
+      fi
+    done <<< "$(restore_repo_manifest)"
+    [ "$_drift" -eq 0 ] && pass "restore-lib.sh branch manifest matches every cloned repo"
+  fi
+fi
+
 if [ -x "$VR_SELFDIR/ntfy-topic-check.sh" ]; then
   if "$VR_SELFDIR/ntfy-topic-check.sh" >/dev/null 2>&1; then pass "ntfy channel registry consistent (./ntfy-topic-check.sh)"
   else warn "ntfy channel registry has violations — run ./ntfy-topic-check.sh for detail"; fi
