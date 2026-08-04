@@ -191,6 +191,49 @@ doesn't drag in HSBC-specific config.
 Minikube binary. A future upgrade can break the whole cold-boot with no warning. Pin
 `--kubernetes-version=vX.Y.Z` and record the tested Minikube/addon versions in `architecture.md`.
 
+### 16. Get the kube-prometheus customizations into *our* git properly (added 2026-08-04)
+
+The monitoring config is nominally in git — `github.com/wiqram/kube-prometheus`, cloned on
+a rebuild by `restore-lib.sh`. That is not the problem. The problem is **where** in git,
+and **how durably**. Four separate issues, in dependency order:
+
+**a. Our changes are 5 commits inside a 2,803-commit upstream tree.**
+Everything this platform actually customizes is invisible to anyone reading STEP0:
+
+| Commit | What it owns |
+|---|---|
+| `6d1db624` | yolo Loki datasource, YOLO dashboard folder provider, grafana volume mounts |
+| `df6a2010` | right-sizing for a single node (replicas, retention, resources) |
+| `88c88ce8` | **deletion** of `prometheusAdapter-apiService.yaml` (keeps `kubectl top` working) |
+| `442cf30f` | removal of the drifted yolo Grafana ConfigMaps (+ `YOLO-OWNERSHIP.md`) |
+| `769278b5` | `custom.metrics.k8s.io` APIService + adapter `rules:` + Grafana admin env |
+
+Two of those are *deletions*, which no overlay mechanism represents naturally and which
+are exactly what a careless re-sync silently undoes. Move the whole set into STEP0 as a
+kustomize overlay (or `k8s/monitoring/`) over a pinned vendored base, so the platform's
+monitoring config is reviewable in one place next to the scripts that apply it.
+
+**b. `manifests/` is GENERATED OUTPUT and we hand-edit it.** ⚠️ *the sharp one*
+That directory is built from `jsonnet/` + `example.jsonnet` via `make` — the workflow the
+repo's own README documents. Every customization above was made by editing the generated
+YAML directly, so **anyone who runs the documented build reverts all five at once**, with
+no conflict and no error. Either move the changes into the jsonnet source, or state
+loudly in that repo that this fork no longer regenerates and `make` must not be run.
+Until one of those happens, the build system is a loaded gun pointed at monitoring.
+
+**c. There is no `upstream` remote.** `git remote -v` lists only `origin` (our fork), so
+upstream fixes cannot be pulled at all today. The stack is consequently frozen on
+~release-0.12 (early 2023): prometheus 2.41.0, grafana **9.3.2**, prometheus-adapter
+0.10.0 — years of unpatched CVEs on a Grafana that NPM publishes to the internet. Add the
+remote, then work out the rebase story for (a) *before* attempting a bump.
+
+**d. Only then consider GitOps.** Replacing the `kubectl apply -f manifests/` step with
+ArgoCD/Flux reconciling from git would stop drift permanently, but it is strictly harder
+than (a)–(c) and pointless while the source of truth is still ambiguous. Sequence it last.
+
+> Do (b) first — it is the only one that can lose work silently, and it is nearly free
+> (a README note buys safety immediately). Then (a), then (c), then reassess (d).
+
 ---
 
 ## Suggested order of execution
