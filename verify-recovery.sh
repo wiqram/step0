@@ -21,6 +21,11 @@
 ####################################
 set -u
 
+# Repo directory. Defined HERE, at the top, not next to its first heavy user: `set -u` is
+# on, so a check that referenced it before this line did not merely mis-read — it ABORTED
+# the whole survey at that point and every later check silently never ran.
+VR_SELFDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # ---- expected values (override via env for a different topology) ----
 EXP_NODE_IP="${EXP_NODE_IP:-172.16.238.2}"        # minikube node: API/NodePorts/registry
 EXP_NPM_IP="${EXP_NPM_IP:-172.16.238.10}"         # nginx-proxy-manager on the 5million net
@@ -250,6 +255,25 @@ else info "root crontab check skipped (needs sudo) — re-run with: sudo ./verif
 if crontab -l 2>/dev/null | grep -q alerting-pipeline-watch; then pass "alerting-pipeline watchdog cron present (ntfy yolo-private-cloud-resource-crunch)"
 else warn "alerting-pipeline watchdog NOT in the cloud crontab — re-run ./install-cron.sh"; fi
 
+# Canonical-vs-live crontab drift. install-cron.sh installs cron/cloud-crontab VERBATIM,
+# so that file — not the live crontab — is what a bare-metal restore reproduces. Drift is
+# one-directional and silent: fixes get made with `crontab -e` and never written back, and
+# nothing notices until a restore quietly reverts them. Found 2026-08-04 with the canonical
+# copy still carrying superseded Predictonomy schedules AND the YOLO agent still ENABLED
+# after it had been deliberately paused — install-cron.sh would have resurrected it.
+# Compares SCHEDULE LINES only: comments drifting apart is untidy, not dangerous.
+if [ -r "$VR_SELFDIR/cron/cloud-crontab" ]; then
+  if diff -q <(crontab -l 2>/dev/null | grep -vE '^\s*#|^\s*$') \
+             <(grep -vE '^\s*#|^\s*$' "$VR_SELFDIR/cron/cloud-crontab") >/dev/null 2>&1
+  then
+    pass "cloud crontab matches cron/cloud-crontab (install-cron.sh is safe to re-run)"
+  else
+    warn "cloud crontab has DRIFTED from cron/cloud-crontab — a restore would revert the live schedule. Reconcile with: crontab -l > cron/cloud-crontab (then commit), or re-run ./install-cron.sh to adopt the committed one"
+  fi
+else
+  warn "cron/cloud-crontab is missing from the repo — install-cron.sh has nothing to install"
+fi
+
 # Monitoring wiring. Both of these are silent when wrong — which is the whole reason
 # they belong in a survey rather than in a runbook someone reads after noticing.
 if have kubectl; then
@@ -285,7 +309,6 @@ fi
 # any point. It was wrong for `ollama` on 2026-08-04 (manifest said `main`, prod had been on
 # `Claude-agent-update` for weeks), which would have restored a cluster with no ollama
 # metrics shim, no router metrics and no ServiceMonitors.
-VR_SELFDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -r "$VR_SELFDIR/restore-lib.sh" ]; then
   # shellcheck source=/dev/null
   . "$VR_SELFDIR/restore-lib.sh" 2>/dev/null || true

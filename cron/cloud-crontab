@@ -1,8 +1,42 @@
-23 */3 * * * /home/cloud/IdeaProjects/Predictonomy/ops/agent/run-cycle.sh >> /home/cloud/IdeaProjects/Predictonomy/ops/agent/logs/cron.log 2>&1
+# cron/cloud-crontab — the canonical cloud-user crontab. `install-cron.sh` installs THIS
+# file verbatim (`crontab cron/cloud-crontab`), so it is the only thing a bare-metal
+# restore reproduces. Edit here and run ./install-cron.sh; do NOT `crontab -e`.
+#
+# RECONCILED 2026-08-04. This file had drifted badly from the live crontab, and the drift
+# was one-directional: every operator fix was made with `crontab -e` and never written
+# back. By the time it was noticed the canonical copy still carried the OLD Predictonomy
+# schedules (since corrected for Ubuntu cron ignoring CRON_TZ) and, worse, still had the
+# YOLO Improvement Agent ENABLED after it was deliberately paused on 2026-08-03. Running
+# install-cron.sh would have silently resurrected it.
+#
+# That is the failure mode to guard against: this file is only a source of truth if it is
+# written back to. If you change the live crontab by hand, run
+#     crontab -l > cron/cloud-crontab
+# and commit, or the next DR restore quietly reverts you.
 
-# Predictonomy postgres-backup health check — 01:15 UTC, 15m after the 0 1 * * * CronJob (ops/agent/check-backup.sh)
-CRON_TZ=UTC
-15 1 * * * /home/cloud/IdeaProjects/Predictonomy/ops/agent/check-backup.sh >> /home/cloud/IdeaProjects/Predictonomy/ops/agent/logs/cron.log 2>&1
+# Predictonomy Improvement Agent — 3 scoped cycles/day. Times below are LOCAL
+# (Europe/London), which is the ONLY timezone this cron understands.
+# 2026-07-28 (cycle 0318): widened from `23 */3` (8/day = 56/week) — the weekly quota
+# pool was exhausted TWICE at that rate (06-18 -> 06-19, 10 cycles; 07-26, 5 cycles),
+# every one dying with "You've hit your weekly limit - resets 2am (Europe/London)".
+# 2026-07-28 (cycle 0319): FIXED THE PHASING. Ubuntu's cron (3.0pl1-184ubuntu2, Debian
+# fork) does NOT implement CRON_TZ — `man 5 crontab` documents no such variable and it is
+# accepted as a plain env var, silently ignored as a directive. The `CRON_TZ=UTC` written
+# in 0318 therefore did nothing: `23 4` ran at 04:23 BST = 03:23 UTC, i.e. 37 minutes INTO
+# the 03:00 UTC econ refresh (46-58m) — exactly the window 0318 meant to clear.
+# Fix: schedule in local time, chosen so BOTH offsets are safe. Local 05:23 = 04:23 UTC in
+# BST, 05:23 UTC in GMT — after the ~03:58 UTC refresh completion either way, so DST cannot
+# drift it back into the window. Same for 13:23 / 21:23. Still 3/day = 21/week.
+23 5,13,21 * * * /home/cloud/IdeaProjects/Predictonomy/ops/agent/run-cycle.sh >> /home/cloud/IdeaProjects/Predictonomy/ops/agent/logs/cron.log 2>&1
+
+# Predictonomy postgres-backup health check (ops/agent/check-backup.sh). LOCAL time.
+# 2026-07-28 (cycle 0319): was `CRON_TZ=UTC` + `15 1` intending 01:15 UTC, 15m after the
+# k8s `0 1 * * *` (UTC) postgres-backup CronJob. CRON_TZ is ignored here (see above), so it
+# actually fired 01:15 BST = 00:15 UTC — 45 MINUTES BEFORE the backup it was checking. The
+# script demands a dump dated today (UTC), so it FAILED 45/45 times since 2026-06-14 and
+# pushed a high-priority ntfy alert every night while backups were in fact healthy.
+# Local 02:15 = 01:15 UTC (BST) / 02:15 UTC (GMT) — after the 01:00 UTC backup either way.
+15 2 * * * /home/cloud/IdeaProjects/Predictonomy/ops/agent/check-backup.sh >> /home/cloud/IdeaProjects/Predictonomy/ops/agent/logs/cron.log 2>&1
 
 # Vault auto-unseal — keep the minikube Vault unsealed so backups/secrets never stall (N-0006/N-0009)
 # @reboot starts the ~10s loop; */5 watchdog restarts it if it ever dies (flock = single instance).
@@ -18,16 +52,22 @@ CRON_TZ=UTC
 # of editing this file. Reconciled TO THE LIVE VALUE so re-running install-cron.sh could not
 # silently quadruple the agent's run rate. If */3 was the intent, change it back here and
 # re-run ./install-cron.sh.
-17 */12 * * * /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/run-cycle.sh >> /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/logs/cron.log 2>&1
+# PAUSED INDEFINITELY 2026-08-03 by operator request — the YOLO Improvement Agent
+# no longer runs on a schedule. Its pushes were superseding in-flight Jenkins
+# builds (a build takes ~15 min; the cycle was pushing every 3-6 min), and the
+# operator does not want an unattended agent committing to this repo.
+# To resume: uncomment the line below. Nothing else re-adds it — there is no
+# install-cron.sh in this repo, so this crontab is the only source.
+# 17 */12 * * * /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/run-cycle.sh >> /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/logs/cron.log 2>&1
 # dyingpaleblue Improvement Agent - one scoped cycle every 3h (see ops/agent/README.md)
 41 */3 * * * /home/cloud/IdeaProjects/dyingpaleblue/ops/agent/run-cycle.sh >> /home/cloud/IdeaProjects/dyingpaleblue/ops/agent/logs/cron.log 2>&1
 
 # Alerting-pipeline watch — push to ntfy `yolo-private-cloud-resource-crunch` when the
 # ALERTING PIPELINE itself is broken (Prometheus down, Alertmanager down, Watchdog alert
-# missing, ntfy webhook failing). Was resource-crunch-watch.sh until 2026-08-04; the
-# resource thresholds it used to own moved into Alertmanager, which now notifies ntfy
-# directly. This runs OUTSIDE the cluster on purpose — it is what still speaks when the
-# cluster is the thing that broke, which Alertmanager structurally cannot do for itself.
+# missing, ntfy webhook failing). Was the resource watcher until 2026-08-04; the resource
+# thresholds it owned moved into Alertmanager, which now notifies ntfy directly. This runs
+# OUTSIDE the cluster on purpose — it is what still speaks when the cluster is the thing
+# that broke, which Alertmanager structurally cannot do for itself.
 # Every 5 min; the script debounces (3 consecutive samples = 15 sustained minutes before
 # it speaks, then at most hourly, plus one "cleared" note), so this cadence is sampling
 # frequency, NOT notification frequency. Cheap: two curls + two instant queries.
