@@ -262,7 +262,7 @@ Two findings worth keeping:
   The first deploy was also OOMKilled at a 256Mi limit — it embeds the DCGM host engine and
   NVML; 512Mi plus `GOMAXPROCS=2` is the working shape.
 
-### 18. Ollama exposes no application metrics — ✅ MOSTLY RESOLVED 2026-08-04 (router metrics)
+### 18. Ollama exposes no application metrics — ✅ RESOLVED 2026-08-04 (router metrics + server shim)
 
 `/metrics` returns **404** on both `ollama:11434` and `ollama-router-stats:8080` (checked
 2026-08-04); the router's stats endpoint serves an HTML table, not a Prometheus exposition.
@@ -285,10 +285,24 @@ Plus the `prometheus-k8s` Role/RoleBinding in the `ollama` namespace **with
 `discovery.k8s.io/endpointslices`**, and labels on both Services — they had none, and a
 ServiceMonitor selects on SERVICE labels, so it would have matched nothing and failed silently.
 
-**Still open:** the Ollama *server* remains unmeasured — `/metrics` on `ollama:11434` is still
-404, so tokens/sec, prompt-vs-generation split, model load time and in-server queue depth are
-unavailable. That needs upstream Ollama to expose an endpoint (or a shim in front of it);
-everything measurable from outside the process is now measured.
+**Done (the server itself):** `ollama-metrics-shim` — a stdlib-only observer in the ollama
+repo. `/api/ps` every 15s gives resident models, VRAM, context length and the eviction
+countdown; a small synthetic generation every 5 minutes gives `ollama_probe_tokens_per_second`
+(generation), `ollama_probe_prompt_tokens_per_second` (prefill) and
+`ollama_probe_load_duration_seconds` (model load time). Live on first scrape: 74.8 tok/s
+generation, 5586 tok/s prefill, 9.5 GB resident.
+
+Two design points worth preserving:
+- **It is an observer, never a proxy.** Ollama reports exact per-request timings in each
+  response's final NDJSON chunk, but harvesting them for real traffic means a bespoke proxy
+  between every caller and the model server — yolo included. A bug there breaks production
+  inference to add a monitoring feature. The probe measures the same quantities safely, at the
+  cost of describing a synthetic request; the dashboard says so rather than implying otherwise.
+- **It refuses to probe an idle server**, because that would force a ~9.5 GB cold load — the
+  monitoring system causing the load it exists to measure.
+
+**Remaining (upstream, not actionable here):** in-server queue depth and per-request timings
+for real traffic would need Ollama to expose `/metrics` itself.
 
 ---
 
