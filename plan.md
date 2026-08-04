@@ -234,6 +234,40 @@ than (a)–(c) and pointless while the source of truth is still ambiguous. Seque
 > Do (b) first — it is the only one that can lose work silently, and it is nearly free
 > (a README note buys safety immediately). Then (a), then (c), then reassess (d).
 
+### 17. No GPU metrics in Prometheus — the RTX 3080 Ti is invisible to Grafana (added 2026-08-04)
+
+The box's whole reason for existing is GPU work (ollama, and the quant paths in yolo), and
+Prometheus holds **zero** GPU series. `count({__name__=~".*(DCGM|nvidia|gpu|GPU).*"})` returns
+nothing. The cluster runs the `nvidia-device-plugin` DaemonSet, but that only *schedules*
+GPUs onto pods — it exposes no metrics.
+
+So today GPU utilisation, VRAM and temperature are watched **only** by
+`resource-crunch-watch.sh`, which shells out to `nvidia-smi` on the host every 5 minutes and
+pushes to ntfy `yolo-private-cloud-resource-crunch`. That is a threshold alarm, not history:
+there is no way to answer "was the GPU saturated when ollama got slow last Tuesday", and the
+`Platform / Ollama` dashboard has to carry a text panel explaining the gap.
+
+**Fix:** deploy `dcgm-exporter` (DaemonSet) + a ServiceMonitor in `monitoring`, then add a GPU
+row to `manifests/grafana-dashboardDefinitions-platform.yaml`. Worth checking whether DCGM
+works against this driver/runtime combination before committing to it — on a single-node
+minikube-in-docker setup with GPU passthrough it may need the same `nvidia` runtime the device
+plugin uses. Fallback if DCGM is awkward: a tiny sidecar scraping `nvidia-smi --query-gpu`
+into a textfile for node-exporter's textfile collector.
+
+### 18. Ollama exposes no application metrics at all (added 2026-08-04)
+
+`/metrics` returns **404** on both `ollama:11434` and `ollama-router-stats:8080` (checked
+2026-08-04); the router's stats endpoint serves an HTML table, not a Prometheus exposition.
+So the `Platform / Ollama` dashboard can only show what the kernel and Kubernetes see —
+CPU, memory, throttling, disk, PSI — and nothing about tokens/sec, queue depth, model load
+time, or per-model request counts.
+
+**Fix:** add a Prometheus exposition to `ollama-router` (it already tracks requests by box
+and model for its HTML page, so the data exists — it just is not exposed in a scrapeable
+format), then a ServiceMonitor **plus a `prometheus-k8s` Role granting
+`discovery.k8s.io/endpointslices`** in the `ollama` namespace (see the CLAUDE.md note — without
+that Role the ServiceMonitor is accepted and silently never produces a target).
+
 ---
 
 ## Suggested order of execution
