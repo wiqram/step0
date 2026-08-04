@@ -71,13 +71,21 @@ curl -s -o /dev/null -w '%{http_code}\n' https://predictonomy.com   # 200
   logs in `STEP0/logs/`. The ntfy topic is in the gitignored `STEP0/.env` (`NTFY_URL`). The
   app-specific `check-backup.sh` stays in the **Predictonomy** repo (`ops/agent/`, logs in
   `ops/agent/logs/`) because it checks a Predictonomy CronJob.
-- **The other five ntfy channels are a separate, public registry** (`ntfy-lib.sh`,
+- **The other ntfy channels are a separate, public registry** (`ntfy-lib.sh`,
   `architecture.md` §7a): backups (weekly + nightly WD), `start-scratch` / `restore-scratch`
-  runs, and `yolo-private-cloud-resource-crunch`. That last one is the useful companion to
-  this document — it names *which* resource ran out before a pod gets OOM-killed. It is
-  deliberately silent when the cluster is DOWN: that case is `cluster-autostart.sh`'s
-  `NTFY_URL` alert above, not a resource crunch. `./resource-crunch-watch.sh --status`
-  prints every metric on demand.
+  runs, `yolo-private-cloud-platform` and `yolo-private-cloud-resource-crunch`.
+  - `yolo-private-cloud-platform` is **Alertmanager**, and is the companion to this
+    document: it names *which* resource ran out (CPU/GPU temperature, memory, disk, PVs)
+    before a pod gets OOM-killed, plus every kube-prometheus infrastructure alert.
+  - `yolo-private-cloud-resource-crunch` is now the **alerting-pipeline watchdog**
+    (`alerting-pipeline-watch.sh`, renamed from `resource-crunch-watch.sh` on 2026-08-04).
+    It answers the question the channel above cannot: *is the alerting itself working?*
+    It runs outside the cluster, so it is the one thing that still speaks when Prometheus
+    or Alertmanager is what died. **If you get an alert on this channel, treat silence on
+    the platform channel as unknown rather than healthy.**
+    `./alerting-pipeline-watch.sh --status` prints every probe on demand.
+  - Both are deliberately silent when the cluster is DOWN as a whole: that case is
+    `cluster-autostart.sh`'s `NTFY_URL` alert above.
 - **Schedule:** host crontab (`crontab -l`) — `@reboot` + watchdog for each. Idempotent
   (flock-guarded, re-enforce drift). The crontab is host state, not in any repo.
 - **Docker restart policy:** `docker update --restart=unless-stopped minikube` (re-apply after any

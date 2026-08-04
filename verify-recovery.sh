@@ -247,8 +247,8 @@ else info "root crontab check skipped (needs sudo) — re-run with: sudo ./verif
 # from a healthy system, so a restore that silently dropped it is exactly the thing a
 # post-restore survey should catch. Checked separately from the crontab line above
 # because an OLD cloud-crontab installs cleanly and still lacks the watcher.
-if crontab -l 2>/dev/null | grep -q resource-crunch-watch; then pass "resource-crunch watcher cron present (ntfy yolo-private-cloud-resource-crunch)"
-else warn "resource-crunch watcher NOT in the cloud crontab — re-run ./install-cron.sh"; fi
+if crontab -l 2>/dev/null | grep -q alerting-pipeline-watch; then pass "alerting-pipeline watchdog cron present (ntfy yolo-private-cloud-resource-crunch)"
+else warn "alerting-pipeline watchdog NOT in the cloud crontab — re-run ./install-cron.sh"; fi
 
 # Monitoring wiring. Both of these are silent when wrong — which is the whole reason
 # they belong in a survey rather than in a runbook someone reads after noticing.

@@ -12,13 +12,18 @@ assert_eq() { # $1=actual $2=expected $3=label
 assert_true()  { if "$@"; then echo "ok: $*"; else echo "FAIL: expected success — $*"; fail=1; fi; }
 assert_false() { if "$@"; then echo "FAIL: expected failure — $*"; fail=1; else echo "ok: ! $*"; fi; }
 
-# ---- the five registered channels are exactly the ones the user asked for -------
+# ---- the seven registered channels are exactly the ones the user asked for ------
 assert_eq "$NTFY_TOPIC_BACKUP"           "yolo-private-cloud-backup"         "weekly backup topic"
 assert_eq "$NTFY_TOPIC_WD_BACKUP"        "yolo-wd-cloud-backup"              "nightly WD topic"
 assert_eq "$NTFY_TOPIC_START_SCRATCH"    "yolo-private-cloud-start-scratch"  "start-scratch topic"
 assert_eq "$NTFY_TOPIC_RESTORE_SCRATCH"  "yolo-private-cloud-restore-scratch" "restore-scratch topic"
-assert_eq "$NTFY_TOPIC_RESOURCE_CRUNCH"  "yolo-private-cloud-resource-crunch" "resource-crunch topic"
-assert_eq "$(printf '%s\n' $NTFY_TOPICS | wc -l)" "5" "registry holds 5 topics"
+assert_eq "$NTFY_TOPIC_RESOURCE_CRUNCH"  "yolo-private-cloud-resource-crunch" "pipeline-watchdog topic"
+# The two non-bash publishers: Alertmanager and Grafana POST to ntfy themselves, from
+# inside the cluster, so they never call ntfy_push. Registered regardless — this list is
+# what ntfy-topic-check.sh's manifest scan validates those hardcoded URLs against.
+assert_eq "$NTFY_TOPIC_PLATFORM"         "yolo-private-cloud-platform"       "platform (Alertmanager) topic"
+assert_eq "$NTFY_TOPIC_GRAFANA"          "yolo-grafana"                      "grafana (yolo app alerts) topic"
+assert_eq "$(printf '%s\n' $NTFY_TOPICS | wc -l)" "7" "registry holds 7 topics"
 
 # ---- shape: ntfy's own [-_A-Za-z0-9]{1,64} rule --------------------------------
 assert_true  ntfy_topic_shape_ok "yolo-private-cloud-backup"

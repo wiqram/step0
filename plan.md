@@ -244,6 +244,12 @@ GPUs onto pods — it exposes no metrics.
 So today GPU utilisation, VRAM and temperature are watched **only** by
 `resource-crunch-watch.sh`, which shells out to `nvidia-smi` on the host every 5 minutes and
 pushes to ntfy `yolo-private-cloud-resource-crunch`. That is a threshold alarm, not history:
+
+> *(Superseded 2026-08-04 — this paragraph describes the state before this item was done.
+> GPU alerting now lives in Alertmanager via `manifests/platform-hardware-prometheusRule.yaml`
+> reading DCGM series, and `resource-crunch-watch.sh` was renamed to
+> `alerting-pipeline-watch.sh` and no longer watches hardware at all. See architecture.md §7b.)*
+
 there is no way to answer "was the GPU saturated when ollama got slow last Tuesday", and the
 `Platform / Ollama` dashboard has to carry a text panel explaining the gap.
 

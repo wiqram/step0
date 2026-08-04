@@ -719,7 +719,9 @@ whose push was never actually reachable) are all removed by construction here.
 | `yolo-wd-cloud-backup` | `~/wd-backup/wd-backup.sh run` (02:00, `/etc/cron.d/wd-backup`) | Every run. Bytes copied this run (summed from rsync's own `stats2` blocks) and bytes on the wire, used/free on the 16TB destination, duration. Also on any FATAL *before* rsync starts — a NAS that is off, a mount that won't authenticate — which is precisely when the end-of-run summary would never fire. |
 | `yolo-private-cloud-start-scratch` | `start-scratch.sh` | STARTED at the top, then COMPLETED (with duration and whether app builds were triggered or skipped) or FAILED. `set -e` is on, so an ERR trap names the aborting line and command; the EXIT trap guarantees exactly one closing message either way. |
 | `yolo-private-cloud-restore-scratch` | `restore-scratch.sh` | STARTED, then COMPLETE (with the DNS → `trigger-app-builds.sh` steps that still remain) or FAILED via `die()` with the `--from-phase` resume hint. An EXIT trap catches a run that stops *without* either — a Ctrl-C or a killed session at 03:00. **`--dry-run` sends nothing**: it exists to be re-read repeatedly. |
-| `yolo-private-cloud-resource-crunch` | `resource-crunch-watch.sh` (`*/5`, cloud crontab) | Only when the node is out of headroom, and only after it has *stayed* that way. See below. |
+| `yolo-private-cloud-platform` | **Alertmanager** (kube-prometheus `manifests/alertmanager-secret.yaml`) | Every kube-prometheus infrastructure alert that reaches the `Default` or `Critical` receiver — node CPU/memory/disk, PVs filling, pod crashloops, `TargetDown`, plus this box's CPU/GPU temperature rules from `manifests/platform-hardware-prometheusRule.yaml`. Not a bash publisher: Alertmanager POSTs the webhook itself, and ntfy's `?tpl=yes` templating renders the title/message/priority from the payload. See §7b. |
+| `yolo-grafana` | **Grafana alerting** (the yolo repo's `grafana-alerting-yolo` ConfigMap) | yolo APP alerts only. A separate, deliberately independent alerting system — see §7b. |
+| `yolo-private-cloud-resource-crunch` | `alerting-pipeline-watch.sh` (`*/5`, cloud crontab) | Only when the **alerting pipeline itself** is broken, and only after it has *stayed* that way. See below. |
 
 Topics are **not secrets** — ntfy.sh topics are world-readable *and* world-writable, which is
 why they are committed in the clear and why **no message body may carry a secret, token or
@@ -752,45 +754,103 @@ repo and does this deliberately: it is a NAS-to-NAS job with no other STEP0 depe
 lib, if a topic is hardcoded as a bare URL outside the registry, or if a `ntfy_push` call uses
 a string literal instead of a `$NTFY_TOPIC_*` variable. Run it after touching any of this.
 Unit tests: `tests/test-ntfy-lib.sh`, `tests/test-backup-notification.sh`,
-`tests/test-run-notifications.sh`, `tests/test-resource-crunch-watch.sh` — all offline.
+`tests/test-run-notifications.sh`, `tests/test-alerting-pipeline-watch.sh` — all offline.
 
-### `resource-crunch-watch.sh` — and why it is not just a set of `if`s
+### `alerting-pipeline-watch.sh` — and why it is not just a set of `if`s
 
-There is one node. Jenkins builds, ollama on the single RTX 3080 Ti, and every app share it
-with IntelliJ and Chrome outside the cgroup, so pressure surfaces as a slow website or an
-OOM-killed pod with nothing to say why. Watched every 5 minutes:
+**This file used to be `resource-crunch-watch.sh`** and used to read node CPU/memory, GPU,
+temperatures and disks itself. On 2026-08-04 all of that moved into Alertmanager (§7b), which
+notifies ntfy directly — keeping both would have meant two notifications for every condition.
 
-| Metric | Default limit | Source |
+What replaced it answers a question Alertmanager structurally cannot: **is the alerting itself
+working?** Moving alerting into the cluster creates a hole that cannot be closed from inside
+it. If Prometheus stops evaluating or Alertmanager stops delivering, the symptom is *silence*,
+which is indistinguishable from a healthy machine. Alertmanager cannot page you about being
+down. This script keeps its cron slot and its independence precisely so that something on this
+box still speaks when the cluster is what broke. Probed every 5 minutes:
+
+| Probe | Breach | Source |
 |---|---|---|
-| node CPU % / memory % | 90 / 90 | `kubectl top node` (metrics-server — §5, *not* prometheus-adapter) |
-| kubelet Memory/Disk/PID pressure | any `True` | node conditions — the kubelet's own verdict; DiskPressure precedes image GC and evictions |
-| unschedulable pods | ≥ 1 | Pending **with** `PodScheduled=False/Unschedulable` — the scheduler has already given up. Plain "Pending" is not used; that also covers image pulls |
-| GPU utilisation / memory / temp | 98 % / 90 % / 85 °C | `nvidia-smi` |
-| CPU package temp | 90 °C | `coretemp` hwmon, falling back to the `x86_pkg_temp` zone — **lm-sensors is not installed** |
-| disk `/`, `/var`, `/mnt/minikube-backups` | 90 % | `df` |
+| `prometheus-down` | not 2xx | `GET /-/healthy` on the NodePort. No Prometheus = no rule evaluation = all ~138 rules silently inert |
+| `alertmanager-down` | not 2xx | `GET /-/healthy`. Rules can fire perfectly and still reach nobody if the router is gone |
+| `watchdog-missing` | alert absent | `ALERTS{alertname="Watchdog",alertstate="firing"}`. The **strong** check: a process can answer `/-/healthy` while its rule evaluation is wedged. `Watchdog` is kube-prometheus's always-firing rule, so its absence proves evaluation stopped |
+| `notify-failures` | ≥ 1 in 15m | `alertmanager_notifications_failed_total`. Catches everything being up while the ntfy webhook itself fails — DNS, egress, a typo'd topic |
 
-All limits are env-overridable (`RC_MEM_PCT`, `RC_GPU_TEMP_C`, …).
+Endpoints and limits are env-overridable (`AP_PROM_URL`, `AP_ALERTMANAGER_URL`,
+`AP_NEED_CONSEC`, …). Reached over the **NodePort**, not the ClusterIP — running outside the
+cluster network is the entire point.
 
 Three rules keep the channel worth reading — a channel you mute is worse than none:
 
-1. **Sustained.** A metric must breach `RC_NEED_CONSEC` runs in a row (default 3 = **15
-   minutes**) before it says anything. A build spike is not a crunch.
-2. **Cooldown.** While it stays breached it repeats at most every `RC_COOLDOWN` (default 1h),
+1. **Sustained.** A probe must fail `AP_NEED_CONSEC` runs in a row (default 3 = **15
+   minutes**) before it says anything. A rollout restart is not an outage.
+2. **Cooldown.** While it stays failed it repeats at most every `AP_COOLDOWN` (default 1h),
    not every 5 minutes.
 3. **Recovery.** One "cleared" note when it ends, so an alert never leaves you guessing.
 
-One aggregated push per run, not one per metric — when memory runs short several metrics trip
-together and they are the same event. State lives in `logs/.resource-crunch-state`; deleting
-that file just re-arms everything.
+One aggregated push per run, not one per probe — when the cluster goes down several probes
+trip together and they are the same event. State lives in `logs/.alerting-pipeline-state`;
+deleting that file just re-arms everything.
 
-Two deliberate non-alerts: **the cluster being down** is `cluster-autostart.sh`'s channel, so
-a failing `kubectl top` skips the cluster metrics (host metrics still run) rather than paging
-here; and **an unreadable sensor is never a breach** — a missing GPU or hwmon reads as calm.
-GPU *utilisation* is the weakest signal of the set (ollama pegs the card at 100% during
-inference and that is the machine working), which is why its limit sits at the
-"nothing else can get a slot" line while GPU memory and temperature carry the real warning.
+Two deliberate non-alerts: **the cluster being down** as a whole is `cluster-autostart.sh`'s
+channel; and **a probe that cannot run is never a breach** — if Prometheus is unreachable the
+two Prometheus-derived probes are *skipped* rather than reported, because `prometheus-down`
+already says so and three alerts describing one outage is exactly the noise this avoids.
 
-Inspect without sending anything: `./resource-crunch-watch.sh --status`.
+If this channel speaks, **treat silence on `yolo-private-cloud-platform` as unknown rather
+than healthy** until it clears.
+
+Inspect without sending anything: `./alerting-pipeline-watch.sh --status`.
+
+---
+
+## 7b. Infrastructure alerting — Alertmanager → ntfy
+
+**The rules were always there; nothing was listening.** kube-prometheus ships ~138 alerting
+rules as `PrometheusRule` CRs (`node-exporter-rules`, `kubernetes-monitoring-rules`,
+`kube-state-metrics-rules`, …). Until 2026-08-04 Alertmanager's four receivers —
+`Default`, `Watchdog`, `Critical`, `null` — were **bare names with no configuration**, so every
+one of those rules evaluated, fired, reached Alertmanager and was silently discarded. Six
+alerts were firing when this was found, two of them `critical`, and nothing had ever been sent.
+
+| Receiver | Wired to |
+|---|---|
+| `Default` | ntfy `yolo-private-cloud-platform`, `max_alerts: 5`, priority 3 |
+| `Critical` | same topic, priority 5 (urgent) |
+| `Watchdog` | **deliberately still a no-op** — it fires continuously by design; its *absence* is the signal, checked from outside by `alerting-pipeline-watch.sh` |
+| `null` | `InfoInhibitor`, plus the two minikube false positives below |
+
+**ntfy does the formatting.** Alertmanager's webhook payload is a fixed JSON document — unlike
+Grafana's webhook contact point there is no title/message template to hand it. So the URLs
+carry ntfy's own `?tpl=yes` templating, which renders Go templates in `t=`, `m=` and `p=`
+against the posted JSON. That is why they are unreadable; the decoded templates are in a
+comment at the top of `manifests/alertmanager-secret.yaml`. ASCII only — the rendered title
+becomes an HTTP header, and headers are latin1 (the same constraint as `ntfy_header_safe`).
+
+**Two rules are routed to `null` on purpose.** `KubeSchedulerDown` and
+`KubeControllerManagerDown` fire permanently on this cluster while both components are
+perfectly healthy: minikube binds them to `127.0.0.1`, so they have no Service, kube-prometheus's
+ServiceMonitors find no targets, and the rules — `absent(up{job=...} == 1)` — never clear.
+Deleting the ServiceMonitors makes it *worse*, not better. The real fix is a minikube restart
+with `--extra-config=scheduler.bind-address=0.0.0.0` (and the same for the controller manager)
+plus Services for both; until then the route suppresses two guaranteed false pages. **If you
+ever make them scrapable, delete that route** or you will have muted two genuine alerts.
+
+**This box's own hardware** is the one thing upstream cannot know about, so
+`manifests/platform-hardware-prometheusRule.yaml` adds CPU package temperature (90 °C warning
+/ 95 °C critical), GPU temperature (85 / 90 °C) and GPU framebuffer (90 % full). Thresholds are
+copied from the old `RC_*` defaults so the move did not silently change *when* you get told,
+and `for: 15m` reproduces the old 3-sample debounce. Note **CPU temp is
+`node_thermal_zone_temp{type="x86_pkg_temp"}`**: node-exporter runs with
+`--no-collector.hwmon`, so `node_hwmon_temp_celsius` does not exist here and a rule using it
+would never fire.
+
+**Grafana alerting is a separate system and stays that way.** The yolo app repo owns
+`grafana-alerting-yolo` (→ topic `yolo-grafana`); this is Alertmanager (→
+`yolo-private-cloud-platform`). Grafana can *see* these alerts — kube-prometheus adds an
+`Alertmanager` datasource (uid `platform-alertmanager`) with a matching NetworkPolicy ingress
+rule — but `handleGrafanaManagedAlerts: false` stops Grafana forwarding its own rules here,
+which would hijack the yolo app alerts away from their contact point.
 
 ---
 
@@ -802,9 +862,9 @@ Inspect without sending anything: `./resource-crunch-watch.sh --status`.
 | `restart-minikube.sh` | Warm restart (reuse cluster, idempotent vault, apps commented out) |
 | `minikube-delete-and-upgrade.sh` | Delete cluster, reinstall latest Minikube (kvm2 + GPU addons) |
 | `backup-minikube-mnt.sh` | **Weekly `root` cron** (Mon ~05:00): compress shared volume (secrets + DB snapshots) + nginx + STEP0 + qcguy → dated `.tgz` in `/mnt/minikube-backups`, prune (keep weekly for current+previous month, one per older month), then copy the archive **off-site to the WD Cloud NAS** (`192.168.50.169`, NFS at `/mnt/wdcloud`) with the same month-retention prune (no age floor). See §7 "Off-site copy". |
-| `ntfy-lib.sh` | Sourceable push-notification library: the five-channel registry, latin1-safe header sanitising, fail-soft `ntfy_push`. See §7a. |
-| `ntfy-topic-check.sh` | Read-only gate over §7a — unregistered topics, publishers that stopped sourcing the lib, hardcoded URLs. Exit 1 on a violation. |
-| `resource-crunch-watch.sh` | `*/5` cloud cron: node CPU/memory, kubelet pressure, unschedulable pods, GPU util/memory/temp, CPU temp, disk → ntfy when sustained. `--status` prints everything without sending. See §7a. |
+| `ntfy-lib.sh` | Sourceable push-notification library: the seven-channel registry, latin1-safe header sanitising, fail-soft `ntfy_push`. See §7a. |
+| `ntfy-topic-check.sh` | Read-only gate over §7a — unregistered topics, publishers that stopped sourcing the lib, hardcoded URLs, and (check 5) the **non-bash** publishers: the Alertmanager secret and the Grafana alerting ConfigMap. Exit 1 on a violation. |
+| `alerting-pipeline-watch.sh` | `*/5` cloud cron: Prometheus up, Alertmanager up, `Watchdog` alert firing, notification failures → ntfy when sustained. Runs **outside** the cluster; renamed from `resource-crunch-watch.sh` 2026-08-04 when the resource thresholds moved into Alertmanager. `--status` prints everything without sending. See §7a/§7b. |
 | `reduce-docker-minikube-space.sh` | apt/journal clean + `docker system prune` on host **and** inside Minikube |
 | `reduce-var-space.sh` | Truncate logs, vacuum journald, prune docker |
 | `delete-docker-reg-images.sh` | GC orphaned blobs in the registry |
