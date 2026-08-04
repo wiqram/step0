@@ -91,6 +91,14 @@ sudo -n "$HOME/Ideaprojects/STEP0/enable-devbox-kube-access.sh" || echo "devbox-
 echo "deploying vault"
 cd $HOME/Ideaprojects/vault/
 bash restart-vault.sh
+#################grafana admin login###############
+# Re-assert Grafana's admin login from Vault. Needed on the WARM path too: a
+# minikube stop/start restarts the Grafana pod, and its /var/lib/grafana is an
+# emptyDir — so the user DB, and the admin password with it, is gone again. The
+# monitoring/grafana-admin Secret survives in etcd, so this is normally a no-op that
+# only re-checks; it does not restart Grafana unless the password actually changed.
+"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sync-grafana-admin.sh" \
+  || echo "WARN: grafana admin sync failed; Grafana may be on its default admin/admin."
 #################jenkins###########################
 #create a customer jenkins/inbound-agent with k8s and curl and wget pre-installed and pushed to private repo
 #if [[ "$(docker image inspect 172.16.238.2:5000/jenkins-inbound-agent-vik:cloud 2> /dev/null)" == "" ]]; then

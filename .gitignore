@@ -8,4 +8,9 @@ out
 gen
 # host-script config + logs (added 2026-06-16 for relocated cluster scripts)
 .env
+# ...and any hand-made copy of it. A `cp .env .env.bak-$(date +%s)` before editing is
+# the obvious thing to do, and the result is NOT covered by the `.env` line above — it
+# carries the same live JENKINS_CRED / GRAFANA_ADMIN_PASSWORD and got auto-staged once.
+.env.bak-*
+.env.*.bak
 logs/

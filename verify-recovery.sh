@@ -250,6 +250,35 @@ else info "root crontab check skipped (needs sudo) — re-run with: sudo ./verif
 if crontab -l 2>/dev/null | grep -q resource-crunch-watch; then pass "resource-crunch watcher cron present (ntfy yolo-private-cloud-resource-crunch)"
 else warn "resource-crunch watcher NOT in the cloud crontab — re-run ./install-cron.sh"; fi
 
+# Monitoring wiring. Both of these are silent when wrong — which is the whole reason
+# they belong in a survey rather than in a runbook someone reads after noticing.
+if have kubectl; then
+  # The two metrics APIs must be served by DIFFERENT things. metrics-server losing
+  # metrics.k8s.io means `kubectl top` and every CPU HPA go dark with no error; the
+  # adapter missing custom.metrics.k8s.io means custom HPAs sit at <unknown> forever.
+  rm_owner="$(kubectl get apiservice v1beta1.metrics.k8s.io -o jsonpath='{.spec.service.namespace}/{.spec.service.name}' 2>/dev/null)"
+  case "$rm_owner" in
+    kube-system/metrics-server) pass "v1beta1.metrics.k8s.io owned by metrics-server (kubectl top / CPU HPAs)" ;;
+    "")                         warn "v1beta1.metrics.k8s.io not registered — kubectl top will be empty" ;;
+    *)                          fail "v1beta1.metrics.k8s.io hijacked by $rm_owner — see kube-prometheus manifests/CUSTOM-METRICS.md" ;;
+  esac
+  cm_avail="$(kubectl get apiservice v1beta1.custom.metrics.k8s.io -o jsonpath='{range .status.conditions[?(@.type=="Available")]}{.status}{end}' 2>/dev/null)"
+  if [ "$cm_avail" = "True" ]; then
+    n_cm="$(kubectl get --raw /apis/custom.metrics.k8s.io/v1beta1 2>/dev/null | tr ',' '\n' | grep -c '"name"')"
+    pass "v1beta1.custom.metrics.k8s.io available via prometheus-adapter (${n_cm:-0} metrics offered)"
+  else
+    warn "v1beta1.custom.metrics.k8s.io not available — custom-metric HPAs will report <unknown>"
+  fi
+
+  # Grafana's /var/lib/grafana is an emptyDir, so without this Secret the admin login
+  # silently reverts to the built-in admin/admin on the next pod restart.
+  if kubectl -n monitoring get secret grafana-admin >/dev/null 2>&1; then
+    pass "monitoring/grafana-admin present (Grafana login pinned from Vault)"
+  else
+    warn "monitoring/grafana-admin MISSING — Grafana is on admin/admin; run ./sync-grafana-admin.sh"
+  fi
+fi
+
 VR_SELFDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -x "$VR_SELFDIR/ntfy-topic-check.sh" ]; then
   if "$VR_SELFDIR/ntfy-topic-check.sh" >/dev/null 2>&1; then pass "ntfy channel registry consistent (./ntfy-topic-check.sh)"

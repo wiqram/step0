@@ -327,6 +327,22 @@ ordering (Vault before Jenkins/apps) is what matters here. The vault repo owns i
 
 ### Monitoring — kube-prometheus (`~/Ideaprojects/kube-prometheus/`)
 - Full Prometheus Operator + Grafana + Alertmanager stack in the `monitoring` ns.
+- **The Prometheus CR selects across ALL namespaces** (`serviceMonitorSelector: {}` and
+  `serviceMonitorNamespaceSelector: {}`), so an app's ServiceMonitor is picked up with no
+  change to this stack. But kube-prometheus only grants its `prometheus-k8s` ServiceAccount a
+  namespace `Role` in `default`, `kube-system` and `monitoring` — **an app namespace must ship
+  its own `prometheus-k8s` Role + RoleBinding** (`services`/`endpoints`/`pods`: get/list/watch)
+  or the ServiceMonitor is accepted, appears in the operator's config, and simply never
+  produces a target. No error, no event, nothing. `yolo` ships its own in
+  `k8s/monitoring/servicemonitors.yaml`. Check with:
+  `kubectl auth can-i list endpoints --as=system:serviceaccount:monitoring:prometheus-k8s -n <ns>`.
+- **Grafana's admin login is pinned from Vault** — see "Grafana admin login" below. Its
+  `/var/lib/grafana` is an `emptyDir`, so anything set in the UI (users, passwords, ad-hoc
+  dashboards) is destroyed on every pod restart. Only *provisioned* content survives.
+- **Ownership split with the apps** is documented in that repo's `manifests/YOLO-OWNERSHIP.md`
+  (dashboards/alert rules/ServiceMonitors are the app repo's; the datasources, volume mounts,
+  adapter and APIServices are kube-prometheus's). Don't ship a competing copy from an app repo —
+  a routine `kubectl apply -f manifests/` would silently revert it.
 
 ### Resource metrics — `metrics-server` (`kubectl top` / HPAs)
 > Updated 2026-06-16. This used to read "kube-prometheus replaces metrics-server
@@ -345,12 +361,75 @@ ordering (Vault before Jenkins/apps) is what matters here. The vault repo owns i
 - **No re-claim conflict:** the kube-prometheus `manifests/prometheusAdapter-apiService.yaml`
   (which re-claimed `v1beta1.metrics.k8s.io` for the adapter on every `kubectl apply -f manifests/`)
   has been **removed from that repo**. So a full rebuild — addon enabled + `manifests/` applied —
-  leaves metrics-server as the owner. prometheus-adapter still runs for *custom* metrics
-  (separate APIService).
+  leaves metrics-server as the owner. prometheus-adapter still runs, and now serves the
+  *custom* metrics API — a **different** APIService object (next section).
 - **Verify:** `kubectl get apiservice v1beta1.metrics.k8s.io` (owner should be
   `kube-system/metrics-server`, `Available=True`) and `kubectl top pod -A`.
 - **Background:** the root-cause investigation, durability layers, and watch-items are in
   [`HANDOFF-2026-06-16-metrics-server-and-rollout-fixes.md`](./HANDOFF-2026-06-16-metrics-server-and-rollout-fixes.md).
+
+### Custom metrics — `custom.metrics.k8s.io` (prometheus-adapter) — added 2026-08-04
+
+The two metrics APIs are **different singleton APIServices** and the distinction is the
+whole story here — conflating them is what broke `kubectl top` in June:
+
+| APIService | Served by | Serves | Consumed by |
+|---|---|---|---|
+| `v1beta1.metrics.k8s.io` | `kube-system/metrics-server` | node & pod cpu/memory | `kubectl top`, `type: Resource` HPAs |
+| `v1beta1.custom.metrics.k8s.io` | `monitoring/prometheus-adapter` | app metrics out of Prometheus | `type: Pods`/`type: Object` HPAs |
+
+- **What was missing:** the adapter's ConfigMap carried `resourceRules` only (inert here, see
+  above) and **no `rules:`**, and `custom.metrics.k8s.io` was never registered. Prometheus was
+  scraping yolo's metrics fine — but nothing could turn one into an HPA input, so an HPA
+  pointing at `yolo_grpc_in_flight_requests` would have reported `<unknown>` forever.
+- **What was added (in `~/Ideaprojects/kube-prometheus/`):**
+  `manifests/prometheusAdapter-apiServiceCustomMetrics.yaml` (registers the API) and a `rules:`
+  block in `manifests/prometheusAdapter-configMap.yaml`.
+- **This does NOT re-open the June regression.** The file deleted in `88c88ce8` claimed
+  `metrics.k8s.io`; this one claims `custom.metrics.k8s.io`. They are separate objects and both
+  are expected to exist. Verified after the change: `kubectl top` still works.
+- **Scope is an explicit allowlist** — the prefix group `^(yolo)_` in three `seriesQuery`
+  regexes — not the upstream catch-all, which would have the adapter re-plan every series in
+  Prometheus once a minute on a box that also runs the apps. Adding an app = extend the group.
+- **HPA RBAC needs nothing extra.** The built-in `system:controller:horizontal-pod-autoscaler`
+  ClusterRole already grants `custom.metrics.k8s.io/*` get/list/watch and is already bound.
+  (`kubectl auth can-i` reports a misleading "no" here — it can't resolve these subresources in
+  discovery. A `SubjectAccessReview` confirms `allowed: true`.) Do not add a redundant binding.
+- **Verify:**
+  ```bash
+  kubectl get apiservice v1beta1.custom.metrics.k8s.io                       # Available=True
+  kubectl get --raw /apis/custom.metrics.k8s.io/v1beta1 | jq -r '.resources[].name' | sort
+  kubectl get --raw '/apis/custom.metrics.k8s.io/v1beta1/namespaces/yolo/pods/*/yolo_grpc_in_flight_requests' | jq
+  ```
+- **Full reference:** `~/Ideaprojects/kube-prometheus/manifests/CUSTOM-METRICS.md` — metric
+  list, HPA snippet, the milliseconds/`resource.Quantity` gotcha, and how to onboard an app.
+  HPAs themselves stay in the app repos; only the adapter is ours.
+
+### Grafana admin login — pinned from Vault (`sync-grafana-admin.sh`) — added 2026-08-04
+
+- **The problem:** kube-prometheus mounts Grafana's `/var/lib/grafana` from an **emptyDir**.
+  Grafana keeps its users in a SQLite DB in there, so the admin password set in the UI lasts
+  exactly until the next pod restart, after which the login reverts to the built-in
+  `admin`/`admin` — on a Grafana that NPM publishes to the internet.
+- **The fix:** Grafana re-applies `GF_SECURITY_ADMIN_USER`/`GF_SECURITY_ADMIN_PASSWORD` to the
+  admin account on **every** startup. `grafana-deployment.yaml` now reads both from the
+  `monitoring/grafana-admin` Secret (`secretKeyRef`, `optional: true`).
+- **Chain:** `Vault kv/grafana/admin` → `sync-grafana-admin.sh` → `monitoring/grafana-admin`
+  Secret → Grafana env. **Vault is the source of truth**; the password is in no git repo.
+  Seeded once from `GRAFANA_ADMIN_PASSWORD` in the gitignored `STEP0/.env` (captured by the
+  weekly DR tar, restored by `restore-scratch.sh`), or randomly generated if that is absent.
+  A later `.env` edit does **not** overwrite a live Vault value — use `--reseed` to force it.
+- **Run by:** `start-scratch.sh` (after `start-vault.sh`, which is after the monitoring apply)
+  and `restart-minikube.sh`. Idempotent, and only restarts Grafana when the password changed.
+  `--status` reports the whole chain without touching anything.
+- **Why Grafana does not read Vault directly:** the Vault agent injector's init container
+  blocks until Vault answers, which would make the entire observability stack unable to boot
+  whenever Vault is sealed or down — precisely when you need the dashboards. `optional: true`
+  on the secretKeyRef exists for the same reason: a `kubectl apply -f manifests/` on a cluster
+  where the sync hasn't run must still bring Grafana up, on its default login, rather than
+  wedge the pod in `CreateContainerConfigError`.
+- **Note the trade-off:** the password also lands in etcd as a Secret. On a single-node box
+  where the operator already holds the Vault root token, that is not a meaningful widening.
 
 ### CI/CD — Jenkins (`~/Ideaprojects/jenkins/`)
 - Custom `inbound-agent` image (kubectl + curl + wget pre-installed) pushed to the private registry.

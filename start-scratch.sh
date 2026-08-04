@@ -176,6 +176,15 @@ kubectl create namespace vault --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -f "$(dirname "$SCRIPT_PATH")/k8s/vault-backup/"
 cd $HOME/Ideaprojects/vault/
 bash start-vault.sh
+#################grafana admin login###############
+# Pin Grafana's admin login from Vault (kv/grafana/admin -> monitoring/grafana-admin
+# Secret). MUST run after start-vault.sh (needs Vault unsealed) and after the
+# kube-prometheus apply above (needs the monitoring namespace). Grafana's
+# /var/lib/grafana is an emptyDir, so without this the admin password reverts to the
+# built-in admin/admin on every single pod restart. Best-effort: a monitoring login is
+# not worth aborting a bootstrap that still has apps to deploy.
+"$(dirname "$SCRIPT_PATH")/sync-grafana-admin.sh" \
+  || echo "WARN: grafana admin sync failed; Grafana may be on its default admin/admin."
 #################jenkins###########################
 #create a customer jenkins/inbound-agent with k8s and curl and wget pre-installed and pushed to private repo
 #if [[ "$(docker image inspect 172.16.238.2:5000/jenkins-inbound-agent-vik:cloud 2> /dev/null)" == "" ]]; then
