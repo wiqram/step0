@@ -425,6 +425,43 @@ whole story here — conflating them is what broke `kubectl top` in June:
   list, HPA snippet, the milliseconds/`resource.Quantity` gotcha, and how to onboard an app.
   HPAs themselves stay in the app repos; only the adapter is ours.
 
+### Grafana public access — `root_url` and websockets — fixed 2026-08-04
+
+Two independent faults, both silent in a desktop browser and both breaking other clients:
+
+- **`root_url` was never set**, so Grafana fell back to its default and advertised itself as
+  `http://localhost:3000/` — visible in `/api/frontend/settings` and handed to every caller.
+  A browser survives that (it navigates with relative paths); a phone takes it literally and
+  dials itself. The same bug was minting `localhost` links in **alert notifications** and
+  **share/snapshot URLs**. Fixed in kube-prometheus `manifests/grafana-config.yaml`
+  (`[server] domain` + `root_url = https://grafana.traderyolo.com/`). `enforce_domain` is
+  deliberately **off** so direct NodePort access (`http://172.16.238.2:30330`) keeps working,
+  and `protocol` stays `http` — NPM terminates TLS, the `https` is only what the client sees.
+  Verify: `curl -s https://grafana.traderyolo.com/login | grep -o '"appUrl":"[^"]*"'`.
+- **Websockets were disabled on the NPM proxy host**, so `/api/live/ws` returned 400 in a
+  retry loop and Grafana Live (real-time streaming panels) never worked. Enabled on proxy
+  host 15; `data/nginx/proxy_host/15.conf` now carries the `Upgrade`/`Connection`/
+  `proxy_http_version` directives. Verify with a **forced HTTP/1.1** handshake — over HTTP/2
+  a classic `Upgrade:` handshake is invalid by definition and returns 400 regardless:
+  `curl -sD- -o/dev/null --http1.1 -u <admin> -H 'Connection: Upgrade' -H 'Upgrade: websocket'
+  -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+  https://grafana.traderyolo.com/api/live/ws` → expect `101 Switching Protocols`.
+
+**Durability differs between the two.** `root_url` lives in `kube-prometheus/manifests/`, which
+`start-scratch.sh` applies wholesale, so it is reproduced on any rebuild. The websocket setting
+lives in **nginx-proxy-manager's own database**, not in any repo — it survives only because
+`backup-minikube-mnt.sh` archives `/home/cloud/Ideaprojects/nginx` and `restore-scratch.sh`
+restores it. That is by design (NodePort↔domain mapping is NPM's, not this repo's), but it
+means a *manually rebuilt* NPM needs the toggle re-set by hand.
+
+> **Footnote — the Grafana mobile app does not work here, and cannot.** The app is
+> **Grafana IRM**, which requires the Cloud-only `grafana-irm-app` plugin; the access log shows
+> it requesting `/api/plugins/grafana-irm-app/settings` → **404**. Its OSS predecessor
+> (`grafana-oncall-app`) was archived in March 2026 along with the Cloud push relay. The
+> `root_url` fix above was necessary but is not sufficient — no configuration on this box will
+> make that app connect. Use the mobile web UI (Add to Home Screen) for dashboards, and ntfy
+> for push (§7a/§7b).
+
 ### Grafana admin login — pinned from Vault (`sync-grafana-admin.sh`) — added 2026-08-04
 
 - **The problem:** kube-prometheus mounts Grafana's `/var/lib/grafana` from an **emptyDir**.
@@ -866,6 +903,7 @@ which would hijack the yolo app alerts away from their contact point.
 | `ntfy-topic-check.sh` | Read-only gate over §7a — unregistered topics, publishers that stopped sourcing the lib, hardcoded URLs, and (check 5) the **non-bash** publishers: the Alertmanager secret and the Grafana alerting ConfigMap. Exit 1 on a violation. |
 | `alerting-pipeline-watch.sh` | `*/5` cloud cron: Prometheus up, Alertmanager up, `Watchdog` alert firing, notification failures → ntfy when sustained. Runs **outside** the cluster; renamed from `resource-crunch-watch.sh` 2026-08-04 when the resource thresholds moved into Alertmanager. `--status` prints everything without sending. See §7a/§7b. |
 | `reduce-docker-minikube-space.sh` | apt/journal clean + `docker system prune` on host **and** inside Minikube |
+| `reduce-node-docker-cache.sh` | **Daily 04:30 cloud cron — what keeps `/var` flat.** Caps buildkit on the node (3GB) AND the host (2GB), and removes orphaned named build-cache volumes via an ALLOWLIST. Added host-side 2026-08-04 after `/var` hit 90% and the kubelet declared `DiskPressure=True`, tainting the node so Prometheus itself sat Pending — the script had been running daily but only pruned the node, while the 11GB sat in host Jenkins cache volumes. ⚠️ Never replace the allowlist with `docker volume prune`: the unused-volume list also holds `nginx_npm_data`, `letsencrypt` and a DB volume. `--dry-run` available. |
 | `reduce-var-space.sh` | Truncate logs, vacuum journald, prune docker |
 | `delete-docker-reg-images.sh` | GC orphaned blobs in the registry |
 | `remove-old-snaps.sh` | Remove disabled snap revisions |
