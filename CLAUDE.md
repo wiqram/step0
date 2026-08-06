@@ -16,8 +16,12 @@ a new app" scaffolding**), and `plan.md` for the improvement backlog.
 > **Cluster unhealthy after a reboot/crash? → read [`RESTART-RECOVERY.md`](./RESTART-RECOVERY.md) FIRST**
 > (warm-vs-cold decision, what auto-recovers — auto-start + Vault auto-unseal — and a symptom→fix triage).
 
+> **Swapping the boot disk / fresh OS install? → [`GM9000-MIGRATION.md`](./GM9000-MIGRATION.md)**
+> (the 2026-08 OS-disk → 4TB NVMe migration runbook: what's actually in the box, partition
+> plan, the pre-shutdown quiesced backup, and a phase-by-phase `restore-scratch.sh` walkthrough).
+
 STEP0 is the **bootstrap layer** for a single-node, GPU-accelerated private cloud
-running on one Ubuntu workstation (`private-cloud`: i9-12900K / 48 GB / RTX 3080 Ti /
+running on one Ubuntu workstation (`private-cloud`: i9-12900K / 96 GB / RTX 3080 Ti /
 ASUS ProArt Z690). It is a collection of bash scripts — **not** an application
 codebase. The flagship file is `start-scratch.sh`, which brings the entire stack up
 from a clean machine.
