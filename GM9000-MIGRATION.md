@@ -562,12 +562,22 @@ only do this after you are certain the new system is the system.
 2. **Phase 2 copies the archive into `/mnt/minikube-backups` *before* phase 3 mounts the
    labelled disk over that path** — on true bare metal the copy can be shadowed by the
    later mount. Pre-mounting the disks (§5.2) sidesteps it; worth reordering some day.
-3. **The weekly archive has grown 21G → 41G in six weeks.** The registry blob store is
-   bind-mounted *inside* `minikube-mnt`, so tar sweeps it up — while the restore design
-   explicitly assumes "registry starts empty, Jenkins rebuilds". Either exclude
-   `container-registry-images` from the tar (halves the archive) or schedule
-   `delete-docker-reg-images.sh`; today's growth rate eventually pressures both `sdb1`
-   and the WD share.
+3. **The weekly archive has grown 21G → 41G in six weeks — and it is the registry.**
+   The blob store is bind-mounted *inside* `minikube-mnt`, so tar sweeps it up: a full
+   listing of the 08-03 archive attributes **34.03 GB (~83%) to
+   `container-registry-images`** (next largest: nginx 6.9G, jenkins 2.2G,
+   predictonomy-backups 1.7G; docker blobs are pre-compressed so they pass ~1:1 into
+   the tgz). Root cause of the store's growth: the yolo pipeline pushes a `bNNNN` tag
+   per service per build and nothing prunes — 8 services × **302 tags** each (+
+   marketstream 97) vs exactly 1 tag for every other app. At +4–6G/week the retention
+   math fills `sdb1` (164G free) **before the September prune relief** — this needs
+   fixing BEFORE the migration's same-day backup. Fix layers: (a) `--exclude` the
+   registry dir from the tar (archive drops to ~7G; matches the documented "registry
+   rebuilds via Jenkins" DR contract) + dump a `_catalog`/tags listing into the archive
+   instead; (b) prune old build tags via the registry API (registry:3,
+   `REGISTRY_STORAGE_DELETE_ENABLED=true`) then `garbage-collect` — note
+   `delete-docker-reg-images.sh` is a Registry-**v1** relic and does NOT work on this
+   store.
 4. `CLAUDE.md` said 48 GB RAM; the box has 96 GB (upgraded with the 64G minikube
    envelope). Fixed in the same commit as this file.
 
