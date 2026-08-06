@@ -140,6 +140,13 @@ for d in ~/IdeaProjects/*/; do [ -d "$d/.git" ] || continue
 ```
 Uncommitted work survives on the old disk regardless, but pushed > salvaged.
 
+*Sweep run 2026-08-06:* 12 repos dirty (mostly untracked/fork noise — fine), two need
+real attention: **IG-Trading-Microservices had 1 unpushed commit** (`dae3755`,
+captured as a patch in the §2.4b bundle — push it before swap day) and
+**`ollama-dev` has NO git remote at all** (21 dirty files, 16G; copied into the
+bundle — give it a private GitHub remote as a follow-up, it's load-bearing: the
+ollama service PATH points into its quant-trainer venv).
+
 **2. Windows prep (in Windows, once):** if C: is BitLocker-encrypted
 (`manage-bde -status`), save the recovery key to your Microsoft account or paper —
 BIOS boot-order changes can trip a recovery prompt. Turn OFF Fast Startup (Control
@@ -149,10 +156,23 @@ dirty-mounted while you're re-cabling disks.
 **3. Router reservations:** eno2 `bc:fc:e7:e7:4e:e4` → 192.168.50.161 (keeps the OOB
 address stable — prod's `verify-recovery.sh` probes it).
 
+**3b. BitLocker: already verified OFF** (2026-08-06, from Linux — `sda3`/`sda5` probe
+as plain `ntfs`, which an encrypted volume would not). Only the Fast Startup check in
+§2.2 still needs a Windows boot.
+
 **4. Plan the prod impact:** while the dev box is down, prod loses the dev ollama
 endpoint (`10.10.10.2:11434`) and whatever consumes it degrades; the 10GbE watchdog on
 prod will note the dead peer (that's it working). No prod action needed — everything
 self-recovers when §6 completes.
+
+**4b. Belt-and-braces bundle — done 2026-08-06.** Because the box has no backup and
+the 980 gets physically handled, the small irreplaceables were pulled over the 10GbE
+to **prod `/mnt/minikube-backups/migration-handoff-devbox/`**: `~/.ssh`, `.gitconfig`,
+`.kube`, `.jenkins-deploy-urls.env`, `~/bin`, the ollama units (incl. the RESOLVED
+`ollama-warm.service` symlink target), `/etc/fstab`, the eno1 NM profile dump, vik's
+crontab, both MACs, the `dae3755` patch, the full ollama model store (~4.8G, incl.
+the two custom models) and the remote-less `ollama-dev` repo (16G, venvs excluded).
+The old disk remains the primary safety net; this covers the 980 dying in-hand.
 
 **5. Shut down cleanly:**
 ```bash
@@ -239,6 +259,10 @@ cp -a $O/.config/JetBrains $O/.local/share/JetBrains ~/.config/ ~/.local/share/ 
 cp -a $O/android $O/go ~/ 2>/dev/null                 # SDKs — cheaper to copy than re-download
 cp -a $O/Documents $O/Desktop $O/Downloads ~/ 2>/dev/null
 cp -a $O/10gbe-link-watchdog.sh ~/                    # or take it fresh from STEP0
+cp -a $O/.local/opt ~/.local/ 2>/dev/null             # OpenRGB AppImage (crontab uses it)
+# vik's crontab is a single @reboot OpenRGB lights-off line — restore it straight
+# off the old disk (or from the §2.4b bundle's text/vik-crontab.txt):
+sudo cat /mnt/old/var/spool/cron/crontabs/vik | crontab -
 ```
 Repos: prefer **fresh clones** into `~/IdeaProjects` (push happened in §2.1); copy any
 directory that had uncommitted work from `$O/IdeaProjects/` instead. Browser profiles
@@ -252,8 +276,10 @@ models) and two models are **custom local builds** that `ollama pull` cannot rec
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh          # installs binary + base unit
 sudo systemctl stop ollama
+sudo cp -a /mnt/old/etc/systemd/system/ollama.service /etc/systemd/system/     # full unit is custom too
 sudo cp -a /mnt/old/etc/systemd/system/ollama.service.d /etc/systemd/system/
-sudo cp -a /mnt/old/etc/systemd/system/ollama-warm.service /etc/systemd/system/ 2>/dev/null
+# ollama-warm.service is a SYMLINK into the ollama repo — clone wiqram/ollama first, then:
+sudo ln -sf /home/vik/IdeaProjects/ollama/dev/ollama-warm.service /etc/systemd/system/ollama-warm.service
 sudo rsync -a /mnt/old/usr/share/ollama/ /usr/share/ollama/    # ~4.8G model store, owner ollama:ollama
 sudo chown -R ollama:ollama /usr/share/ollama
 sudo systemctl daemon-reload && sudo systemctl enable --now ollama ollama-warm
