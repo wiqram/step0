@@ -141,8 +141,8 @@ for d in ~/IdeaProjects/*/; do [ -d "$d/.git" ] || continue
 Uncommitted work survives on the old disk regardless, but pushed > salvaged.
 
 *Sweep run 2026-08-06:* 12 repos dirty (mostly untracked/fork noise — fine), two need
-real attention: **IG-Trading-Microservices had 1 unpushed commit** (`dae3755`,
-captured as a patch in the §2.4b bundle — push it before swap day) and
+real attention: **IG-Trading-Microservices had 1 unpushed commit** (`dae3755` —
+**pushed 2026-08-06**, the repo's pre-push submodule-proto gate passing) and
 **`ollama-dev` has NO git remote at all** (21 dirty files, 16G; copied into the
 bundle — give it a private GitHub remote as a follow-up, it's load-bearing: the
 ollama service PATH points into its quant-trainer venv).
