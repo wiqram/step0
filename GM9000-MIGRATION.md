@@ -176,7 +176,8 @@ throughout the migration window.
 survives, so this is belt-and-braces, but 2 minutes now beats mounting the old root later:
 
 ```bash
-H=/mnt/kachra/migration-handoff && mkdir -p $H
+# on sdb1 (NOT /mnt/kachra — its root is not writable by the cloud user)
+H=/mnt/minikube-backups/migration-handoff && mkdir -p $H
 cp -a ~/.ssh $H/ssh 2>/dev/null                      # SSH keys (dev-box access etc.)
 cp -a ~/.gitconfig $H/ 2>/dev/null
 cp -a ~/.docker/config.json $H/docker-config.json 2>/dev/null   # docker hub login (if any)
@@ -336,7 +337,7 @@ gh repo clone wiqram/step0 ~/Ideaprojects/STEP0         # exact casing: Ideaproj
 ```
 
 Also reinstall the small host tools that live outside apt and are needed by the vault
-tooling: copy `sops` and `age` from the salvage bundle (`/mnt/kachra/migration-handoff/local-bin/`)
+tooling: copy `sops` and `age` from the salvage bundle (`/mnt/minikube-backups/migration-handoff/local-bin/`)
 into `~/.local/bin/` (and ensure `~/.local/bin` is on PATH), or fetch fresh releases.
 
 **6. Docker Hub login — after phase 1 installs docker** (restore-scratch phase 9 item B):
