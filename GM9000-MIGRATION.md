@@ -1,5 +1,5 @@
 # GM9000-MIGRATION.md — OS-disk swap to a 4TB NVMe, fresh Ubuntu, full restore
-
+fix restore-scratch.sh cgroup driver and push
 Runbook for replacing the boot disk of `private-cloud` with a **4TB Acer Predator GM9000
 NVMe** in slot **M.2_1**, fresh-installing Ubuntu, and bringing the private cloud back to
 full production via `restore-scratch.sh`. Written 2026-08-06 from a live survey of the box.
