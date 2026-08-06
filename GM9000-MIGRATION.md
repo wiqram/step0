@@ -53,6 +53,88 @@ soak checks). Nothing keeps serving while the box is down; pick a quiet window.
 
 ---
 
+## 0.5 Quick reference — every step in chronological order
+
+*(Condensed from §§2–9; each step names its detail section. Steps marked ✅ were
+completed on 2026-08-06 — re-verify only if days have passed.)*
+
+**A. Any time before swap day**
+1. ✅ Push all repos; verify STEP0 clean + pushed (§2.1). Re-run the sweep if days passed.
+2. ✅ Baseline `./verify-recovery.sh` → 32 PASS / 0 FAIL (§2.2).
+3. ✅ Salvage bundle at `/mnt/minikube-backups/migration-handoff/` (§2.5).
+4. ✅ Registry pruned (kachra 2.9G) + backup slimmed to ~7G (§10.3).
+5. ☐ **Router admin (192.168.50.1): DHCP reservation** MAC `50:eb:f6:3e:91:4f` →
+   192.168.50.53; confirm the 80/443 port-forwards to .53 (§2.3).
+6. ☐ Open this file on your phone/dev box (github.com/wiqram/step0).
+
+**B. Swap day — on the OLD system (~45 min)**
+7. `cd ~/Ideaprojects/nginx && docker compose stop` — stops public traffic (§2.4).
+8. `minikube stop` — cluster flushes to sdb; autostart cron respects the stop (§2.4).
+9. `sudo bash ~/Ideaprojects/STEP0/backup-minikube-mnt.sh` (~10 min, ~7G). Verify the
+   ntfy "Weekly backup OK" note, tar rc=0, today's archive on BOTH
+   `/mnt/minikube-backups/` and `/mnt/wdcloud/` (§2.4).
+10. `sudo shutdown -h now`.
+
+**C. Hardware (~20 min)**
+11. Unplug the SATA **data cables** of BOTH drives (840 EVO + WD HDD); note which ports (§3).
+12. Fit the GM9000 into **M.2_1** under the board heatsink (peel the pad film; keep the
+    drive's label on) (§3).
+13. BIOS: drive detected at PCIe 4.0 x4; **disable VMD**; Secure Boot stays off (§3).
+
+**D. Ubuntu install (~45 min)**
+14. Boot Ubuntu **24.04.x LTS Desktop** USB → "Something else" manual partitioning per
+    §1.2: ESP 1G · `/` 120G · `/var` 120G · `/home` 600G · `/var/lib/docker` 900G ·
+    ~2 TiB left free. All ext4.
+15. Username **`cloud`**, hostname `private-cloud`, timezone **Europe/London** (§4).
+16. First boot: `sudo apt update && sudo apt full-upgrade -y`, then power off (§4).
+17. Reconnect both SATA drives; BIOS boot order = the new NVMe "ubuntu" entry first.
+    Boot and verify: `lsblk` shows sda/sdb intact, `ip -4 addr` shows 192.168.50.53 (§4).
+
+**E. Pre-restore setup (~30 min, all §5)**
+18. GRUB: set `GRUB_CMDLINE_LINUX_DEFAULT="intel_iommu=on systemd.unified_cgroup_hierarchy=0"`,
+    `sudo update-grub`, reboot; verify with `cat /proc/cmdline` (§5.1).
+19. fstab: add the `minikube-backups` + `Kachra` by-label mounts (+ the `/var/lib/docker`
+    line if the installer couldn't set it); `sudo mount -a`; confirm the archives and
+    `migration-handoff/` are visible (§5.2).
+20. `sudo apt install -y zram-tools` → `/etc/default/zramswap`: `ALGO=zstd` `PERCENT=35`;
+    restart zramswap (§5.3).
+21. Append the five `/etc/hosts` lines (copy from `migration-handoff/hosts`) (§5.4).
+22. `sudo apt install -y gh git` → `gh auth login` → `gh auth setup-git`; restore
+    `.gitconfig`, `~/.ssh`, `~/.docker/config.json` and `~/.local/bin` (sops/age) from
+    the handoff bundle; `mkdir -p ~/Ideaprojects ~/IdeaProjects`;
+    `gh repo clone wiqram/step0 ~/Ideaprojects/STEP0` (§5.5–5.6).
+
+**F. The restore (~2–4 h, §6)**
+23. `cd ~/Ideaprojects/STEP0 && ./restore-scratch.sh` → type `restore`. Watch ntfy
+    `yolo-private-cloud-restore-scratch` + `-start-scratch`.
+24. When phase 1 finishes installing the NVIDIA driver: **reboot, then re-run
+    `./restore-scratch.sh`** — it resumes from the phase marker. Verify `nvidia-smi`.
+25. Let phases 2–9 run (backup pull ≈ 7G, extract, clones, start-scratch ≈ 30–60 min,
+    nginx, automation, verify + handoff printout).
+
+**G. Apps back + sign-off (~1 h, then 48 h soak, §6–§7)**
+26. Verify the public path (no DNS change needed): `dig +short jenkins.traderyolo.com`
+    equals `curl -s ifconfig.me`; `https://jenkins.traderyolo.com` loads.
+27. `./trigger-app-builds.sh` (registry survived on sdb2, so pulls are warm; ollama
+    models survived too — no re-pull).
+28. Walk §7: all pods Running, `kubectl top` works, GPU visible, Grafana login, every
+    NPM-fronted domain serves over HTTPS from outside the LAN.
+29. `./verify-recovery.sh` → 0 FAIL; run `sudo bash backup-minikube-mnt.sh` once to
+    prove the backup path on the new OS.
+30. Dev box: `kubectl --context prod-minikube get ns` answers; `jenkins-deploy` works.
+31. 48-hour soak: no unexpected ntfy alerts; Monday's automatic backup lands on both disks.
+
+**H. Weeks later**
+32. Old 840 EVO: untouched ≥2 weeks as the BIOS-boot-menu rollback, then
+    `smartctl` check → wipe → `/mnt/scratch` or shelf it (§9).
+33. Optional: measure `sdb` with `iostat -x 5`; only if it's the bottleneck, do the §8
+    NVMe platform-data move.
+
+**Rollback at ANY point:** BIOS boot menu → the old drive's ubuntu entry — the complete
+pre-migration system is still on it (§9).
+
+---
+
 ## 1. Partitioning the 4TB GM9000 (what goes where, and why)
 
 ### 1.1 Design goals
