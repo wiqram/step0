@@ -19,6 +19,8 @@ a new app" scaffolding**), and `plan.md` for the improvement backlog.
 > **Swapping the boot disk / fresh OS install? → [`GM9000-MIGRATION.md`](./GM9000-MIGRATION.md)**
 > (the 2026-08 OS-disk → 4TB NVMe migration runbook: what's actually in the box, partition
 > plan, the pre-shutdown quiesced backup, and a phase-by-phase `restore-scratch.sh` walkthrough).
+> The **dev box's** equivalent (Samsung 9100 PRO, dual-boot Windows/Ubuntu, ollama + 10GbE
+> rewiring) is [`DEVBOX-9100PRO-MIGRATION.md`](./DEVBOX-9100PRO-MIGRATION.md).
 
 STEP0 is the **bootstrap layer** for a single-node, GPU-accelerated private cloud
 running on one Ubuntu workstation (`private-cloud`: i9-12900K / 96 GB / RTX 3080 Ti /
