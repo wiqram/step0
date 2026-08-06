@@ -19,7 +19,7 @@ Verified via `lsblk`/`lspci`:
 | Device | What it is | Holds |
 |---|---|---|
 | `sda` | **Samsung 840 EVO 250GB — 2.5″ SATA SSD** (a ~2014-era drive on a SATA cable, not in any M.2 slot; the 840 EVO was never made in M.2 form) | `sda3` ESP, `sda5` `/` (26G used), `sda6` `/home` (72G used, **96% full**), `sda7` `/var` (87G used, 86% — all of docker/minikube lives here) |
-| `sdb` | WD Blue 1TB **HDD** (SATA) | `sdb1` `/mnt/minikube-backups` — weekly DR archives (~186G) **and the LIVE `minikube-mnt`** (~60G: vault-data, JENKINS_HOME, grafana-data, every app DB, ollama models 13G); `sdb2` `/mnt/kachra` — live registry blobs (37G, bind-mounted into minikube-mnt); `sdb3` unused |
+| `sdb` | WD Blue 1TB **HDD** (SATA) | `sdb1` `/mnt/minikube-backups` — weekly DR archives (~186G) **and the LIVE `minikube-mnt`** (~60G: vault-data, JENKINS_HOME, grafana-data, every app DB, ollama models 13G); `sdb2` `/mnt/kachra` — live registry blobs, bind-mounted into minikube-mnt (2.9G since the 2026-08-06 prune; was 37G); `sdb3` unused |
 | — | **No NVMe device exists in the system today.** All four M.2 slots are empty (no NVMe controller on the PCI bus; Intel VMD reports zero child devices) | — |
 
 **Consequences for the plan:**
@@ -539,8 +539,8 @@ only do this after you are certain the new system is the system.
 | RAM / swap | 96 GB DDR5; zram-tools zstd 35% (~33G), no disk swap |
 | Timezone | Europe/London (crontab times are local) |
 | NAS | DR/off-site: WD Cloud NFS 192.168.50.169:/nfs/private-cloud → /mnt/wdcloud (hard,nofail,automount); tenant SMB pair .68→.251 |
-| Backups on sdb1 | weekly `private-cloud-MM-DD-YY.tgz`, latest 2026-08-03 41G; live `minikube-mnt` ~60G incl. ollama models 13G |
-| Registry blobs | `/mnt/kachra/container-registry-images` (37G) bind → `minikube-mnt/container-registry-images` |
+| Backups on sdb1 | weekly `private-cloud-MM-DD-YY.tgz`, latest 2026-08-03 41G (~7G from the next run — registry excluded); live `minikube-mnt` ~60G incl. ollama models 13G |
+| Registry blobs | `/mnt/kachra/container-registry-images` bind → `minikube-mnt/container-registry-images`; 2.9G after the 2026-08-06 prune (was 37G) |
 | Minikube | `--cpus 16 --memory 65536 --disk-size 40g --driver=docker --gpus all --network 5million --mount minikube-mnt→/mnt` |
 | Board / drive | ProArt Z690-CREATOR WIFI (M.2_1 = CPU Gen4 x4); GM9000 4TB Gen5 (runs Gen4 here — expected) |
 
@@ -576,9 +576,16 @@ only do this after you are certain the new system is the system.
    the documented "registry rebuilds via Jenkins" DR contract) and refreshes a
    `registry-catalog.txt` repos+tags snapshot into `minikube-mnt` instead; (b)
    `prune-registry.sh` (dry-run by default, `--apply` to act) prunes old build tags by
-   **digest keep-set** and GCs the store — dry-run on 2026-08-06 reported 617 deletable
-   manifests with 71 shared digests correctly spared. Run it with Jenkins idle to
-   reclaim most of kachra's 37G. Note `delete-docker-reg-images.sh` is a
+   **digest keep-set** and GCs the store — **applied 2026-08-06 with Jenkins idle:
+   617 manifests deleted, GC + registry restart clean, kachra 37G → 2.9G (~34G
+   reclaimed)**. Verified afterwards: all 21 repos present, every named tag
+   (`latest`/`cloud`) resolves, no new unhealthy pods; surviving extra `bNNNN` tags
+   are aliases of spared (shared-digest) manifests and cost nothing.
+   `registry-catalog.txt` was re-snapshotted post-prune (each backup run refreshes it
+   anyway; a quiesced/dark registry keeps the previous snapshot rather than truncating).
+   Re-run the prune every few weeks or after a build burst, always with Jenkins idle;
+   if it ever moves to cron it must register a ntfy topic + `ntfy-topic-check.sh`
+   entry per the house alerting convention. Note `delete-docker-reg-images.sh` is a
    Registry-**v1** relic and does NOT work on this store.
 4. `CLAUDE.md` said 48 GB RAM; the box has 96 GB (upgraded with the 64G minikube
    envelope). Fixed in the same commit as this file.
