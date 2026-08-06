@@ -386,6 +386,13 @@ echo '/dev/disk/by-label/Kachra /mnt/kachra auto nosuid,nodev,nofail,x-gvfs-show
 #   echo '/dev/disk/by-partuuid/<p5-uuid> /var/lib/docker ext4 defaults 0 2' | sudo tee -a /etc/fstab
 sudo systemctl daemon-reload && sudo mount -a
 ls /mnt/minikube-backups/   # expect: minikube-mnt/, private-cloud-*.tgz incl. your §2 fresh one
+
+# Guard the /var-vs-docker split: if the /var/lib/docker mount were ever absent on a
+# boot (fstab typo, fsck hold), dockerd would silently write into the empty dir on the
+# 120G /var and fill it. This makes docker refuse to start without its mount instead.
+# Safe to create before docker is installed — the drop-in applies when the unit appears.
+sudo mkdir -p /etc/systemd/system/docker.service.d
+printf '[Unit]\nRequiresMountsFor=/var/lib/docker\n' | sudo tee /etc/systemd/system/docker.service.d/require-docker-mount.conf
 ```
 
 Do **not** pre-create the registry bind — `ensure-registry-store.sh` (run inside
