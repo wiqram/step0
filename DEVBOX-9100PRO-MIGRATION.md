@@ -318,6 +318,11 @@ Then pick the 980's future:
   NTFS "Stuffs" data disk. End state: every OS on NVMe, each disk single-purpose,
   each with its own ESP. Remove the old `\EFI\ubuntu` from sda1 and the stale
   `ubuntu` boot entry (`efibootmgr -B`) as part of this cleanup.
+  *Why not put Windows on the 9100 PRO instead?* Windows' daily feel is bounded by
+  low-QD random latency, where a Gen3 and a Gen5 NVMe are near-identical — the 980
+  captures ~95% of the perceptible jump from SATA. Sharing the 9100 PRO would also
+  re-share one ESP between the OSes (the exact coupling this migration removed) and
+  cost ~450G of the dev disk's free tail for a difference you won't feel.
 - **Simpler** — wipe the 980 → single ext4 → `/mnt/fast` Ubuntu scratch (emulators,
   datasets, build dirs).
 - **Laziest** — shelve it untouched as the frozen pre-migration Ubuntu.
