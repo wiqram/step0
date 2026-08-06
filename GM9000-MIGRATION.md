@@ -10,6 +10,52 @@ full production via `restore-scratch.sh`. Written 2026-08-06 from a live survey 
 
 ---
 
+## STATUS — what actually happened, 2026-08-06 (read this before anything else)
+
+**The migration is DONE, but it was NOT executed the way §§3–6 describe.** The GM9000 was
+populated by **cloning the running 24.04 system off `sda` with `rsync`**, not by a fresh
+install followed by `restore-scratch.sh`.
+
+Why the deviation: a fresh install of **Ubuntu 26.04** was attempted first and failed
+part-way, leaving a 111.8 GiB ext4 root with no ESP and no user account. 26.04 is also
+precisely what §4 forbids — so rather than retry the install, the live 24.04 system was
+cloned onto the new drive. That kept the proven stack and skipped the 4–8 h restore
+window entirely. Public downtime was effectively nil; the NPM containers never stopped.
+
+| Section | Status |
+|---|---|
+| §1.2 partition layout | ✅ **applied exactly** (as-built table below) |
+| §2 prep / backups | ✅ NPM DB dump taken; old disk left untouched |
+| §3 hardware + BIOS | ⚠️ partial — drive fitted in M.2_1, linked **PCIe 4.0 x4 as predicted**; **VMD left ON** (harmless: the drive enumerates at `02:00.0` under root port `00:06.0`, not under the VMD controller) |
+| §4 fresh Ubuntu install | ❌ **not done — superseded by the clone** |
+| §5 pre-restore setup | ❌ **moot** — GRUB cmdline, zram, `/etc/hosts`, `gh` auth, SSH keys and every credential came across in the clone. Do **not** re-run it. |
+| §6 `restore-scratch.sh` | ❌ **not run** |
+| §7 sign-off | ⏳ outstanding (see the cluster note below) |
+| §9 old-disk rollback | ✅ intact — boot entry had to be recreated, see §9 |
+
+**As-built layout** (`/dev/nvme0n1`, GPT, 2.0 TiB tail deliberately left free per §1.2):
+
+| Part | Size | Label | Mount | UUID |
+|---|---|---|---|---|
+| p1 | 1 GiB | `ESP` | `/boot/efi` | `80D2-3A6D` |
+| p2 | 120 GiB | `ubuntu-root` | `/` | `5b0e60ad-959b-4baf-bc0b-59db9cc9f5bf` |
+| p3 | 120 GiB | `ubuntu-var` | `/var` | `dc0ec04b-e04e-41ca-bc89-51e773dfa6e9` |
+| p4 | 600 GiB | `ubuntu-home` | `/home` | `097e811e-8034-4cab-ba24-3f61c57fde01` |
+| p5 | 900 GiB | `docker-data` | `/var/lib/docker` | `6f02e100-a29b-45ce-b7f6-22f4747c8d90` |
+
+`tune2fs -m 1` applied to p4 and p5, and the §5.2 `RequiresMountsFor=/var/lib/docker`
+docker drop-in is in place.
+
+**Still outstanding:** at clone time `minikube status` reported **"profile not found"** —
+the cluster does not exist on *either* disk, so the NPM-fronted services have no backends
+until `start-scratch.sh` runs. Unrelated to the disk swap, but it blocks §7.
+
+**Next planned change:** [`UBUNTU-UPGRADE.md`](./UBUNTU-UPGRADE.md) — 24.04 → 26.04 LTS,
+week of 2026-08-10. It retires the §4 "stay on 24.04" pin by migrating the stack to
+cgroup v2 **on 24.04 first**.
+
+---
+
 ## 0. Read this first — what is actually in the box (surveyed 2026-08-06)
 
 The plan as stated was *"replace the primary M.2 NVMe with the GM9000 and move the current
@@ -20,7 +66,7 @@ Verified via `lsblk`/`lspci`:
 |---|---|---|
 | `sda` | **Samsung 840 EVO 250GB — 2.5″ SATA SSD** (a ~2014-era drive on a SATA cable, not in any M.2 slot; the 840 EVO was never made in M.2 form) | `sda3` ESP, `sda5` `/` (26G used), `sda6` `/home` (72G used, **96% full**), `sda7` `/var` (87G used, 86% — all of docker/minikube lives here) |
 | `sdb` | WD Blue 1TB **HDD** (SATA) | `sdb1` `/mnt/minikube-backups` — weekly DR archives (~186G) **and the LIVE `minikube-mnt`** (~60G: vault-data, JENKINS_HOME, grafana-data, every app DB, ollama models 13G); `sdb2` `/mnt/kachra` — live registry blobs, bind-mounted into minikube-mnt (2.9G since the 2026-08-06 prune; was 37G); `sdb3` unused |
-| — | **No NVMe device exists in the system today.** All four M.2 slots are empty (no NVMe controller on the PCI bus; Intel VMD reports zero child devices) | — |
+| `nvme0n1` | **Acer Predator GM9000 4TB**, fitted 2026-08-06 into the then-empty `M.2_1` (CPU, Gen4 x4). *At the time of this survey the box had no NVMe at all and all four M.2 slots were empty* — that is what the rest of §0 reasons from | GPT, 5 partitions + 2.0 TiB free tail — see **STATUS** for the as-built table |
 
 **Consequences for the plan:**
 
@@ -57,6 +103,10 @@ soak checks). Nothing keeps serving while the box is down; pick a quiet window.
 
 *(Condensed from §§2–9; each step names its detail section. Steps marked ✅ were
 completed on 2026-08-06 — re-verify only if days have passed.)*
+
+> **Superseded — steps 7–31 below were NOT performed.** The drive was cloned instead of
+> reinstalled (see STATUS). Keep this checklist for a future genuine bare-metal DR; for the
+> current state of the box, STATUS is authoritative.
 
 **A. Any time before swap day**
 1. ✅ Push all repos; verify STEP0 clean + pushed (§2.1). Re-run the sweep if days passed.
@@ -308,6 +358,12 @@ disk at any point in this runbook — it is the rollback (§9).
 
 ## 4. Fresh Ubuntu install on the GM9000 (~30 min)
 
+> **NOT EXECUTED — superseded 2026-08-06 by the clone (see STATUS).** Keep this section:
+> the reasoning below is *why* cloning was the right call, and a 26.04 install really was
+> attempted here and failed. The 24.04 pin is retired only by
+> [`UBUNTU-UPGRADE.md`](./UBUNTU-UPGRADE.md), which moves the stack to cgroup v2 **while
+> still on 24.04** and only then upgrades the OS.
+
 **Install Ubuntu 24.04.x LTS (Noble) Desktop — NOT 25.x/26.04.** This is a deliberate,
 load-bearing choice, not conservatism for its own sake:
 
@@ -348,6 +404,13 @@ reservation doing its job).
 
 ## 5. Pre-restore setup — what `restore-scratch.sh` does NOT do (~30 min)
 
+> **MOOT for the 2026-08-06 migration — do NOT re-run any of this.** The clone carried the
+> GRUB cmdline, fstab, zram config, `/etc/hosts`, `gh` auth, SSH keys, `~/.local/bin` and
+> every credential across verbatim. This section applies only to a genuine fresh install
+> (i.e. a future bare-metal DR). The one item still worth reading is §5.2's
+> `RequiresMountsFor=/var/lib/docker` guard — that **was** applied, because the clone put
+> docker on its own partition for the first time.
+
 Answering the direct question: **`restore-scratch.sh` installs all core tooling itself**
 (docker + daemon.json, kubectl, minikube, helm, jq, nfs-common, NVIDIA driver + container
 toolkit, gcloud) — you do *not* pre-install those. But it **carries no credentials and no
@@ -355,7 +418,10 @@ host-boot config**. It cannot log into GitHub for you, and the following six thi
 yours to do first, in this order:
 
 **1. Kernel cmdline (cgroup v1 + IOMMU) — restore-scratch does NOT reproduce this.**
-The live box boots with:
+*(Carried over intact by the clone; nothing to do. Note that
+[`UBUNTU-UPGRADE.md`](./UBUNTU-UPGRADE.md) §2.1 deliberately **removes**
+`systemd.unified_cgroup_hierarchy=0` and the dead `vfio-pci.ids`/`kvm.ignore_msrs` relics
+as the first step of the 26.04 upgrade.)* The live box boots with:
 
 ```
 intel_iommu=on systemd.unified_cgroup_hierarchy=0 kvm.ignore_msrs=1 vfio-pci.ids=10de:1e07,10de:10f7,10de:1ad6,10de:1ad7
@@ -580,8 +646,26 @@ The old on-HDD `minikube-mnt` copy from step 2 can serve as that mirror's seed. 
 ## 9. The old 840 EVO — rollback first, then retirement
 
 **Weeks 0–2 (soak): touch nothing.** The complete pre-migration OS stays bootable on it.
-Rollback procedure if the new install goes sideways: BIOS boot menu → old ubuntu entry →
-the whole old stack boots and serves. Two rules:
+Rollback procedure if the new system goes sideways: BIOS boot menu → the old disk's entry →
+the whole old stack boots and serves. As-built entries after the 2026-08-06 clone:
+
+| Entry | Points at |
+|---|---|
+| `Boot0006 "Ubuntu"` (**first** in BootOrder) | NVMe ESP → `\EFI\ubuntu-gm9000\shimx64.efi` |
+| `Boot0000 "Ubuntu (840 EVO rollback)"` | old `sda3` ESP → `\EFI\ubuntu\shimx64.efi` |
+
+A removable fallback (`\EFI\BOOT\BOOTX64.EFI`) also exists on the NVMe ESP, so the new
+system still boots with the SSD pulled and/or NVRAM cleared.
+
+> ⚠️ **Ubuntu's `grub-install` will silently EAT the old disk's boot entry.** It labels the
+> NVRAM entry from `GRUB_DISTRIBUTOR` (→ "Ubuntu"), so it *overwrites* the existing "ubuntu"
+> entry no matter what `--bootloader-id` you pass. On 2026-08-06 this destroyed the 840 EVO
+> entry; it was rebuilt with
+> `sudo efibootmgr -c -d /dev/sda -p 3 -L "Ubuntu (840 EVO rollback)" -l '\EFI\ubuntu\shimx64.efi'`.
+> **Always re-check `efibootmgr` after any `grub-install`** — the ESP files on the old disk
+> survive untouched, so the entry is always recreatable, but only if you notice.
+
+Two rules:
 - Rollback is a **deliberate decision, not a dual-boot toy** — the old OS's crons
   (cluster-autostart, backups) will act on the *live, possibly newer* `sdb` data the
   moment it boots. Boot it only to genuinely roll back (fine: `sdb` state is shared, the
@@ -622,7 +706,7 @@ only do this after you are certain the new system is the system.
 | 10GbE | `enp4s0` (AQC113CS), static **10.10.10.1/30**, dev box 10.10.10.2 (OOB: vik@192.168.50.161) |
 | Cluster IPs | node 172.16.238.2, NPM 172.16.238.10, gw 172.16.238.1, net `5million` 172.16.0.0/16 |
 | Kernel cmdline | `intel_iommu=on systemd.unified_cgroup_hierarchy=0` (+ inert kvm/vfio relics, §5.1) |
-| cgroups | **v1** (docker `Cgroup Version: 1`, driver `cgroupfs`) |
+| cgroups | **v1** (docker `Cgroup Version: 1`, driver `cgroupfs`) — **being retired**, see [`UBUNTU-UPGRADE.md`](./UBUNTU-UPGRADE.md) §2 |
 | daemon.json | cgroupfs + json-file 100m + overlay2 + nvidia runtime (phase 1 + nvidia-ctk reproduce it) |
 | NVIDIA | driver 580-server-open (580.173.02), container-toolkit 1.20; GPU = RTX 3080 Ti only |
 | RAM / swap | 96 GB DDR5; zram-tools zstd 35% (~33G), no disk swap |
@@ -631,7 +715,7 @@ only do this after you are certain the new system is the system.
 | Backups on sdb1 | weekly `private-cloud-MM-DD-YY.tgz`, latest 2026-08-03 41G (~7G from the next run — registry excluded); live `minikube-mnt` ~60G incl. ollama models 13G |
 | Registry blobs | `/mnt/kachra/container-registry-images` bind → `minikube-mnt/container-registry-images`; 2.9G after the 2026-08-06 prune (was 37G) |
 | Minikube | `--cpus 16 --memory 65536 --disk-size 40g --driver=docker --gpus all --network 5million --mount minikube-mnt→/mnt` |
-| Board / drive | ProArt Z690-CREATOR WIFI (M.2_1 = CPU Gen4 x4); GM9000 4TB Gen5 (runs Gen4 here — expected) |
+| Board / drive | ProArt Z690-CREATOR WIFI (M.2_1 = CPU Gen4 x4); GM9000 4TB Gen5 — **measured 2026-08-06: 16.0 GT/s x4 (Gen4) against the drive's 32.0 GT/s capability; root port `00:06.0` caps at 16.0 GT/s, so this is the platform limit, not a fault.** SN `PSBP65140300512`, fw `FWX1222A`, 0% wear, 0 media errors |
 
 ### 10.2 Rough timeline
 
@@ -678,6 +762,16 @@ only do this after you are certain the new system is the system.
    Registry-**v1** relic and does NOT work on this store.
 4. `CLAUDE.md` said 48 GB RAM; the box has 96 GB (upgraded with the 64G minikube
    envelope). Fixed in the same commit as this file.
+5. **`rsync` without `--sparse` inflates sparse files — 21 GB of them here.**
+   `/var/lib/libvirt/images/minikube.qcow2` is a dead KVM-driver relic with an *apparent*
+   size of 20 GiB but only **3.4 MB actually allocated**. The first clone pass wrote every
+   hole out as real zeros, putting `/var` at 36 GB against a 30 GB source. Re-copied with
+   `--sparse` and it dropped back to 16 GB. **Always pass `--sparse` when rsyncing `/var`
+   on this box** — and the qcow2 itself is safe to delete whenever the KVM era is formally
+   buried (nothing references it; the `vfio-pci.ids` cmdline relics are the same era).
+6. **Ubuntu's `grub-install` overwrites the existing "Ubuntu" NVRAM entry** regardless of
+   `--bootloader-id`, because the label comes from `GRUB_DISTRIBUTOR`. See the warning in
+   §9 — it silently removed the rollback entry during this migration.
 
 ### 10.4 Sources for the hardware claims
 
