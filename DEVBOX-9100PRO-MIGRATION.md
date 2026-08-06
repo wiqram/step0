@@ -84,8 +84,10 @@ helper, and it runs the **10GbE link watchdog** on its end of the /30.
 
 **D. Weeks later**
 16. Old 980: after the soak, EITHER clone **Windows onto it** (retiring the 2014-era
-    SATA 860 EVO from OS duty — the recommended endgame) OR wipe it as an Ubuntu
-    scratch disk. Peek at its `ubuntu-backup` partition before destroying anything (§8).
+    SATA 860 EVO from OS duty — the recommended endgame; exact steps in **§8.1**:
+    decrypt BitLocker → Magician clone → boot from 980 → reclaim the duplicated data
+    partition → strip the 860 to data-only) OR wipe it as an Ubuntu scratch disk.
+    Peek at its `ubuntu-backup` partition before destroying anything (§8).
 
 **Rollback at any point:** BIOS boot menu → the OLD `ubuntu` entry (sda1 ESP → old root
 on the 980, found by UUID — works from whichever M.2 slot the 980 sits in).
@@ -310,22 +312,79 @@ other compose-based app you actively develop.
 
 Then pick the 980's future:
 
-- **Recommended — give Windows the NVMe it never had.** The 860 EVO is a decade-old
-  SATA drive doing OS duty. Clone Windows (sda1/sda2/sda3/sda4/sda6 — Samsung
-  Magician's Data Migration or Macrium Reflect Free, cloning TO a Samsung drive) onto
-  the wiped 980, set the 980's Windows Boot Manager first in BIOS, verify boot +
-  BitLocker, then delete the OS partitions from the 860 EVO and keep it purely as the
-  NTFS "Stuffs" data disk. End state: every OS on NVMe, each disk single-purpose,
-  each with its own ESP. Remove the old `\EFI\ubuntu` from sda1 and the stale
-  `ubuntu` boot entry (`efibootmgr -B`) as part of this cleanup.
-  *Why not put Windows on the 9100 PRO instead?* Windows' daily feel is bounded by
-  low-QD random latency, where a Gen3 and a Gen5 NVMe are near-identical — the 980
-  captures ~95% of the perceptible jump from SATA. Sharing the 9100 PRO would also
-  re-share one ESP between the OSes (the exact coupling this migration removed) and
-  cost ~450G of the dev disk's free tail for a difference you won't feel.
+- **Recommended — give Windows the NVMe it never had** (step-by-step in **§8.1**).
+  The 860 EVO is a decade-old SATA drive doing OS duty; the 980 delivers ~95% of the
+  perceptible jump from SATA (Windows' daily feel is bounded by low-QD random latency,
+  where Gen3 and Gen5 NVMe are near-identical). End state: every OS on NVMe, each disk
+  single-purpose, each with its own ESP.
+  *Why not put Windows on the 9100 PRO instead?* Sharing it would re-share one ESP
+  between the OSes (the exact coupling this migration removed) and cost ~450G of the
+  dev disk's free tail for a difference you won't feel.
 - **Simpler** — wipe the 980 → single ext4 → `/mnt/fast` Ubuntu scratch (emulators,
   datasets, build dirs).
 - **Laziest** — shelve it untouched as the frozen pre-migration Ubuntu.
+
+### 8.1 Moving Windows onto the 980 — step by step
+
+**Prerequisites — all four, no exceptions:**
+1. The §7 soak is signed off. **Wiping the 980 deletes the Ubuntu rollback** — this is
+   the step where the migration becomes final.
+2. The 980's `ubuntu-backup` partition has been peeked at and anything wanted salvaged.
+3. **BitLocker fully decrypted.** In an admin prompt: `manage-bde -status C:` — if it
+   shows encrypted, run `manage-bde -off C:` and wait for "Fully Decrypted" (this can
+   take an hour+; the clone tools below cannot read a locked volume). Re-encrypt at
+   the end if wanted.
+4. Fast Startup still OFF (§2.2) and Windows fully shut down before any disk surgery —
+   a hibernated NTFS clone is a corrupted clone.
+
+**Clone (Path 1 — Samsung Magician, recommended):**
+
+5. Boot Windows, install/open **Samsung Magician → Data Migration**. Source = the
+   860 EVO, target = the 980 (Samsung targets are exactly what this tool exists for).
+   It clones the whole source disk — ESP, MSR, C:, both recovery partitions, **and the
+   "Stuffs" data partition rides along**; that's fine, it gets dealt with in step 8.
+   Start the clone (~1 h for ~900G). Everything previously on the 980 is destroyed.
+6. Shut down. In BIOS, pick the **Windows Boot Manager entry on the 980** (there are
+   briefly two — distinguish by disk). Verify inside Windows that C: now lives on
+   "Samsung SSD 980" (Disk Management, or `diskpart` → `list disk`).
+7. **Do step 9's source cleanup promptly** — the clone copied the GPT verbatim, so two
+   disks now carry identical partition GUIDs and identical Windows installs; running
+   that way long-term invites boot-entry confusion.
+
+**Reclaim the duplicated data partition on the 980:**
+
+8. The cloned layout mirrors the source: `ESP | MSR | C: | WinRE | Stuffs | rec`.
+   Delete the cloned **Stuffs** copy from the 980 (Disk Management — triple-check
+   you're on the 980; the real Stuffs stays on the 860 EVO). Note the freed ~488G is
+   **not adjacent to C:** (WinRE sits between), so plain Disk Management cannot extend
+   C: into it. Two options:
+   - *Zero-risk:* format the freed space as a new NTFS `D:` and use it as a second
+     Windows volume. Done.
+   - *Polish:* from Ubuntu, use GParted to slide the small WinRE partition (~952M)
+     left and then grow C: — safe with BitLocker off (GParted moves preserve the
+     partition GUIDs the Windows BCD references), but it's an hour of partition
+     surgery for a tidier layout. Afterwards in Windows check `reagentc /info` and
+     `reagentc /enable` if WinRE went disabled.
+
+**Retire the 860 EVO to data-only:**
+
+9. From Ubuntu: delete `sda1` (old shared ESP), `sda2`, `sda3` (old C:), `sda4` and
+   `sda6` (old recovery) — **keep `sda5` "Stuffs"**. Then clean the dangling NVRAM
+   entries: `sudo efibootmgr` and `-b XXXX -B` the old `Windows Boot Manager` and old
+   `ubuntu` entries that pointed at sda1. Finally `sudo update-grub` — os-prober now
+   finds Windows on the 980's own ESP and the GRUB menu keeps working.
+   The freed ~443G sits *before* Stuffs on the disk; rather than moving a 488G NTFS
+   partition, just create a new partition there (ext4 scratch for Ubuntu, or NTFS).
+10. Optional: re-enable BitLocker (`manage-bde -on C:`) and **save the new recovery
+    key**. Windows activation is unaffected throughout — the motherboard (what the
+    digital license is tied to) never changed.
+
+**Fallback (Path 2)** if Magician refuses the clone: boot a Clonezilla USB and do a
+disk-to-disk clone (860 EVO → 980, both 931.5G so sizes match), then continue from
+step 6 — the same duplicate-GPT caution in step 7 applies even more strongly.
+Last resort is the fully manual route (partition by hand, `ntfsclone` C:, rebuild the
+BCD with `bcdboot` from a Windows installer USB's Shift+F10 prompt) — workable but
+only worth it if both tools fail.
 
 **And close the backup gap** this migration exposed: the dev box still has no backup.
 Minimum viable: a nightly `rsync` of `~/` to prod's WD Cloud share or the prod box
