@@ -12,9 +12,11 @@ full production via `restore-scratch.sh`. Written 2026-08-06 from a live survey 
 
 ## STATUS — what actually happened, 2026-08-06 (read this before anything else)
 
-**The migration is DONE, but it was NOT executed the way §§3–6 describe.** The GM9000 was
-populated by **cloning the running 24.04 system off `sda` with `rsync`**, not by a fresh
-install followed by `restore-scratch.sh`.
+**The migration is DONE, but it was NOT executed the way §§3–6 describe** — **and as of
+2026-08-06 21:00 the box is back on the 840 EVO after the first NVMe boot crashed. Read the
+crash note below before booting the M.2 again.** The GM9000 was populated by **cloning the
+running 24.04 system off `sda` with `rsync`**, not by a fresh install followed by
+`restore-scratch.sh`.
 
 Why the deviation: a fresh install of **Ubuntu 26.04** was attempted first and failed
 part-way, leaving a 111.8 GiB ext4 root with no ESP and no user account. 26.04 is also
@@ -49,6 +51,72 @@ docker drop-in is in place.
 **Still outstanding:** at clone time `minikube status` reported **"profile not found"** —
 the cluster does not exist on *either* disk, so the NPM-fronted services have no backends
 until `start-scratch.sh` runs. Unrelated to the disk swap, but it blocks §7.
+
+### ⚠️ 2026-08-06 20:40 — the first boot off the GM9000 crashed. It is NOT the drive.
+
+First boot from the NVMe (its own journal, boot `d3cfb603`, 20:40:01 → 20:46:26) corrupted
+memory and hung. Every boot since drops to **emergency mode** because `fsck` on `/home` (p4)
+exits 4. Sequence:
+
+| Time | Event |
+|---|---|
+| 20:40:01 | all five partitions mount cleanly — no I/O errors, no NVMe timeouts |
+| 20:40:12–22 | three unrelated **segfaults** (`teamviewerd`, `TeamViewer`, inside `ld-linux`) |
+| 20:41:07 | `BUG: Bad page map in process docker pte:01000000` + `get_swap_device: Bad swap offset entry 3ffffffff7fff` + `BUG: Bad rss-counter state … MM_SWAPENTS val:-1` |
+| 20:42:02 | `watchdog: BUG: soft lockup - CPU#0 stuck for 26s` (also CPU#21, then 52s) in `native_queued_spin_lock_slowpath` ← `tcp_write_timer` — **this is the hang** |
+| 20:42:02/05 | `EXT4-fs error (nvme0n1p4): ext4_lookup:1864: inode #…: checksum invalid` (`EFSBADCRC`) |
+
+Garbage PTEs, a bogus swap offset, a negative rss counter and a spinlock that never released
+= **page-table / memory corruption**; the ext4 damage is downstream of it, not the cause. p4
+now reads `Filesystem state: clean with errors`, `FS Error count: 2`, and fsck reports
+`Inodes that were part of a corrupted orphan linked list found. UNEXPECTED INCONSISTENCY;
+RUN fsck MANUALLY.` → exit 4 → `home.mount` → `local-fs.target` fail → emergency shell.
+**Only the first M.2 boot corrupted anything** — boot 2 had zero lockups / bad page maps /
+segfaults. What looks like "it crashes every time" is a deterministic fsck refusal.
+
+**Exonerated, with evidence — do not re-litigate these:**
+
+| Suspect | Why it is not the cause |
+|---|---|
+| The GM9000 | SMART pristine: `media_errors 0`, `num_err_log_entries 0`, spare 100%, 0% used, 40/49 °C. No NVMe timeout/reset/abort in any log. (`unsafe_shutdowns 12` = the hard power-offs — an effect.) |
+| PCIe link / M.2_1 | `UESta` and `CESta` all clear; `LnkSta 16GT/s x4` = the §10.1 platform limit, as designed |
+| Rogue DMA from the drive | `intel_iommu=on`, translated domains, **0 DMAR faults** — a device cannot reach kernel page tables without faulting |
+| The rsync clone | 21,630 files sha256-compared old vs new across `/usr/lib/modules`, `/usr/bin`, `/usr/sbin`, `/usr/lib/x86_64-linux-gnu`, plus vmlinuz/initrd/System.map: **zero mismatches** |
+| Config drift | identical kernel cmdline, fstab UUIDs, loaded module set and RAM total (`100398252K`) on both disks |
+| The `ACPI …PEGP._DSM… AE_ALREADY_EXISTS` and `i2c_designware controller timed out` lines on the console | present on **healthy** 840 EVO boots too (6× and 24× in one boot) — board noise, ignore them |
+
+**Prime suspect: the memory configuration** (`sudo dmidecode -t 17`) — two mismatched G.Skill
+kits, mixed ranks and timings, all four DDR5 slots filled, already derated 6000 → **4000 MT/s**:
+
+| Slot | Size | Part | Rank |
+|---|---|---|---|
+| C0-DIMM0 / C1-DIMM0 | 32 GB | `F5-6000J3238G32G` (CL32) | 2R |
+| C0-DIMM1 / C1-DIMM1 | 16 GB | `F5-6000U3636E16G` (CL36) | **1R** |
+
+…on **BIOS 2305 (2023/03/22)**. Fitting the NVMe changes the hardware signature, so the BIOS
+re-trains memory — a marginal 4-DIMM mixed config can land on worse timings than the ones it
+had been running for months. That fits "stable for months, corrupt 90 s into the first boot
+after a drive install", but it is a **risk factor, not proof**; memtest is what settles it.
+Note this cuts both ways: the 840 EVO runs on the same RAM, so staying on it is not safety.
+
+**Recovery order — memtest BEFORE fsck.** `e2fsck -y` rewrites metadata from what it computes
+in RAM; a repair pass over a 600 GB filesystem on a box with suspect memory turns recoverable
+damage into shredded damage.
+
+1. **`memtest86+` — already installed** (`/boot/memtest86+x64.efi`, pkg `7.00`). Reboot, hold
+   <kbd>Shift</kbd>/<kbd>Esc</kbd> for GRUB, pick the memory-test entry; ≥2 full passes,
+   ideally overnight. Disable Secure Boot for the run if it refuses to launch.
+2. **Flash BIOS 2305 → 4505 either way** — see §10.5. If memtest fails this is the first fix
+   to try (with dropping to the matched 2×32 GB pair as the second); if it passes, 3401
+   "improves DDR5 compatibility" and 3101 adds PCIe bifurcation options for GPU-with-M.2, both
+   of which post-date 2305 and both of which this box is exactly the case for.
+3. **Only then** repair: `sudo e2fsck -fy` on `nvme0n1p4`, `p3`, `p5`, `p2` and
+   `sudo fsck.fat -a /dev/nvme0n1p1`, run from the 840 EVO with nothing NVMe mounted.
+4. Expect real loss into `lost+found`. The source `sda6` is intact, so **re-run the `/home`
+   rsync** (with `--sparse`, quirk 5) rather than trusting whatever fsck salvages.
+5. Harden before booting it again: `sudo tune2fs -e remount-ro /dev/nvme0n1p4`. p4 is
+   currently `Errors behavior: Continue`, which is why the kernel kept writing to a
+   filesystem it had already detected as corrupt.
 
 **Next planned change:** [`UBUNTU-UPGRADE.md`](./UBUNTU-UPGRADE.md) — 24.04 → 26.04 LTS,
 week of 2026-08-10. It retires the §4 "stay on 24.04" pin by migrating the stack to
@@ -709,7 +777,8 @@ only do this after you are certain the new system is the system.
 | cgroups | **v1** (docker `Cgroup Version: 1`, driver `cgroupfs`) — **being retired**, see [`UBUNTU-UPGRADE.md`](./UBUNTU-UPGRADE.md) §2 |
 | daemon.json | cgroupfs + json-file 100m + overlay2 + nvidia runtime (phase 1 + nvidia-ctk reproduce it) |
 | NVIDIA | driver 580-server-open (580.173.02), container-toolkit 1.20; GPU = RTX 3080 Ti only |
-| RAM / swap | 96 GB DDR5; zram-tools zstd 35% (~33G), no disk swap |
+| RAM / swap | 96 GB DDR5 across **all four** slots as **two mismatched G.Skill kits** — 2× 32G `F5-6000J3238G32G` (CL32, 2R) + 2× 16G `F5-6000U3636E16G` (CL36, 1R), derated 6000 → **4000 MT/s**. Prime suspect for the 2026-08-06 crash (see STATUS); zram-tools zstd 35% (~33G), no disk swap |
+| BIOS | **2305, 2023/03/22** — five DDR5/stability releases behind; upgrade path in §10.5 |
 | Timezone | Europe/London (crontab times are local) |
 | NAS | DR/off-site: WD Cloud NFS 192.168.50.169:/nfs/private-cloud → /mnt/wdcloud (hard,nofail,automount); tenant SMB pair .68→.251 |
 | Backups on sdb1 | weekly `private-cloud-MM-DD-YY.tgz`, latest 2026-08-03 41G (~7G from the next run — registry excluded); live `minikube-mnt` ~60G incl. ollama models 13G |
@@ -777,5 +846,53 @@ only do this after you are certain the new system is the system.
 
 - GM9000: [Tom's Hardware review](https://www.tomshardware.com/pc-components/ssds/acer-predator-gm9000-2tb-ssd-review) · [TheSSDReview (SM2508)](https://www.thessdreview.com/our-reviews/nvme/predator-gm9000-gen5-2tb-ssd-review/) · [Predator Storage product page](https://www.predatorstorage.com/products/pcie-m-2-ssd/gm9000-gen5-ssd/)
 - Board: [ASUS ProArt Z690-CREATOR WIFI tech specs](https://www.asus.com/motherboards-components/motherboards/proart/proart-z690-creator-wifi/techspec/) (M.2_1 CPU PCIe 4.0 x4; M.2_4 shares SATA 5–8; 8× SATA)
+- BIOS list + changelogs: [ASUS support → BIOS & Firmware](https://www.asus.com/us/supportonly/proart%20z690-creator%20wifi/helpdesk_bios/)
 - Everything else: live survey of this box, `restore-scratch.sh`, `backup-minikube-mnt.sh`,
   `start-scratch.sh`, `restore-lib.sh`, `verify-recovery.sh` as of commit `080d48e`.
+
+### 10.5 BIOS update — 2305 (2023/03/22) → 4505 (2025/12/15)
+
+Latest for this board is **4505**. What the box is missing between 2305 and 4505 — only the
+memory/PCIe-relevant entries; the 0x125/0x129/0x12B/0x12F microcode releases are 13th/14th-gen
+Vmin-Shift fixes and are inert on a 12900K:
+
+| Version | Date | Why it matters here |
+|---|---|---|
+| **2403** | 2023/06/21 | "improves performance and **memory compatibility**" |
+| **3101** | 2023/12/29 | LogoFAIL patch; adds **PCIe bifurcation options for GPU with M.2 storage** — exactly this box's layout |
+| **3302** | 2024/02/22 | enhances high-capacity memory compatibility |
+| **3401** | 2024/03/22 | **"improves DDR5 compatibility"** — the single most on-point release for a 4-DIMM mixed-kit config |
+| **3603** | 2024/05/31 | "Performance Preferences" menu; F5 becomes "Reset to Defaults" |
+| **4505** | 2025/12/15 | current; security + ME 16.1.38.2676 |
+
+**Method — EZ Flash 3** (the box POSTs fine, so use this; FlashBack is the no-POST fallback):
+
+1. Download `…4505.zip` from the [support page](https://www.asus.com/us/supportonly/proart%20z690-creator%20wifi/helpdesk_bios/), unzip onto a **FAT32** USB stick.
+2. **Photograph every BIOS screen you have customised first** — a flash resets setup to
+   defaults. On this box that means at minimum: boot order, **VMD (currently ON)**, fan
+   curves, and any DRAM profile.
+3. Reboot → <kbd>Del</kbd> → Advanced Mode (<kbd>F7</kbd>) → **Tool → ASUS EZ Flash 3 Utility**
+   → via Storage Device → select the `.CAP` → confirm. Do not cut power or touch CLR_CMOS.
+4. **The first boot afterwards re-trains memory and can sit on a black screen for a minute or
+   more with four DDR5 DIMMs. Do not power-cycle it** — that is the single most common way
+   people convince themselves a good flash bricked the board.
+5. Re-enter BIOS, restore your settings, and confirm the update: `sudo dmidecode -t 0`.
+
+**Method — USB BIOS FlashBack** (only if it will not POST): rename the file with ASUS's
+**BIOSRenamer** (it produces **`PAZ690CW.CAP`**), put it in the root of a 1 GB+ FAT16/32
+**MBR, single-partition** stick, plug into the dedicated FlashBack port on the rear I/O with
+the system off but PSU on, hold the FlashBack button ~3 s. Flashing LED = running; solid LED
+after ~5 s = it rejected the stick (wrong format or filename).
+
+⚠️ **Caveats specific to this jump**
+
+- **ME firmware updates are one-way.** 4505 installs ME 16.1.38.2676 and that stays even if
+  you later roll the BIOS back. A BIOS downgrade will not fully revert this machine.
+- 2403 and 2602 each shipped with a "flash a standalone ME update first" note. Going straight
+  to 4505 is the normal path and should not need them — but if EZ Flash refuses the file,
+  that is the reason, and the fix is to step through the intermediate versions.
+- **Re-check `efibootmgr` afterwards.** Given the §9 warning about how easily the 840 EVO
+  rollback entry gets destroyed, verify both entries still exist once the box is back up, and
+  recreate the rollback one with the command in §9 if it has gone.
+- Do the flash **before** the §STATUS step-3 fsck, not after — the flash retrains memory, and
+  the repair should run on the machine in its final configuration.
