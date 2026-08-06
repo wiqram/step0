@@ -582,7 +582,18 @@ check there to confirm a run or debug a failure.
 > under the retention policy. Ollama's identity key (`id_ed25519`) lives outside `models/`
 > and **is** captured. On restore, re-fetch the model rather than expecting it in the tar.
 
-**Retention (space-saving prune, at the end of each run):** all weekly backups for the
+> **`container-registry-images` is excluded too** (`--exclude='*/container-registry-images'`,
+> added 2026-08-06). The kachra blob store is bind-mounted *inside* `minikube-mnt`
+> (`ensure-registry-store.sh`, R8), so from June the tar had been **silently swallowing
+> it** — 34 GB of the 41 GB 2026-08-03 archive (~83%), already-gzipped blobs that
+> compress ~1:1 — even though this document already stated the blobs are not in the
+> archive. The exclude restores that contract before `sdb1` filled (at +4–6 GB/week the
+> retention math ran out of disk before the September prune relief). In its place the
+> script refreshes **`minikube-mnt/registry-catalog.txt`** (every repo + its tags,
+> best-effort — a quiesced cluster keeps the previous snapshot) so a bare-metal restore
+> knows exactly what Jenkins must rebuild. To shrink the store itself, prune old yolo
+> `bNNNN` build tags with `prune-registry.sh` (dry-run by default; deletes by digest
+> keep-set, then `garbage-collect --delete-untagged` + a registry restart). all weekly backups for the
 **current and previous month** are kept; for any **older month** only that month's
 **most recent** backup is kept and the rest are deleted. So recent history stays
 weekly-granular while older months collapse to one archive each (≈4–5 GB/month saved
@@ -667,7 +678,9 @@ box (phase 1 installs `nfs-common`) it **mounts the WD NFS share** (`hard,timeo=
 picks the newest `private-cloud-*.tgz` from `/mnt/wdcloud/` (date parsed from the filename, like the
 prune) — no cloud auth needed on the LAN. Two things are not in the archive and are reconstructed on
 restore: the **registry blobs** (they live on sdb2/`/mnt/kachra`, re-pushed by Jenkins on a single-disk
-rebuild) and the **ollama models** (`*/ollama/models` excluded, re-pulled). See
+rebuild — enforced by an explicit `--exclude` since 2026-08-06, after the sdb2 bind inside `minikube-mnt`
+had silently pulled them back into the tar; `registry-catalog.txt` in the archive lists what to rebuild)
+and the **ollama models** (`*/ollama/models` excluded, re-pulled). See
 `docs/superpowers/specs/2026-06-30-restore-scratch-design.md`.
 
 ### Backup retention convention — apply to **every** backup cron job

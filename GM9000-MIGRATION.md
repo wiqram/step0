@@ -162,8 +162,9 @@ sudo bash ~/Ideaprojects/STEP0/backup-minikube-mnt.sh   # fresh archive + WD off
 
 Verify: the ntfy `yolo-private-cloud-backup` note arrives with **tar rc=0** (a quiesced
 system should not even hit rc=1), and today's `private-cloud-08-XX-26.tgz` is present in
-**both** `/mnt/minikube-backups/` and `/mnt/wdcloud/`. Expect ~41GB and ~30–45 min
-(the Aug-03 archive was 41G; see §10.3).
+**both** `/mnt/minikube-backups/` and `/mnt/wdcloud/`. Expect **~7GB and ~10 min**:
+since 2026-08-06 the tar excludes the registry blob store (34G of the old 41G archives —
+see §10.3) and carries a `registry-catalog.txt` snapshot instead.
 
 Two reassurances about the quiesce: `cluster-autostart.sh` explicitly **respects** an
 operator `minikube stop` (exited container → "RESPECTING, not starting"), so the */10
@@ -363,7 +364,7 @@ Phase-by-phase, with what is different **in this migration** vs true bare-metal:
 |---|---|---|
 | 0 preflight | user/HOME checks, typed `restore` confirmation | — |
 | 1 tooling | hostname, apt base, **docker + daemon.json (cgroupfs)**, kubectl 1.31, minikube, helm, **NVIDIA driver via `ubuntu-drivers autoinstall` + container toolkit**, gcloud | **Expect one interruption**: after the NVIDIA driver installs, **reboot, then re-run `./restore-scratch.sh`** — the phase marker resumes automatically. Verify `nvidia-smi` shows the 3080 Ti after the reboot. |
-| 2 pull backup | mounts WD NFS, copies newest `private-cloud-*.tgz` to `/mnt/minikube-backups` | Your §2 fresh archive is already on `sdb1`; the WD copy is the same file, so this is a ~41G LAN copy (~7 min) that lands on an identical file. Harmless — let it run (it also proves the WD DR path works). |
+| 2 pull backup | mounts WD NFS, copies newest `private-cloud-*.tgz` to `/mnt/minikube-backups` | Your §2 fresh archive is already on `sdb1`; the WD copy is the same file, so this is a ~7G LAN copy (~1–2 min) that lands on an identical file. Harmless — let it run (it also proves the WD DR path works). |
 | 3 storage layout | mounts labelled disks, creates dirs, chowns | Disks already mounted from §5.2 — phase just confirms. The `chown -R cloud:cloud /mnt/minikube-backups` pass over ~250G on the HDD takes a few minutes. |
 | 4 extract | staging-extract of the archive; places `~/.vault` (unseal key!), `minikube-mnt`, SOPS age key → `~/.config/sops/age/keys.txt`, `qcguy-ghost`, nginx runtime (data/letsencrypt/compose), `STEP0/.env` (JENKINS_CRED, NTFY_URL), `~/wd-backup` (SMB creds) | Because the archive is your quiesced same-day one, the `minikube-mnt` overlay re-applies identical data. This is where the §2 step 4 discipline pays off. |
 | 5 clone repos | clones the `restore_repo_manifest` list at pinned branches, overlays nginx runtime onto the clone | Needs the §5.5 `gh` auth. Afterwards spot-check branches: `for d in ...; do git -C $d rev-parse --abbrev-ref HEAD; done` matches the manifest (the stale-branch failure mode is silent — see restore-lib.sh header). |
@@ -562,22 +563,23 @@ only do this after you are certain the new system is the system.
 2. **Phase 2 copies the archive into `/mnt/minikube-backups` *before* phase 3 mounts the
    labelled disk over that path** — on true bare metal the copy can be shadowed by the
    later mount. Pre-mounting the disks (§5.2) sidesteps it; worth reordering some day.
-3. **The weekly archive has grown 21G → 41G in six weeks — and it is the registry.**
-   The blob store is bind-mounted *inside* `minikube-mnt`, so tar sweeps it up: a full
-   listing of the 08-03 archive attributes **34.03 GB (~83%) to
+3. **The weekly archive had grown 21G → 41G in six weeks — it was the registry.
+   FIXED 2026-08-06.** The blob store is bind-mounted *inside* `minikube-mnt`, so tar
+   swept it up: a full listing of the 08-03 archive attributed **34.03 GB (~83%) to
    `container-registry-images`** (next largest: nginx 6.9G, jenkins 2.2G,
    predictonomy-backups 1.7G; docker blobs are pre-compressed so they pass ~1:1 into
-   the tgz). Root cause of the store's growth: the yolo pipeline pushes a `bNNNN` tag
-   per service per build and nothing prunes — 8 services × **302 tags** each (+
-   marketstream 97) vs exactly 1 tag for every other app. At +4–6G/week the retention
-   math fills `sdb1` (164G free) **before the September prune relief** — this needs
-   fixing BEFORE the migration's same-day backup. Fix layers: (a) `--exclude` the
-   registry dir from the tar (archive drops to ~7G; matches the documented "registry
-   rebuilds via Jenkins" DR contract) + dump a `_catalog`/tags listing into the archive
-   instead; (b) prune old build tags via the registry API (registry:3,
-   `REGISTRY_STORAGE_DELETE_ENABLED=true`) then `garbage-collect` — note
-   `delete-docker-reg-images.sh` is a Registry-**v1** relic and does NOT work on this
-   store.
+   the tgz) — at +4–6G/week `sdb1` (164G free) would have filled before September's
+   prune relief. Root cause of the store's growth: the yolo pipeline pushes a `bNNNN`
+   tag per service per build and nothing prunes — 8 services × **302 tags** each (+
+   marketstream 97) vs exactly 1 tag for every other app. Fixes landed: (a)
+   `backup-minikube-mnt.sh` now `--exclude`s the registry dir (archive → ~7G; matches
+   the documented "registry rebuilds via Jenkins" DR contract) and refreshes a
+   `registry-catalog.txt` repos+tags snapshot into `minikube-mnt` instead; (b)
+   `prune-registry.sh` (dry-run by default, `--apply` to act) prunes old build tags by
+   **digest keep-set** and GCs the store — dry-run on 2026-08-06 reported 617 deletable
+   manifests with 71 shared digests correctly spared. Run it with Jenkins idle to
+   reclaim most of kachra's 37G. Note `delete-docker-reg-images.sh` is a
+   Registry-**v1** relic and does NOT work on this store.
 4. `CLAUDE.md` said 48 GB RAM; the box has 96 GB (upgraded with the 64G minikube
    envelope). Fixed in the same commit as this file.
 

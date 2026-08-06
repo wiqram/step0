@@ -69,6 +69,41 @@ if [ ! -s "$keys_file" ]; then
     note_warn "cluster-keys.json missing/EMPTY — no Vault unseal key in this archive"
 fi
 
+##############################################
+#
+# Registry catalog snapshot (the archive carries this INSTEAD of the blobs).
+#
+# The registry blob store (/mnt/kachra/container-registry-images) is bind-mounted
+# INSIDE minikube-mnt (ensure-registry-store.sh, R8), so from 2026-06 the tar below
+# had been silently swallowing it — 34G of the 41G 2026-08-03 archive (~83%), and
+# docker blobs are already gzipped so they inflate the tgz ~1:1 — while
+# architecture.md §7 documented the blobs as NOT in the archive (single-disk restore:
+# Jenkins re-pushes every image). The --exclude on the tar line restores that
+# contract; what a bare-metal restore actually needs is the LIST of what to rebuild,
+# which this snapshot captures (every repo + its tags). Best-effort on purpose: with
+# the cluster stopped (a quiesced migration-day backup) the registry is dark — keep
+# the previous snapshot rather than fail the run or truncate the file.
+#
+##############################################
+REG_URL="${REG_URL:-http://172.16.238.2:5000}"
+catalog_file="$backup_files/registry-catalog.txt"
+if command -v jq >/dev/null 2>&1 \
+   && repos_json=$(curl -sf --max-time 10 "$REG_URL/v2/_catalog?n=1000") \
+   && [ -n "$repos_json" ]; then
+    {
+        echo "# registry catalog snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ) — $REG_URL"
+        echo "# format: <repo> <tags-json>. Blobs are NOT in this archive; Jenkins rebuilds them (architecture.md §7)."
+        echo "$repos_json" | jq -r '.repositories[]' | while read -r repo; do
+            echo "$repo $(curl -sf --max-time 10 "$REG_URL/v2/$repo/tags/list" | jq -c '.tags' 2>/dev/null)"
+        done
+    } > "$catalog_file.tmp" && mv "$catalog_file.tmp" "$catalog_file"
+elif [ -s "$catalog_file" ]; then
+    echo "WARNING: registry unreachable — keeping the previous registry-catalog.txt (cluster stopped?)" >&2
+else
+    echo "WARNING: registry unreachable and no previous registry-catalog.txt — archive carries no registry catalog." >&2
+    note_warn "registry catalog missing (registry dark, no previous snapshot)"
+fi
+
 # Where to backup to.
 dest="/mnt/minikube-backups"
 
@@ -89,11 +124,15 @@ echo
 # each weekly archive from ~5G to ~40G and fill /dev/sdb1 under the retention
 # policy. ollama's identity key (id_ed25519) + config live outside models/ and
 # ARE still captured.
+# container-registry-images is likewise excluded (2026-08-06): it is the kachra blob
+# store bind-mounted inside minikube-mnt — 34G of the 41G 2026-08-03 archive — and the
+# restore contract has always been "registry starts empty; Jenkins re-pushes"
+# (architecture.md §7). registry-catalog.txt (refreshed above) records what to rebuild.
 # tar's exit code was previously discarded; the weekly push reports it, so a truncated
 # or partial archive (rc=2 on a read error, rc=1 on files changing mid-read) now
 # surfaces on the phone instead of only in the cron log.
 tar_start=$(date +%s)
-tar -czf $dest/$archive_file --exclude='*/ollama/models' --exclude='*/wd-backup/logs' $backup_files $backup_files2 $backup_files3 $backup_files4 $backup_files5 $backup_files6
+tar -czf $dest/$archive_file --exclude='*/ollama/models' --exclude='*/wd-backup/logs' --exclude='*/container-registry-images' $backup_files $backup_files2 $backup_files3 $backup_files4 $backup_files5 $backup_files6
 tar_rc=$?
 tar_elapsed=$(( $(date +%s) - tar_start ))
 if [ "$tar_rc" -eq 1 ]; then
