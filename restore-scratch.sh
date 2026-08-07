@@ -441,7 +441,7 @@ phase4_extract() {
   # postgres/mysql/mongo (999). Observed 2026-08-07 — vault-0 could not read its own
   # /vault/data/core (ended up 1000:1000 mode 700) and the restore stalled with the platform
   # half-deployed. Same reason 4b below copies with `sudo cp -a`.
-  run "sudo tar -xpzf '$ARCHIVE_PATH' -C '$stage'"
+  run "sudo tar -xpzf --numeric-owner '$ARCHIVE_PATH' -C '$stage'"
 
   # 4a. ~/.vault FIRST — only copy of the Vault unseal key/root token. Verify non-empty.
   run "mkdir -p '$HOME/.vault' && chmod 700 '$HOME/.vault'"

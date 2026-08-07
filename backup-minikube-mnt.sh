@@ -132,7 +132,17 @@ echo
 # or partial archive (rc=2 on a read error, rc=1 on files changing mid-read) now
 # surfaces on the phone instead of only in the cron log.
 tar_start=$(date +%s)
-tar -czf $dest/$archive_file --exclude='*/ollama/models' --exclude='*/wd-backup/logs' --exclude='*/container-registry-images' $backup_files $backup_files2 $backup_files3 $backup_files4 $backup_files5 $backup_files6
+# --numeric-owner: store UIDs/GIDs as NUMBERS, never as user names. tar records both by
+# default and, on extract, resolves the NAME against the destination's /etc/passwd — so a
+# restore onto a box with different system accounts silently relocates data to whatever
+# uid that name happens to be there. Found 2026-08-07 restoring 24.04 -> 26.04: vault's
+# uid 100 was named `systemd-network` on the old box, which is 998 on 26.04, so vault-data
+# "restored" to 998 and vault-0 could not read its own storage. Same for `systemd-coredump`
+# (mysql/mongo, 999). Directories whose uid had NO name (70, 10001) came through correctly,
+# which is why the corruption looked like random per-app inconsistency. Container UIDs are
+# numeric facts; the names are meaningless noise. restore-scratch.sh extracts with the same
+# flag, and handles older name-bearing archives the same way.
+tar -czf $dest/$archive_file --numeric-owner --exclude='*/ollama/models' --exclude='*/wd-backup/logs' --exclude='*/container-registry-images' $backup_files $backup_files2 $backup_files3 $backup_files4 $backup_files5 $backup_files6
 tar_rc=$?
 tar_elapsed=$(( $(date +%s) - tar_start ))
 if [ "$tar_rc" -eq 1 ]; then
