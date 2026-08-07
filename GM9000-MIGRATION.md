@@ -40,13 +40,76 @@ window entirely. Public downtime was effectively nil; the NPM containers never s
 | Part | Size | Label | Mount | UUID |
 |---|---|---|---|---|
 | p1 | 1 GiB | `ESP` | `/boot/efi` | `80D2-3A6D` |
-| p2 | 120 GiB | `ubuntu-root` | `/` | `5b0e60ad-959b-4baf-bc0b-59db9cc9f5bf` |
-| p3 | 120 GiB | `ubuntu-var` | `/var` | `dc0ec04b-e04e-41ca-bc89-51e773dfa6e9` |
-| p4 | 600 GiB | `ubuntu-home` | `/home` | `097e811e-8034-4cab-ba24-3f61c57fde01` |
-| p5 | 900 GiB | `docker-data` | `/var/lib/docker` | `6f02e100-a29b-45ce-b7f6-22f4747c8d90` |
+| p2 | 120 GiB | *(none)* | `/` | `daed8186-04d9-4d2c-a2d9-0a2dedbaf8c5` |
+| p3 | 120 GiB | `ubuntu-var` | `/var` | `b2873916-be71-4277-9864-9cb750cf233e` |
+| p4 | 600 GiB | `ubuntu-home` | `/home` | `988e0f5f-b9db-4cc3-9ce2-97cb80f2e449` |
+| p5 | 900 GiB | `docker-data` | `/var/lib/docker` | `c98a484e-add3-427e-94b8-2953acd9ec3a` |
+
+> **⚠️ Every UUID in this table changed on 2026-08-07** — p2 when 26.04 was reinstalled, and
+> p3/p4/p5 when they were re-made that day (see below). The previously recorded values
+> (`5b0e60ad…` for p2, `dc0ec04b…`, `097e811e…`, `6f02e100…`) are **dead**, and the stale p2
+> one was not harmless: it is exactly what the orphaned `ubuntu-gm9000` GRUB entry kept
+> searching for, which is why every boot landed on the GRUB screen (§9a). **`/etc/fstab` now
+> addresses p3/p4/p5 by LABEL, not UUID**, so re-making a filesystem can never silently
+> orphan its mountpoint again.
 
 `tune2fs -m 1` applied to p4 and p5, and the §5.2 `RequiresMountsFor=/var/lib/docker`
 docker drop-in is in place.
+
+### 2026-08-07 — reinstall aftermath: the layout existed, but nothing used it
+
+After the fresh 26.04 install all five partitions were present with the correct sizes and
+labels, and `/etc/fstab` contained **only** `/`, `/boot/efi` and `/swap.img`. The desktop's
+udisks auto-mounted p3/p4/p5 under `/run/media/cloud/`, so `/var`, `/home` and — once docker
+was installed — the entire docker graph would have gone to the **120 GiB root** while the
+900 GiB `docker-data` partition sat empty. Nothing errors in that state; the box just fills
+up weeks later, and here a full `/var` means `DiskPressure=True`, a tainted node, and
+Prometheus stuck `Pending`. **A partition existing is not a partition being used, and only
+fstab settles which.**
+
+What was done, in order:
+
+1. `e2fsck -fy` on p3/p4/p5. p4 (the crashed `/home`) had inode-bitmap and free-count damage
+   from the 2026-08-06 memory corruption; p3 and p5 were clean. All three clean afterwards.
+2. The 71 GiB pre-crash `/home` was salvaged wholesale to
+   `/mnt/minikube-backups/home-salvage-2026-08-07/` (45 GiB after excluding caches, 646,728
+   files) **before** p4 was re-made. It carried `~/.vault/cluster-keys.json`, the six SOPS age
+   keys, `~/.ssh`, the GNOME keyring holding the `gh` token, `STEP0/.env`, `~/wd-backup`'s SMB
+   creds — and genuinely unpushed work: `vault/add-dyingpaleblue-bootstrap`,
+   `ollama/feat/dev-box-keep-warm`, `ollama/feat/nomic-embed-coexistence`, and
+   `Predictonomy/ollama-equities-model-note` (298 commits) plus a stash.
+3. p5's old `/var/lib/docker` was inspected before being re-made, because CLAUDE.md warns that
+   `nginx_npm_data` and `letsencrypt` live under `volumes/`. Both turned out to be **empty
+   shells** — NPM uses bind mounts under `~/Ideaprojects/nginx/` (25 proxy hosts, 22 certs,
+   95 MiB DB), which the salvage holds. Only `radcliffe_radcliffe-db-data` (47 MiB) had real
+   content; it is at `home-salvage-2026-08-07/_docker-named-volumes/`.
+4. p4 and p5 re-made. p3 re-made and the **live** `/var` copied onto it — the old 24.04 `/var`
+   sitting on it could not be adopted by a 26.04 root (mismatched dpkg/apt/snapd state).
+5. New `/home` = the fresh 26.04 profile as the base with the salvage merged **add-only**, so
+   GNOME 50's config wins and no 24.04 profile clobbers it.
+6. fstab written by LABEL; `zram-tools` reinstalled (`ALGO=zstd PERCENT=35`); `intel_iommu=on`
+   restored to the kernel cmdline. Note that `systemd.unified_cgroup_hierarchy=0` and the dead
+   `vfio-pci.ids`/`kvm.ignore_msrs` relics are deliberately **not** restored, per
+   [`UBUNTU-UPGRADE.md`](./UBUNTU-UPGRADE.md) §2.1.
+
+`verify-recovery.sh` section 5 now checks all five of these mounts, and `restore-scratch.sh`
+phase 3 warns on them, so next time the failure is detectable rather than silent.
+
+### 9a. 2026-08-07 — why every boot stopped at the GRUB screen
+
+The ESP held **two** Ubuntu bootloaders. The crashed install had left
+`/EFI/UBUNTU-GM9000/`, whose stub config read `search.fs_uuid 5b0e60ad-…` — the old root
+filesystem, which the 26.04 reinstall had reformatted to `daed8186-…`. Firmware listed that
+entry as `Boot0000`, **first in BootOrder**, so every boot loaded the old GRUB, failed to
+find `$root`, and dropped to the GRUB prompt. `/etc/default/grub` was never at fault
+(`GRUB_TIMEOUT=0`, `GRUB_TIMEOUT_STYLE=hidden` throughout), and neither was `recordfail`.
+The `/EFI/BOOT` removable fallback carried the same dead UUID.
+
+Fix: delete `Boot0000`, remove `/boot/efi/EFI/ubuntu-gm9000/`, then
+`grub-install --bootloader-id=ubuntu` **and** `grub-install --removable` to repair both
+paths, then `update-grub`. Result: `BootOrder: 0006,0007`, both stubs pointing at the live
+UUID. A pre-change ESP tarball is at
+`/mnt/minikube-backups/migration-handoff/esp-backup-pre-grubfix.tgz`.
 
 **Still outstanding:** at clone time `minikube status` reported **"profile not found"** —
 the cluster does not exist on *either* disk, so the NPM-fronted services have no backends
