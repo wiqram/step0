@@ -26,6 +26,23 @@ set -u
 # the whole survey at that point and every later check silently never ran.
 VR_SELFDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Run under sudo, point the cluster tools back at the INVOKING user's config. This survey
+# wants root for two things only — root's crontab and stat()ing the 0700 datastore dirs in
+# §5 — but `sudo ./verify-recovery.sh` also gives kubectl and minikube root's $HOME, where
+# there is no ~/.kube/config and no ~/.minikube. Every cluster check then fails, loudest of
+# all `minikube ip` returning 'Profile "minikube" not found', which reads as a dead cluster
+# on a perfectly healthy box. Observed 2026-08-07: as root 43 PASS / 1 FAIL, as cloud
+# 37 PASS / 0 FAIL — same machine, same moment. Rebinding HOME gives one invocation
+# (`sudo ./verify-recovery.sh`) full coverage instead of two partial ones.
+if [ "$(id -u)" = "0" ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+  _vr_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+  if [ -n "$_vr_home" ] && [ -d "$_vr_home" ]; then
+    export HOME="$_vr_home"
+    export KUBECONFIG="${KUBECONFIG:-$_vr_home/.kube/config}"
+    export MINIKUBE_HOME="${MINIKUBE_HOME:-$_vr_home/.minikube}"
+  fi
+fi
+
 # ---- expected values (override via env for a different topology) ----
 EXP_NODE_IP="${EXP_NODE_IP:-172.16.238.2}"        # minikube node: API/NodePorts/registry
 EXP_NPM_IP="${EXP_NPM_IP:-172.16.238.10}"         # nginx-proxy-manager on the 5million net
