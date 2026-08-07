@@ -66,8 +66,28 @@ do_kubeconfig() {
   # The emitted file already renames cluster/user/context to prod-minikube, so a flatten-merge
   # is collision-free with any local 'minikube' context.
   mkdir -p ~/.kube && chmod 700 ~/.kube
-  KUBECONFIG="$HOME/.kube/config:$src" kubectl config view --flatten > /tmp/.kubemerge.$$
-  mv /tmp/.kubemerge.$$ ~/.kube/config && chmod 600 ~/.kube/config
+
+  # Remember the developer's current context before merging — see the restore below.
+  local prev=""
+  [ -f "$HOME/.kube/config" ] && prev="$(kubectl config current-context 2>/dev/null || true)"
+
+  # ⚠️ ORDER MATTERS: on conflicting keys the FIRST file in KUBECONFIG wins, so $src must come
+  # first for a RE-emitted kubeconfig to actually replace the old one. This was reversed until
+  # 2026-08-07, which made re-emitting a silent no-op: after a `minikube delete` regenerates the
+  # CA, the stale (now invalid) certificate-authority-data in ~/.kube/config survived the merge
+  # and kubectl/IntelliJ kept failing `x509: certificate signed by unknown authority` — while the
+  # command reported "merged" and `get-contexts` listed prod-minikube, so it looked done.
+  local tmp; tmp="$(mktemp)"        # mktemp is 0600: this file holds cluster-admin certs
+  KUBECONFIG="$src:$HOME/.kube/config" kubectl config view --flatten > "$tmp"
+  mv "$tmp" ~/.kube/config && chmod 600 ~/.kube/config
+
+  # $src carries `current-context: prod-minikube` and now wins the merge, which would silently
+  # point every bare `kubectl` on this box at PROD with a system:masters credential. Put it back.
+  if [ -n "$prev" ] && [ "$prev" != "$CTX" ]; then
+    kubectl config use-context "$prev" >/dev/null 2>&1 \
+      && echo "kept current-context on '$prev' — use 'kubectl --context $CTX ...' for prod"
+  fi
+
   echo "merged $src into ~/.kube/config"; kubectl config get-contexts
 }
 

@@ -2,10 +2,15 @@
 # enable-devbox-kube-access.sh — allow the dev box to reach the prod minikube API over 10GbE.
 #
 # WHAT: inserts two ACCEPT rules into the iptables DOCKER-USER chain so forwarded traffic
-#       from the dev box (10.10.10.2, on the enp4s0 10GbE point-to-point link) can reach the
+#       from the dev box (10.10.10.2, on the enp5s0 10GbE point-to-point link) can reach the
 #       minikube Kubernetes API at 172.16.238.2:8443 on the 5million docker bridge.
 #
-# WHY:  traffic entering on enp4s0 and destined for a container on the docker bridge is
+# NOTE: the prod 10GbE NIC is enp5s0 as of 2026-08-07 — it was enp4s0 until the GM9000 NVMe
+#       install shifted every PCI bus number up by one (AQC113CS 04:00.0 → 05:00.0; the I225-V
+#       LAN NIC likewise enp6s0 → enp7s0). Interface names here are COMMENTARY ONLY: the rules
+#       below match on dest IP+port, so a future rename cannot break them. Don't add an -i match.
+#
+# WHY:  traffic entering on enp5s0 and destined for a container on the docker bridge is
 #       cross-interface *forwarded* traffic, which Docker's FORWARD chain drops by default.
 #       DOCKER-USER is traversed before Docker's own forward rules and is never clobbered by
 #       docker, so it's the correct place for this allow. Rules match on dest IP+port (NOT the
@@ -28,7 +33,7 @@
 # DEV-BOX SIDE: after --install here, run devbox-connect-prod.sh on the dev box (route + kubeconfig).
 set -eu
 
-DEV_IP="${DEV_IP:-10.10.10.2}"        # dev box, other end of the enp4s0 /30
+DEV_IP="${DEV_IP:-10.10.10.2}"        # dev box, other end of the enp5s0 /30
 API_IP="${API_IP:-172.16.238.2}"      # minikube node / kube API on the 5million bridge
 API_PORT="${API_PORT:-8443}"          # kube API server port
 

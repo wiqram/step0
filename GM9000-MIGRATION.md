@@ -441,11 +441,13 @@ broken, fix it or note it; you don't want to discover it post-restore and blame 
 migration. Also record `kubectl get po -A | grep -cv Running`.
 
 **3. Lock the LAN IP.** The router forwards 80/443 to **192.168.50.53**, but the box gets
-that address via **DHCP** (`enp6s0`, Intel I225-V). In the router admin, add a **DHCP
-reservation** binding `enp6s0`'s MAC to 192.168.50.53 (get the MAC with
-`ip link show enp6s0`). The NIC doesn't change in this migration, so the fresh install
-will then come up on the same IP and the router port-forwards keep working — this is
-what makes "repoint DNS" unnecessary (§6).
+that address via **DHCP** (Intel I225-V — `enp6s0` before the swap, **`enp7s0` after**).
+In the router admin, add a **DHCP reservation** binding that NIC's MAC to 192.168.50.53
+(get the MAC with `ip -br link`, not a remembered name — see the §10.1 warning: the GM9000
+renumbers PCI and both NICs get renamed). The **MAC is what the reservation binds, and the
+MAC does not change**, so the rename is harmless: the fresh install still comes up on the
+same IP and the router port-forwards keep working — this is what makes "repoint DNS"
+unnecessary (§6).
 
 **4. Quiesce, then take a fresh backup — THE critical step.** The weekly archive is from
 Monday; `restore-scratch.sh` phase 4 will extract the latest archive **over** the live
@@ -486,7 +488,7 @@ cp /etc/hosts /etc/fstab /etc/default/zramswap /etc/docker/daemon.json $H/
 cp /etc/default/grub $H/grub                         # the cmdline to reproduce (§5)
 crontab -l > $H/cloud-crontab.txt
 sudo crontab -u root -l > $H/root-crontab.txt
-ip link show enp6s0 | grep ether > $H/lan-mac.txt
+ip -br link > $H/nic-names-and-macs.txt        # all NICs+MACs: names shift post-swap (§10.1), MACs don't
 nvidia-smi --query-gpu=driver_version --format=csv,noheader > $H/nvidia-driver.txt
 ```
 
@@ -893,11 +895,19 @@ only do this after you are certain the new system is the system.
 
 ### 10.1 Facts card (surveyed 2026-08-06 — the values §5–§7 must reproduce)
 
+> ⚠️ **The two NIC names are the one row §5–§7 must NOT reproduce verbatim.** Adding the
+> GM9000 pushed every PCI bus number up by one, so the kernel renamed both interfaces
+> (AQC113CS `04:00.0`→`05:00.0`, I225-V `06:00.0`→`07:00.0`). Confirmed post-swap 2026-08-07.
+> **The hardware, the MACs and the DHCP reservation are all unchanged** — only the names moved,
+> and nothing broke, because no script hardcodes one. If you are verifying against this card on
+> a rebuilt box, `enp5s0`/`enp7s0` is the PASS. Get current names from `ip -br link`, never from
+> a remembered `enpXsY`.
+
 | Fact | Value |
 |---|---|
 | Hostname / user | `private-cloud` / `cloud` |
-| LAN | `enp6s0` (I225-V 2.5GbE), **192.168.50.53** via DHCP, gw 192.168.50.1 |
-| 10GbE | `enp4s0` (AQC113CS), static **10.10.10.1/30**, dev box 10.10.10.2 (OOB: vik@192.168.50.161) |
+| LAN | `enp6s0` → **`enp7s0` after the swap** (I225-V 2.5GbE), **192.168.50.53** via DHCP, gw 192.168.50.1 |
+| 10GbE | `enp4s0` → **`enp5s0` after the swap** (AQC113CS), static **10.10.10.1/30**, dev box 10.10.10.2 (OOB: vik@192.168.50.161) |
 | Cluster IPs | node 172.16.238.2, NPM 172.16.238.10, gw 172.16.238.1, net `5million` 172.16.0.0/16 |
 | Kernel cmdline | `intel_iommu=on systemd.unified_cgroup_hierarchy=0` (+ inert kvm/vfio relics, §5.1) |
 | cgroups | **v1** (docker `Cgroup Version: 1`, driver `cgroupfs`) — **being retired**, see [`UBUNTU-UPGRADE.md`](./UBUNTU-UPGRADE.md) §2 |

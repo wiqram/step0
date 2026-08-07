@@ -689,8 +689,54 @@ sudo nmcli con up 10gbe-prod
 ./devbox-connect-prod.sh route && ./devbox-connect-prod.sh test
 sudo ./devbox-connect-prod.sh install-unit             # boot-check: route + ollama + kubectl heal
 sudo ./10gbe-link-watchdog.sh --install                # auto-detects eno1/atlantic
-kubectl --context prod-minikube get ns                 # the copied ~/.kube just works
+kubectl --context prod-minikube get ns                 # only after the re-emit below
 ```
+
+⚠️ **The copied `~/.kube` does NOT just work — you must re-emit the kubeconfig from prod.**
+This line used to read "the copied `~/.kube` just works"; that was true only while prod's
+minikube CA stayed put. **A minikube rebuild regenerates the CA**, which invalidates both the
+`certificate-authority-data` and the client cert in every previously-emitted kubeconfig — and
+the copy you carry over from the old disk is by definition pre-rebuild. Bitten on 2026-08-07:
+prod's CA was regenerated (old `notBefore` Jan 2023 → new Aug 2026, a completely different
+fingerprint) while `~/prod-minikube.kubeconfig` still dated from Jul 1.
+
+**This failure does not look like a cert problem.** You get `x509: certificate signed by
+unknown authority`, or just `Unauthorized` — so you go and re-check the route, the
+`DOCKER-USER` rules and the link, all of which are fine. Check the CA *first*:
+
+```bash
+# on PROD — re-emit, then verify the CA matches the live cluster before copying:
+./enable-devbox-kube-access.sh --emit-kubeconfig        # no root needed
+grep -m1 certificate-authority-data ~/prod-minikube.kubeconfig | sed 's/.*: //' \
+  | base64 -d | openssl x509 -noout -fingerprint          # must equal:
+openssl x509 -in ~/.minikube/ca.crt -noout -fingerprint
+
+# copy to the dev box, then merge (NOT a plain cp over ~/.kube/config):
+./devbox-connect-prod.sh kubeconfig ~/prod-minikube.kubeconfig
+```
+
+⚠️ **Copy the current `devbox-connect-prod.sh` across too — an old copy merges the wrong way.**
+Before 2026-08-07 the merge put `~/.kube/config` first in `KUBECONFIG`, and **the first file wins
+on conflicting keys**, so a re-emitted kubeconfig lost to the stale one already in the file. The
+command still printed `merged …` and `get-contexts` still listed `prod-minikube` — it just kept
+the dead CA. If you are re-emitting *because* of a cert error, a stale script silently reproduces
+the exact error you are fixing. Confirm the dev box's copy has `KUBECONFIG="$src:$HOME/.kube/config"`
+(src first). The fixed version also preserves your `current-context`: the emitted file says
+`current-context: prod-minikube`, and now that it wins the merge it would otherwise repoint every
+bare `kubectl` on the dev box at **prod**, with a `system:masters` credential.
+
+**Then in IntelliJ:** Services → Kubernetes reads `~/.kube/config`, but caches it — after a
+re-merge use the ⟳ refresh in the Services toolbar (or restart the IDE), or it keeps showing the
+old, failing connection. Two things that look like connection bugs and aren't: the Kubernetes
+plugin ships with **IDEA Ultimate only** (Community has no Services → Kubernetes at all), and if
+the config lives anywhere but `~/.kube/config` it must be named in
+Settings → Build, Execution, Deployment → Kubernetes. Verify from a terminal first —
+`kubectl --context prod-minikube get ns` — so you are not debugging the IDE and the certs at once.
+
+Re-run the re-emit **after any `minikube delete`**, not just during this migration — the
+same trap catches `minikube-delete-and-upgrade.sh` and a from-scratch `start-scratch.sh`.
+The emitted credential is `system:masters` (full cluster-admin, valid 3 years), so treat the
+file as a secret: it lands mode `0600` and should stay that way.
 ⚠️ **The one bug not to reintroduce:** never add a prod-API or `10.10.10.x` route to
 the **eno2** profile. A stray /32 on eno2 (metric 100 < eno1's) once sent all dev→prod
 traffic over the 1GbE LAN silently — the "10GbE TX cap" incident. eno2 stays plain DHCP.
@@ -798,6 +844,10 @@ or just re-run the apply, which is idempotent.
 - [ ] `nvidia-smi` OK under Secure Boot (MOK enrolled).
 - [ ] Compose stack: 14 containers up, UI reachable.
 - [ ] Ollama from prod: `curl http://10.10.10.2:11434/api/tags` lists all four models.
+- [ ] **Kubeconfig re-emitted from prod after the last `minikube delete`** (§6.3) — verify by
+      fingerprint, not by "it looks like a kubeconfig": its `certificate-authority-data` must
+      match prod's live `~/.minikube/ca.crt`. A stale one fails as `Unauthorized` and sends you
+      hunting the firewall.
 - [ ] `./devbox-connect-prod.sh test` green; `kubectl --context prod-minikube get ns`;
       `jenkins-deploy <app>` fires (check Jenkins).
 - [ ] `ping 10.10.10.1` over the /30; both watchdog + connect-prod units `active`;

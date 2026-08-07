@@ -19,12 +19,19 @@ API-only is sufficient for it.
 
 | Thing | Value |
 |-------|-------|
-| 10GbE link | `enp4s0` on prod, `10.10.10.1/30`; dev box is `10.10.10.2` (0.2 ms, direct cable) |
+| 10GbE link | `enp4s0` on prod, `10.10.10.1/30`; dev box is `10.10.10.2` (0.2 ms, direct cable) — **prod's NIC is `enp5s0` since 2026-08-07**, see note below |
 | Prod minikube node / API | `172.16.238.2:8443` on the `5million` docker bridge (`172.16.0.0/16`, gw `172.16.238.1`) |
 | Docker bridge iface | `br-<networkid>` — **name changes if `5million` is recreated** (start-scratch recreates it), so firewall rules must NOT pin the bridge name |
 | API cert SANs | already include `IP Address:172.16.238.2` → TLS validates from the dev box, no cert regen needed |
 | `net.ipv4.ip_forward` | already `1` on prod (docker keeps it on) |
 | prod→dev SSH | **not currently reachable** (22/2222/22022 closed on dev) → dev-box side delivered as copy-paste |
+
+> **Amendment 2026-08-07 (names only — the design is unchanged).** Prod's NICs were renamed
+> by the GM9000 NVMe install, which shifted every PCI bus number up by one: 10GbE
+> `enp4s0`→**`enp5s0`**, LAN `enp6s0`→**`enp7s0`**. The `enp4s0`/`enp6s0` below are left as
+> written to preserve the as-approved record. This cost nothing to absorb, which is a point
+> in the design's favour: it already refuses to pin interface names (rules match dest IP+port,
+> for the `br-<id>` reason in the next table row), so the rename required no code change.
 
 ## Why the firewall change is the crux
 

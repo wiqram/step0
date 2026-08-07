@@ -14,7 +14,9 @@
 #       prod-minikube kubeconfig) is correct and already survives reboots — the *link* is the
 #       flaky part. See architecture.md §3 and enable-devbox-kube-access.sh / devbox-connect-prod.sh.
 #
-# SYMMETRIC: the SAME script runs on prod (enp4s0, 10.10.10.1) and the dev box (eno1, 10.10.10.2).
+# SYMMETRIC: the SAME script runs on prod (enp5s0, 10.10.10.1) and the dev box (eno1, 10.10.10.2).
+#       (prod was enp4s0 until the 2026-08-07 GM9000 NVMe install renumbered PCI; the auto-detect
+#       below is why that rename needed no change here — never hardcode the name.)
 #       It auto-detects the local 10GbE interface + its NetworkManager connection from the /30, so
 #       no per-host edits. Bouncing either end re-trains the whole link; running it on both is
 #       belt-and-suspenders (whichever notices the wedge first acts). Bouncing this NIC is safe on

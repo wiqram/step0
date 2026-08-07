@@ -109,15 +109,24 @@ link (separate from the household LAN):
 
 | Box | Role | 10GbE NIC / IP | LAN NIC |
 |-----|------|----------------|---------|
-| **prod** (`private-cloud`) | runs Docker + minikube + everything in this repo | `enp4s0` → `10.10.10.1/30` | `enp6s0` (192.168.50.x) |
+| **prod** (`private-cloud`) | runs Docker + minikube + everything in this repo | `enp5s0` → `10.10.10.1/30` | `enp7s0` (192.168.50.53) |
 | **dev** (`vik@10.10.10.2`) | developer workstation (IntelliJ, builds); **not** part of the cluster | `eno1` → `10.10.10.2/30` | `eno2` (192.168.50.x) |
+
+> ⚠️ **Prod's NIC names shifted on 2026-08-07** — `enp4s0`→`enp5s0` (10GbE) and
+> `enp6s0`→`enp7s0` (LAN). Nothing was rewired: installing the GM9000 NVMe pushed every
+> PCI bus number up by one (AQC113CS `04:00.0`→`05:00.0`, I225-V `06:00.0`→`07:00.0`), and
+> the kernel names interfaces after the bus. **MACs and the DHCP reservation are unchanged.**
+> Nothing broke, and that is by design: the firewall rules match dest IP+port and
+> `10gbe-link-watchdog.sh` derives the interface from the `/30`, so no code hardcodes a name.
+> Treat any `enpXsY` in these docs as a label, not a key — expect it to move again on the next
+> PCIe change, and never pin one in a script.
 
 The dev box has **direct `kubectl` access to the prod Kubernetes API** (`172.16.238.2:8443`)
 across this link — used from the CLI and from **IntelliJ Services → Kubernetes**. Scope is
 **API-only** (no registry/NodePort/pod-network reachability). How it's wired:
 
 - **Prod host firewall** — the API lives on the `5million` docker bridge, so traffic from
-  `enp4s0` into it is *forwarded* traffic that Docker's `FORWARD` chain drops by default.
+  `enp5s0` into it is *forwarded* traffic that Docker's `FORWARD` chain drops by default.
   `enable-devbox-kube-access.sh` inserts two `DOCKER-USER` ACCEPT rules
   (`10.10.10.2 → 172.16.238.2:8443` + established return), matched on **dest IP/port** (never
   the `br-<id>` name, which changes when `5million` is recreated). Persisted by the
@@ -130,6 +139,24 @@ across this link — used from the CLI and from **IntelliJ Services → Kubernet
   its cluster/user/context renamed to **`prod-minikube`** so it coexists with the dev box's
   own local `minikube` context. The API cert already carries `IP Address:172.16.238.2` in its
   SANs, so TLS validates unchanged.
+  ⚠️ **Re-emit it after every `minikube delete` — the CA is regenerated and the old kubeconfig
+  dies silently.** Because the certs are *embedded*, the dev box's copy is a point-in-time
+  snapshot: a cluster rebuild rotates the CA and invalidates both the `certificate-authority-data`
+  and the client cert, but the file still looks perfectly valid. Symptom is `x509: certificate
+  signed by unknown authority` or a bare `Unauthorized`, which reads like a firewall/route fault
+  and sends you auditing `DOCKER-USER` and the link — both of which will be fine. Diagnose by
+  comparing fingerprints, not by re-checking the network:
+  `grep -m1 certificate-authority-data <kubeconfig> | sed 's/.*: //' | base64 -d | openssl x509 -noout -fingerprint`
+  against `openssl x509 -in ~/.minikube/ca.crt -noout -fingerprint`. Fix on prod with
+  `./enable-devbox-kube-access.sh --emit-kubeconfig`, copy over, then
+  `./devbox-connect-prod.sh kubeconfig <file>` to merge. Hit on 2026-08-07 (CA jumped from a
+  Jan-2023 `notBefore` to Aug-2026 while the emitted file still dated from Jul 1).
+  The merge puts the **incoming file first** in `KUBECONFIG` — first file wins on conflicting
+  keys, so the reverse (what it did until 2026-08-07) made a re-emit a silent no-op that kept
+  the dead CA while reporting success. It then restores the previous `current-context`, so the
+  merge can't quietly make **prod** the default target for bare `kubectl` on the dev box.
+  IntelliJ (Services → Kubernetes, Ultimate only) reads `~/.kube/config` but caches it — refresh
+  the Services window after a re-merge.
 - From-scratch rebuild: prod side is `enable-devbox-kube-access.sh --install`; dev side is
   `devbox-connect-prod.sh` (this repo). The exported kubeconfig is **cluster-admin** —
   acceptable over the single-peer /30 cable.
@@ -180,7 +207,7 @@ kube-access config fault** — the firewall rule, dev route, and kubeconfig abov
 end-to-end whenever the link is up. `10gbe-link-watchdog.sh` runs as a `systemd` service on
 **both** ends: it pings the peer across the /30 and bounces the local NIC (re-training the
 link) after a few failed probes, cutting the outage to seconds. It auto-detects the local
-10GbE interface + NM connection from the /30, so the same script installs on prod (`enp4s0`)
+10GbE interface + NM connection from the /30, so the same script installs on prod (`enp5s0`)
 and the dev box (`eno1`). Install on both: `sudo ./10gbe-link-watchdog.sh --install`.
 Bouncing this NIC is safe on either host — it carries only the dev↔prod link (prod's
 cluster/LAN and the dev box's LAN/SSH are on separate NICs). If flaps persist, the deeper
