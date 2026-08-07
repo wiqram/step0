@@ -156,6 +156,22 @@ phase1_tooling() {
   run "sudo apt-get update -y"
   run "sudo apt-get install -y ca-certificates curl gnupg jq git apt-transport-https nfs-common ethtool"
 
+  # Order the docker unit behind its own partition, BEFORE docker exists. On this box
+  # /var/lib/docker is a separate filesystem (GM9000-MIGRATION.md §1.2, p5 'docker-data').
+  # Without this drop-in dockerd can start before that mount lands, write its whole graph
+  # into the underlying directory, and then have the mount shadow it — images and volumes
+  # are not lost, they are simply invisible, and the partition looks mysteriously empty.
+  # Safe to write before docker is installed: the drop-in applies when the unit appears.
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "  DRYRUN> write /etc/systemd/system/docker.service.d/require-docker-mount.conf"
+  elif [ -e /dev/disk/by-label/docker-data ]; then
+    sudo mkdir -p /etc/systemd/system/docker.service.d
+    printf '[Unit]\nRequiresMountsFor=/var/lib/docker\n' \
+      | sudo tee /etc/systemd/system/docker.service.d/require-docker-mount.conf >/dev/null
+    sudo systemctl daemon-reload 2>/dev/null || true
+    log "docker.service drop-in: RequiresMountsFor=/var/lib/docker"
+  fi
+
   # docker (official convenience repo)
   if ! command -v docker >/dev/null 2>&1; then
     run "curl -fsSL https://get.docker.com -o /tmp/get-docker.sh"
@@ -164,34 +180,63 @@ phase1_tooling() {
     log "NOTE: docker group membership for 'cloud' applies on next login; this run uses sudo where needed."
   fi
 
-  # Reproduce the host docker daemon config the live cluster was built on: cgroupfs cgroup
-  # driver (minikube's docker driver negotiated this on the live box), a 100m per-container
-  # log cap (single-disk box — uncapped json logs can fill /), and overlay2. nvidia-ctk
-  # (below) then MERGES the nvidia runtime into this same file. Only write on a FRESH box
-  # (no existing daemon.json) so a re-run never clobbers the nvidia runtime stanza.
+  # Reproduce the host docker daemon config the live cluster is built on: the SYSTEMD cgroup
+  # driver, a 100m per-container log cap (uncapped json logs can fill /), and overlay2.
+  # nvidia-ctk (below) then MERGES the nvidia runtime into this same file. Only write on a
+  # FRESH box (no existing daemon.json) so a re-run never clobbers the nvidia runtime stanza.
+  #
+  # 2026-08-07: this was `native.cgroupdriver=cgroupfs`, which was correct only while the
+  # host ran cgroup v1. Ubuntu 26.04 ships systemd 259 and has REMOVED cgroup v1 entirely
+  # (both legacy and hybrid hierarchies) — the box is cgroup2fs and cannot be put back.
+  # `cgroupfs` on a v2 host gives docker the wrong driver against a systemd-managed
+  # hierarchy: containers fail to start or the node misreports resources, and never with a
+  # clean error at the point of misconfiguration. `systemd` is also what kubeadm expects.
+  # See UBUNTU-UPGRADE.md §0 and §2.3, which called out this exact line as the thing that
+  # would silently revert the migration if restore-scratch.sh were re-run afterwards.
   if [ ! -f /etc/docker/daemon.json ]; then
     if [ "$DRY_RUN" = 1 ]; then
-      echo "  DRYRUN> write /etc/docker/daemon.json (cgroupfs, log max-size 100m, overlay2) + restart docker"
+      echo "  DRYRUN> write /etc/docker/daemon.json (systemd cgroup driver, log max-size 100m, overlay2) + restart docker"
     else
       sudo mkdir -p /etc/docker
       sudo tee /etc/docker/daemon.json >/dev/null <<'JSON'
 {
-  "exec-opts": ["native.cgroupdriver=cgroupfs"],
+  "exec-opts": ["native.cgroupdriver=systemd"],
   "log-driver": "json-file",
   "log-opts": {"max-size": "100m"},
   "storage-driver": "overlay2"
 }
 JSON
       sudo systemctl restart docker 2>/dev/null || true
-      log "wrote /etc/docker/daemon.json (cgroupfs + 100m log cap + overlay2)"
+      log "wrote /etc/docker/daemon.json (systemd cgroup driver + 100m log cap + overlay2)"
     fi
   fi
 
-  # kubectl (pinned-stable via official pkg repo)
+  # Guard the same invariant on a box that ALREADY has a daemon.json (the branch above is
+  # skipped there): a stale cgroupfs setting is invisible until the cluster misbehaves.
+  if [ -f /etc/docker/daemon.json ] && grep -q 'native.cgroupdriver=cgroupfs' /etc/docker/daemon.json 2>/dev/null; then
+    if [ "$(stat -fc %T /sys/fs/cgroup 2>/dev/null)" = "cgroup2fs" ]; then
+      log "WARN: /etc/docker/daemon.json says native.cgroupdriver=cgroupfs but this host is cgroup v2."
+      log "      Fix before starting the cluster:"
+      log "        sudo sed -i 's/native.cgroupdriver=cgroupfs/native.cgroupdriver=systemd/' /etc/docker/daemon.json"
+      log "        sudo systemctl restart docker && docker info | grep -i cgroup"
+    fi
+  fi
+
+  # kubectl (pinned-stable via official pkg repo).
+  #
+  # THIS PIN MUST TRACK WHAT MINIKUBE ACTUALLY DEPLOYS. start-scratch.sh passes no
+  # --kubernetes-version, so the API server is whatever the installed minikube defaults to
+  # (minikube v1.38.1 -> k8s v1.35.1; confirmed against the prod node's own cached
+  # preload tarball). kubectl's supported skew is +/-1 minor: this was pinned to v1.31
+  # against a v1.35 server — four minors out — which does not fail loudly, it fails as
+  # unknown fields being dropped and subresources not resolving.
+  # When you bump minikube, re-check with:
+  #   minikube start --help | grep -A2 kubernetes-version    # or the release's constants.go
+  K8S_APT_MINOR="${K8S_APT_MINOR:-v1.35}"
   if ! command -v kubectl >/dev/null 2>&1; then
     run "sudo mkdir -p /etc/apt/keyrings"
-    run "curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg"
-    run "echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.31/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list"
+    run "curl -fsSL https://pkgs.k8s.io/core:/stable:/$K8S_APT_MINOR/deb/Release.key | sudo gpg --dearmor --yes -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg"
+    run "echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/$K8S_APT_MINOR/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list"
     run "sudo apt-get update -y && sudo apt-get install -y kubectl"
   fi
 
@@ -307,6 +352,33 @@ phase3_dirs() {
   }
   ensure_labeled_mount minikube-backups /mnt/minikube-backups
   ensure_labeled_mount Kachra           /mnt/kachra
+
+  # --- OS-level partition layout (VERIFY ONLY — never mutates) -----------------------------
+  # GM9000-MIGRATION.md §1.2 puts /var, /home and /var/lib/docker on their own labelled
+  # partitions of the 4TB NVMe. Those mountpoints are chosen in the INSTALLER, not here — but
+  # the installer silently NOT applying them is a real, observed failure. After the 2026-08-07
+  # reinstall all three partitions existed with the correct labels and sizes while /etc/fstab
+  # carried only / and /boot/efi: the desktop auto-mounted them under /run/media/cloud/, so
+  # /var, /home and every docker image landed on the 120G root and the 900G docker-data
+  # partition sat empty. Nothing errors at any point — the box just fills up weeks later.
+  # So: warn loudly, change nothing. Repairing this needs an unmounted /var, i.e. an operator.
+  check_partition_mount() {   # $1=label  $2=expected mountpoint
+    local label="$1" mp="$2" want got
+    [ -e "/dev/disk/by-label/$label" ] || return 0     # partition absent on this box — fine
+    want="$(readlink -f "/dev/disk/by-label/$label")"
+    got="$(findmnt -no SOURCE --target "$mp" 2>/dev/null || true)"
+    if [ -n "$got" ] && [ "$(readlink -f "$got" 2>/dev/null)" = "$want" ]; then
+      log "layout: $mp is on '$label' ($want) OK"
+    else
+      log "WARN: partition '$label' ($want) exists, but $mp is served by ${got:-<nothing>}."
+      log "      $mp is NOT on its intended partition — everything written there goes to root."
+      log "      Expected /etc/fstab line:"
+      log "        /dev/disk/by-label/$label  $mp  ext4  defaults  0 2"
+    fi
+  }
+  check_partition_mount ubuntu-var  /var
+  check_partition_mount ubuntu-home /home
+  check_partition_mount docker-data /var/lib/docker
 
   run "sudo mkdir -p /mnt/minikube-backups/minikube-mnt"
   run "sudo mkdir -p /mnt/kachra/container-registry-images"

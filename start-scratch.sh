@@ -104,7 +104,50 @@ else
   #                          only the eviction-hard backstop saved it, and only by thrashing at the very edge.)
   #                          CPU stays over-advertised (24 cap vs 16 cgroup) on purpose: CPU is compressible (throttles,
   #                          never OOM-kills), so the burst headroom is free. zram swap stays on as a cheap net (plan.md).
-  minikube start --cpus 16 --memory 65536 --disk-size 40g --driver=docker --network 5million --gpus all --mount-string="/mnt/minikube-backups/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.system-reserved=cpu=1,memory=31Gi --extra-config=kubelet.kube-reserved=cpu=1,memory=2Gi --extra-config=kubelet.eviction-hard="memory.available<1Gi,nodefs.available<10%" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
+  # ---- Host-adaptive sizing (2026-08-07) --------------------------------------------------
+  # --memory and system-reserved USED TO BE hardcoded for the 96G host (65536 / 31Gi). That
+  # is fatal on a box with less RAM: `minikube start --memory 65536` on a 32G host refuses to
+  # start, and a hardcoded system-reserved silently mis-sizes Allocatable either way. This
+  # box is running on reduced RAM after the 2026-08-06 memory-corruption crash, so the two
+  # numbers are DERIVED. The reference case is preserved exactly: a 96G host still computes
+  # --memory 65536 and system-reserved 31Gi, so nothing changes when the RAM goes back in.
+  #
+  # The invariant is the one reasoned out above, unchanged:
+  #   Allocatable = HOST_GI - SYS_RES - KUBE_RES(2Gi) - EVICT(1Gi)  ==  MK_GI - 4
+  #   => SYS_RES  = HOST_GI - MK_GI + 1
+  # Check against the hand-tuned values it replaces: 94 - 64 + 1 = 31Gi. Exact.
+  #
+  # Override either with MINIKUBE_MEM_GI / MINIKUBE_CPUS in the environment.
+  HOST_GI=$(( $(awk '/^MemTotal:/{print $2}' /proc/meminfo) / 1024 / 1024 ))
+  # Leave the host its share: 30Gi on a big box (OS + docker + nginx-proxy-manager +
+  # IntelliJ + Chrome + Jenkins build spikes), otherwise a third, never less than 8Gi.
+  if [ "$HOST_GI" -ge 80 ]; then
+    HOST_RESERVE_GI=30
+  else
+    HOST_RESERVE_GI=$(( HOST_GI / 3 ))
+    if [ "$HOST_RESERVE_GI" -lt 8 ]; then HOST_RESERVE_GI=8; fi
+  fi
+  MK_GI="${MINIKUBE_MEM_GI:-$(( HOST_GI - HOST_RESERVE_GI ))}"
+  if [ "$MK_GI" -lt 4 ]; then
+    echo "FATAL: only ${HOST_GI}Gi RAM detected — too little to start this cluster."
+    echo "       Seat the missing DIMMs, or override deliberately: MINIKUBE_MEM_GI=<n> $0"
+    exit 1
+  fi
+  SYS_RES_GI=$(( HOST_GI - MK_GI + 1 ))
+  if [ "$SYS_RES_GI" -lt 1 ]; then SYS_RES_GI=1; fi
+  # CPU is compressible (throttles, never OOM-kills) so we over-advertise on purpose, while
+  # still leaving ~8 threads for the host.
+  MK_CPUS="${MINIKUBE_CPUS:-$(( $(nproc) - 8 ))}"
+  if [ "$MK_CPUS" -gt 16 ]; then MK_CPUS=16; fi
+  if [ "$MK_CPUS" -lt 4 ];  then MK_CPUS=4;  fi
+  echo "minikube sizing: host=${HOST_GI}Gi -> --cpus ${MK_CPUS} --memory $(( MK_GI * 1024 ))MB, kubelet system-reserved=${SYS_RES_GI}Gi"
+  if [ "$HOST_GI" -lt 80 ]; then
+    echo "NOTE: this host is well under the 96G design point — the full app set (Jenkins +"
+    echo "      kube-prometheus + Vault + ollama + splunk + apps) will be tight at ${MK_GI}Gi."
+  fi
+  minikube start --cpus "$MK_CPUS" --memory "$(( MK_GI * 1024 ))" --disk-size 40g --driver=docker --network 5million --gpus all --mount-string="/mnt/minikube-backups/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.system-reserved=cpu=1,memory=${SYS_RES_GI}Gi --extra-config=kubelet.kube-reserved=cpu=1,memory=2Gi --extra-config=kubelet.eviction-hard="memory.available<1Gi,nodefs.available<10%" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
+  # Pre-2026-08-07 line (hardcoded for the 96G host), kept for reference:
+  #minikube start --cpus 16 --memory 65536 --disk-size 40g --driver=docker --network 5million --gpus all --mount-string="/mnt/minikube-backups/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.system-reserved=cpu=1,memory=31Gi --extra-config=kubelet.kube-reserved=cpu=1,memory=2Gi --extra-config=kubelet.eviction-hard="memory.available<1Gi,nodefs.available<10%" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
   # Previous line (kept for reference): no kubelet reservations/eviction -> scheduler over-commits the 32G cgroup cap.
   #minikube start --cpus 12 --memory 32768 --disk-size 40g --driver=docker --network 5million --gpus all --mount-string="/mnt/minikube-backups/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
   #minikube start --cpus 12 --memory 32768 --disk-size 40g --driver=docker --network 5million --mount-string="/home/cloud/Ideaprojects/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0

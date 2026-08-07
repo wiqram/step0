@@ -340,6 +340,52 @@ if have kubectl; then
   esac
 fi
 
+# ============================== 5. HOST STORAGE LAYOUT ==============================
+section "5. Host storage layout (GM9000-MIGRATION.md §1.2 — partitions are chosen in the INSTALLER)"
+
+# Why this section exists. On 2026-08-07, after the fresh 26.04 install, all three NVMe
+# partitions were present with the correct labels AND the correct sizes — while /etc/fstab
+# carried only / and /boot/efi. The desktop's udisks auto-mounted them under
+# /run/media/cloud/, so /var, /home and every docker image were writing to the 120G root
+# while the 900G docker-data partition sat empty. There is no error at any point in that
+# story: the box simply runs out of disk weeks later, and on this host a full /var means
+# DiskPressure=True, a tainted node, and Prometheus stuck Pending (see CLAUDE.md on
+# reduce-node-docker-cache.sh). A partition existing is not the same as a partition being
+# USED, and only fstab can tell you which.
+check_mount_source() {   # $1=label  $2=expected mountpoint  $3=severity (fail|warn)
+  local label="$1" mp="$2" sev="${3:-fail}" want got
+  if [ ! -e "/dev/disk/by-label/$label" ]; then
+    info "no partition labelled '$label' on this box — skipping $mp (different topology?)"
+    return 0
+  fi
+  want="$(readlink -f "/dev/disk/by-label/$label" 2>/dev/null)"
+  got="$(findmnt -no SOURCE --target "$mp" 2>/dev/null || true)"
+  got="$(readlink -f "${got:-}" 2>/dev/null || true)"
+  if [ -n "$got" ] && [ "$got" = "$want" ]; then
+    pass "$mp is on '$label' ($want), $(df -h --output=avail "$mp" 2>/dev/null | tail -1 | tr -d ' ') free"
+  else
+    local where; where="$(findmnt -no SOURCE --target "$mp" 2>/dev/null || echo '<nothing>')"
+    "$sev" "$mp is served by $where, NOT the '$label' partition ($want) — writes there land on the root disk. Add to /etc/fstab:  /dev/disk/by-label/$label  $mp  ext4  defaults  0 2"
+    # A partition that exists but is auto-mounted elsewhere is the exact 2026-08-07 symptom.
+    local auto; auto="$(findmnt -no TARGET "$want" 2>/dev/null | head -1)"
+    [ -n "$auto" ] && [ "$auto" != "$mp" ] && info "  ('$label' is currently mounted at $auto — likely a desktop/udisks automount)"
+  fi
+}
+check_mount_source ubuntu-var       /var
+check_mount_source ubuntu-home      /home
+check_mount_source docker-data      /var/lib/docker
+check_mount_source minikube-backups /mnt/minikube-backups
+check_mount_source Kachra           /mnt/kachra
+
+# Root headroom. Everything above exists to keep this number healthy.
+_rootuse="$(df -h --output=pcent / 2>/dev/null | tail -1 | tr -d ' %')"
+if [ -n "$_rootuse" ]; then
+  note "root filesystem: ${_rootuse}% used, $(df -h --output=avail / | tail -1 | tr -d ' ') free"
+  if   [ "$_rootuse" -ge 90 ]; then fail "root filesystem ${_rootuse}% full — kubelet declares DiskPressure and taints the node well before 100%"
+  elif [ "$_rootuse" -ge 75 ]; then warn "root filesystem ${_rootuse}% full — check what is not on its own partition"
+  else pass "root filesystem ${_rootuse}% used"; fi
+fi
+
 # ---- DR manifest drift: the branch restore-scratch would clone vs what prod runs ----
 # This is the quietest failure in the whole restore path. A stale branch here clones a repo
 # that builds and deploys perfectly while missing whatever prod actually runs — no error at
