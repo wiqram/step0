@@ -16,7 +16,7 @@ HOST: private-cloud  (i9-12900K · 48GB · RTX 3080 Ti · Ubuntu 6.8)
   Docker  ── network "5million" (172.16.0.0/16, gw .238.1)
     ├─ nginx-proxy-manager @ 172.16.238.10   (TLS / Let's Encrypt; domain → NodePort)
     └─ minikube node       @ 172.16.238.2    (driver=docker, --gpus all)
-         mount /mnt/minikube-backups/minikube-mnt → /mnt ;  insecure-registry :5000
+         mount /mnt/minikube-mnt → /mnt ;  insecure-registry :5000
          Kubernetes (single node):
            platform: vault · jenkins · kube-prometheus · registry
            apps:     qcguy(Ghost) · yolo/trading-microservices · predictonomy ·
@@ -35,8 +35,8 @@ forwards it to a Kubernetes NodePort on `172.16.238.2`.
 | Docker network | `5million`, bridge `172.16.0.0/16`, gateway `172.16.238.1` |
 | Minikube node IP | `172.16.238.2` (Kube API + NodePorts + registry `:5000`) |
 | nginx-proxy-manager | `172.16.238.10` (admin UI `:81`) |
-| Shared/persistent mount | `/mnt/minikube-backups/minikube-mnt` (on `/dev/sdb1`) → `/mnt` in-cluster |
-| Durable registry blobs | `container-registry-images/` (separate `/dev/sdb2` mount) |
+| Shared/persistent mount | `/mnt/minikube-mnt` (on `/dev/nvme0n1p6`, label `minikube-data`) → `/mnt` in-cluster |
+| Durable registry blobs | `container-registry-images/` (separate `/dev/nvme0n1p7` mount, label `Kachra`) |
 | Private registry | `container-registry.traderyolo.com` → `172.16.238.2:5000` |
 | Vault keys (only copy) | `~/.vault/cluster-keys.json` (0600, outside any repo) |
 | Weekly DR backup | `root` cron, **Mon 05:00** → `private-cloud-<date>.tgz` in `/mnt/minikube-backups`, log `/var/log/minikube-backup.log`; then off-site to the **WD Cloud NAS** `192.168.50.169:/nfs/private-cloud` (NFS, mounted `/mnt/wdcloud`) |

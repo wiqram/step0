@@ -38,7 +38,7 @@ co-located.
 │   │                                                                    │
 │   └── minikube node        @ 172.16.238.2   (driver=docker)            │
 │         12 CPUs · 32 GB · 40 GB disk · --gpus all                      │
-│         mount: /mnt/minikube-backups/minikube-mnt → /mnt              │
+│         mount: /mnt/minikube-mnt → /mnt              │
 │         insecure-registry 172.16.238.2:5000                            │
 │         ┌──────────────────────────────────────────────────────────┐  │
 │         │ Kubernetes (single node)                                  │  │
@@ -244,7 +244,7 @@ prod, see above). Tests: `tests/test-restore-scratch-dev.sh` (syntax, ensure_lin
 idempotency, mutation-free full dry-run).
 
 **Dev-key recovery copy (2026-07-22):** the dev-box age key is backed up on prod at
-`/mnt/minikube-backups/minikube-mnt/keys-sops-dev-box.txt` (0600, sha256-verified at
+`/mnt/minikube-mnt/keys-sops-dev-box.txt` (0600, sha256-verified at
 write) — the same dir as `keys-sops-IMPORTANT.txt`, so it rides the weekly root backup
 cron → WD Cloud archive and is restored by `restore-scratch.sh` phase 4b automatically.
 Written from the dev box via a short-lived hostPath-`/mnt` busybox pod against
@@ -259,7 +259,7 @@ Executed top to bottom (`set -e`, so any failure aborts the run):
 1. **Docker network** – create `5million` if missing.
 2. **Minikube** – if `kubectl version` fails (no cluster), `minikube start` with:
    `--cpus 12 --memory 32768 --disk-size 40g --driver=docker --network 5million
-   --gpus all --mount /mnt/minikube-backups/minikube-mnt:/mnt
+   --gpus all --mount /mnt/minikube-mnt:/mnt
    --insecure-registry 172.16.238.2:5000` plus kubelet/scheduler/controller webhook flags.
 3. **Addons** – `registry`, `nvidia-gpu-device-plugin`, `metrics-server` (serves
    `kubectl top`/HPAs — see [Resource metrics](#resource-metrics--metrics-server-kubectl-top--hpas)).
@@ -298,7 +298,7 @@ ordering (Vault before Jenkins/apps) is what matters here. The vault repo owns i
 - Installed via Helm into the `vault` namespace; images **pinned** (vault `2.0.2`,
   vault-k8s `1.7.4` — no longer `latest`).
 - **Durable storage (2026-07-20):** the file backend lives on the pre-created
-  `vault-data-pv` (Retain, hostPath `/mnt/vault-data` on the sdb1 shared mount —
+  `vault-data-pv` (Retain, hostPath `/mnt/vault-data` on the `minikube-data` shared mount (nvme0n1p6) —
   STEP0 `k8s/vault-backup/vault-data-pv.yaml`), which `start-scratch.sh` applies
   **before** `start-vault.sh` so the StatefulSet adopts the pinned `data-vault-0`
   PVC instead of dynamic-provisioning an ephemeral `/tmp` hostPath. (The old
@@ -537,14 +537,14 @@ partial-offloads to system RAM — feasible after the 96 GB host upgrade. Served
 
 ## 7. Persistence & Backups
 
-- **Shared volume:** `/mnt/minikube-backups/minikube-mnt` (on `/dev/sdb1`) is mounted into
+- **Shared volume:** `/mnt/minikube-mnt` (on `/dev/nvme0n1p6`, label `minikube-data`) is mounted into
   the Minikube node at `/mnt`. It carries per-app env/secret scripts and app data shared
   between host and cluster. Inside it, `container-registry-images/` is itself a **separate
-  `/dev/sdb2` mount** (the durable registry from commit R8) — `tar` descends into it
+  `/dev/nvme0n1p7` mount (label `Kachra`)** (the durable registry from commit R8) — `tar` descends into it
   normally, so it is captured by the backup.
 - **Location history (important).** The shared volume used to live at
   `~/Ideaprojects/minikube-mnt` (on the `/home` disk, `/dev/sda6`). It was relocated to
-  `/mnt/minikube-backups/minikube-mnt` and `restart-minikube.sh` / `start-scratch.sh`
+  `/mnt/minikube-mnt` and `restart-minikube.sh` / `start-scratch.sh`
   mount the new path. On **2026-06-16** we found `backup-minikube-mnt.sh` was still pointing
   `backup_files` at the *old* `~/Ideaprojects/minikube-mnt` — so every weekly archive had
   silently been backing up a **stale** copy (months old, missing the live Postgres/Mongo
@@ -578,7 +578,7 @@ check there to confirm a run or debug a failure.
 
 > **`ollama/models` is excluded** from the tar (`--exclude='*/ollama/models'`). Those
 > model weights are ~38 GB and **reproducible** (`ollama pull` / the `Modelfile`); without
-> the exclude each weekly archive would balloon from ~5 GB to ~40 GB and fill `/dev/sdb1`
+> the exclude each weekly archive would balloon from ~5 GB to ~40 GB and fill the backup disk (`/dev/sda1`)
 > under the retention policy. Ollama's identity key (`id_ed25519`) lives outside `models/`
 > and **is** captured. On restore, re-fetch the model rather than expecting it in the tar.
 
@@ -587,7 +587,7 @@ check there to confirm a run or debug a failure.
 > (`ensure-registry-store.sh`, R8), so from June the tar had been **silently swallowing
 > it** — 34 GB of the 41 GB 2026-08-03 archive (~83%), already-gzipped blobs that
 > compress ~1:1 — even though this document already stated the blobs are not in the
-> archive. The exclude restores that contract before `sdb1` filled (at +4–6 GB/week the
+> archive. The exclude restores that contract before the backup disk filled (at +4–6 GB/week the
 > retention math ran out of disk before the September prune relief). In its place the
 > script refreshes **`minikube-mnt/registry-catalog.txt`** (every repo + its tags,
 > best-effort — a quiesced cluster keeps the previous snapshot) so a bare-metal restore
@@ -642,7 +642,7 @@ to the **WD Cloud 6TB NAS on the LAN** (`192.168.50.169`) over **NFS**. The dedi
 **`/nfs/private-cloud`** (device-side path `/mnt/HD/HD_a2/private-cloud`), mounted at
 **`/mnt/wdcloud`**; archives land at the **mount root** (`/mnt/wdcloud/private-cloud-<date>.tgz`),
 since the share is dedicated to these backups. This is the off-host leg of disaster recovery — a
-disk-loss that takes out `/dev/sdb1` no longer takes out every backup. (This replaced the earlier
+disk-loss that takes out the backup disk (`/dev/sda1`) no longer takes out every backup. (This replaced the earlier
 GCS Coldline mirror; the GCS code is retained **commented-out** in `backup-minikube-mnt.sh` as a
 re-enable-able fallback.)
 
@@ -677,8 +677,8 @@ re-enable-able fallback.)
 box (phase 1 installs `nfs-common`) it **mounts the WD NFS share** (`hard,timeo=600,retrans=3`) and
 picks the newest `private-cloud-*.tgz` from `/mnt/wdcloud/` (date parsed from the filename, like the
 prune) — no cloud auth needed on the LAN. Two things are not in the archive and are reconstructed on
-restore: the **registry blobs** (they live on sdb2/`/mnt/kachra`, re-pushed by Jenkins on a single-disk
-rebuild — enforced by an explicit `--exclude` since 2026-08-06, after the sdb2 bind inside `minikube-mnt`
+restore: the **registry blobs** (they live on `/mnt/kachra` (nvme0n1p7), re-pushed by Jenkins on a single-disk
+rebuild — enforced by an explicit `--exclude` since 2026-08-06, after the `Kachra` bind inside `minikube-mnt`
 had silently pulled them back into the tar; `registry-catalog.txt` in the archive lists what to rebuild)
 and the **ollama models** (`*/ollama/models` excluded, re-pulled). See
 `docs/superpowers/specs/2026-06-30-restore-scratch-design.md`.
@@ -955,7 +955,7 @@ GitHub repo (your app)
   ├─ Jenkinsfile                        → vaultSync → docker build/push → kubectl apply → rollout status
   └─ vault/<svc>.env, <svc>.secret.sops.env  → config + SOPS-encrypted secrets
 
-Jenkins build  ──push──▶  registry (container-registry.traderyolo.com → 172.16.238.2:5000, blobs on sdb2)
+Jenkins build  ──push──▶  registry (container-registry.traderyolo.com → 172.16.238.2:5000, blobs on `Kachra`)
                ──apply─▶  K8s ns "<app>"  ──Service type:NodePort 30XXX on 172.16.238.2
 Vault agent injector  ──reads kv/<app>/*──▶  renders /vault/secrets/* into the pod
 nginx-proxy-manager   ──<app>.com (TLS) ──▶  172.16.238.2:30XXX
@@ -1122,7 +1122,7 @@ The build runs on the custom **`jenkins-inbound-agent-vik:cloud`** agent image
 ### 10.7 Persistence & backups for the new app
 
 Anything the app must **not lose** (DB data dirs, uploads, generated keys) should live under
-the shared mount `/mnt/minikube-backups/minikube-mnt/<app>/` (appears as `/mnt/<app>` inside
+the shared mount `/mnt/minikube-mnt/<app>/` (appears as `/mnt/<app>` inside
 the cluster — use a `hostPath`/`local` PV pointing there). It is then captured by the weekly
 backup automatically (§7). **Do not** rely on backing up reproducible artifacts (container
 images, downloadable model weights — cf. the `ollama/models` exclude); back up only the

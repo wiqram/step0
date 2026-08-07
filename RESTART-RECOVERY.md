@@ -61,7 +61,7 @@ curl -s -o /dev/null -w '%{http_code}\n' https://predictonomy.com   # 200
 | Pods stuck `Init`/`Error`, "secret not found" across **all** namespaces | **Vault sealed** (boots sealed, no KMS) | `kubectl -n vault exec vault-0 -- vault status` → `Sealed true`; `tail ~/Ideaprojects/STEP0/logs/vault-auto-unseal.log` | unsealer fixes in ~10s; if its loop died the `*/5` watchdog restarts it; manual: `restart-minikube.sh` calls `restart-vault.sh`, or unseal from `~/.vault/cluster-keys.json` |
 | A web pod `ImagePullBackOff` / `manifest unknown` | **registry lost images** on stop — registry on ephemeral storage (**plan.md R8 / N-0006 #2, OPEN**) | `kubectl -n <ns> describe pod <pod>` | re-push the node's cached image, e.g. `minikube ssh -- docker push container-registry.traderyolo.com/predictonomy-web:latest`, then delete the pod. **Re-push the `*-migrate` image too** or data CronJobs stay broken |
 | Site is fine but **data CronJobs** `ImagePullBackOff` | same #2 — only the web image was re-pushed | `kubectl -n predictonomy get pods \| grep -E 'refresh\|backup\|loaders'` | re-push the `predictonomy-migrate:latest` image too. A healthy site does NOT imply healthy jobs |
-| Apps report broker creds/platform keys "not configured" though Mongo has them; `kv/yolo/followers/` empty | **Vault KV data missing/corrupt.** (Historic root cause — dynamic `/tmp` PV wiped by a rebuild — FIXED 2026-07-20: data now on durable `vault-data-pv` at host `/mnt/minikube-backups/minikube-mnt/vault-data`, survives rebuilds) | `kubectl -n vault exec vault-0 -- vault kv list kv/yolo/followers` → "No value found" | restore newest snapshot: `kubectl -n vault scale sts vault --replicas=0`; on the HOST (no minikube ssh needed): `rm -rf /mnt/minikube-backups/minikube-mnt/vault-data/* && tar xzf /mnt/minikube-backups/minikube-mnt/vault-backups/vault-data-<latest>.tgz -C /mnt/minikube-backups/minikube-mnt/vault-data`; scale back to 1; auto-unsealer unseals. Runtime keys saved after the snapshot are gone — followers re-connect brokers; admin re-enters platform keys in /admin/settings |
+| Apps report broker creds/platform keys "not configured" though Mongo has them; `kv/yolo/followers/` empty | **Vault KV data missing/corrupt.** (Historic root cause — dynamic `/tmp` PV wiped by a rebuild — FIXED 2026-07-20: data now on durable `vault-data-pv` at host `/mnt/minikube-mnt/vault-data`, survives rebuilds) | `kubectl -n vault exec vault-0 -- vault kv list kv/yolo/followers` → "No value found" | restore newest snapshot: `kubectl -n vault scale sts vault --replicas=0`; on the HOST (no minikube ssh needed): `rm -rf /mnt/minikube-mnt/vault-data/* && tar xzf /mnt/minikube-mnt/vault-backups/vault-data-<latest>.tgz -C /mnt/minikube-mnt/vault-data`; scale back to 1; auto-unsealer unseals. Runtime keys saved after the snapshot are gone — followers re-connect brokers; admin re-enters platform keys in /admin/settings |
 | Nightly backup skipped | Vault sealed at 01:00, or cluster down | `tail ~/IdeaProjects/Predictonomy/ops/agent/logs/backup-check.log` (this check stays app-side) | now backstopped by auto-unseal; one-off: `kubectl -n predictonomy create job --from=cronjob/predictonomy-postgres-backup backup-manual-$(date +%s)` |
 | minikube container **gone** | unclean crash wiped it / `minikube delete` ran | `cluster-autostart.log` shows "ABSENT" + ntfy alert | **human decision** — run STEP0 `start-scratch.sh` (cold) then re-deploy apps; hostPath PVs (`/mnt/predictonomy-postgres`, `/mnt/predictonomy-backups`, `/mnt/minikube-backups`) survive |
 
@@ -99,8 +99,8 @@ curl -s -o /dev/null -w '%{http_code}\n' https://predictonomy.com   # 200
 1. **Vault no auto-unseal** → ✅ **mitigated** by `vault-auto-unseal.sh` (host-side; drill-proven:
    sealed → auto-recovered ~6s).
 2. **Registry on ephemeral storage** (images vanish on stop) → 🟡 **FIX BUILT, NOT YET ACTIVE** —
-   the durable self-managed registry on sdb2 is implemented in `k8s/registry/` and wired into
-   `start-scratch.sh` (**plan.md R8**), but it only takes effect on the **next cold boot** (the sdb2
+   the durable self-managed registry on `Kachra` is implemented in `k8s/registry/` and wired into
+   `start-scratch.sh` (**plan.md R8**), but it only takes effect on the **next cold boot** (the `Kachra`
    bind is captured at minikube-container creation; see `k8s/registry/README.md`). **Until that cold
    boot, the registry is still ephemeral** — so after any warm stop you must still re-push cached
    images (web **and** `*-migrate`), per the triage row above.
@@ -119,7 +119,7 @@ curl -s -o /dev/null -w '%{http_code}\n' https://predictonomy.com   # 200
   restores Vault keys + data + nginx proxy-hosts/certs + secrets, clones every app repo, brings up the
   platform (`SKIP_APP_BUILDS=1 start-scratch.sh`), re-arms cron, then **pauses**. Repoint DNS at the new
   host, then `./trigger-app-builds.sh`. Resumable (`--from-phase N`), inspectable (`--dry-run`). Registry
-  blobs (sdb2) and ollama models are **not** in the backup — rebuilt via Jenkins / re-pulled. Full design:
+  blobs (`Kachra`) and ollama models are **not** in the backup — rebuilt via Jenkins / re-pulled. Full design:
   `docs/superpowers/specs/2026-06-30-restore-scratch-design.md`.
 - **Re-arm the automation:** `docker update --restart=unless-stopped minikube`, then re-add the
   `@reboot` + watchdog cron lines pointing at the STEP0 scripts:

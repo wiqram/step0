@@ -35,7 +35,7 @@ window entirely. Public downtime was effectively nil; the NPM containers never s
 | §7 sign-off | ⏳ outstanding (see the cluster note below) |
 | §9 old-disk rollback | ✅ intact — boot entry had to be recreated, see §9 |
 
-**As-built layout** (`/dev/nvme0n1`, GPT, 2.0 TiB tail deliberately left free per §1.2):
+**As-built layout** (`/dev/nvme0n1`, GPT, 1.2 TiB tail still free):
 
 | Part | Size | Label | Mount | UUID |
 |---|---|---|---|---|
@@ -44,6 +44,40 @@ window entirely. Public downtime was effectively nil; the NPM containers never s
 | p3 | 120 GiB | `ubuntu-var` | `/var` | `b2873916-be71-4277-9864-9cb750cf233e` |
 | p4 | 600 GiB | `ubuntu-home` | `/home` | `988e0f5f-b9db-4cc3-9ce2-97cb80f2e449` |
 | p5 | 900 GiB | `docker-data` | `/var/lib/docker` | `c98a484e-add3-427e-94b8-2953acd9ec3a` |
+| p6 | 500 GiB | `minikube-data` | `/mnt/minikube-mnt` | `8396afd7-c912-4a95-b9d7-23db587ee903` |
+| p7 | 300 GiB | `Kachra` | `/mnt/kachra` | `f51c6dab-1dfe-49d9-8ea5-8b467a2631ea` |
+
+> **p6 and p7 were added on 2026-08-07 — §8 is now DONE**, though not by the bind-mount
+> scheme §8 originally sketched. They hold the two things still living on the 7200rpm
+> WD10EZEX: the shared cluster volume (every app database) and the registry blobs.
+> Measured on this box, 4K **synchronous** writes — what every Postgres/Mongo/Loki commit
+> blocks on — are **0.96 ms on the NVMe against 29.6 ms on the HDD**, a 31× difference.
+>
+> **The shared volume also left its nested path.** It is `/mnt/minikube-mnt` now, not
+> `/mnt/minikube-backups/minikube-mnt`; the nesting was only ever an artefact of both
+> living on the same HDD. The IN-NODE path is unchanged (`--mount-string` still binds to
+> `/mnt`), so no PV, manifest or hostPath needed touching — but every host-side reference
+> did, across 7 STEP0 scripts plus `vault/upload-file-secrets.sh` and IG-Trading's
+> `_lib.sh`. `restore-scratch.sh` phase 4b deliberately accepts EITHER layout as the
+> archive source, because every pre-2026-08-07 archive has the old path baked in.
+>
+> **Labels are load-bearing.** `Kachra` moved from `sda2` to `p7` by *swapping the labels*
+> (`sda2` → `Kachra-old`), so `/etc/fstab`, `restore-scratch.sh` phase 3 and
+> `verify-recovery.sh` §5 needed no edits at all. Never reuse the label `Kachra` elsewhere.
+
+**The 1TB WD10EZEX (`sda`) is backup staging only now.** `backup-minikube-mnt.sh` writes the
+weekly `private-cloud-<date>.tgz` there first and copies it to the WD Cloud NAS after, so it
+needs roughly 2× the largest archive free (~85 G) plus retention — a staging tier, not a bare
+archive vault. On 2026-08-07 `sda2`/`sda3` (the latter 282 G, empty since Dec 2025) were
+deleted and `sda1` grown to the full 931.5 GiB.
+
+> ⚠️ **Changing the partition table of a disk whose partition was recently mounted wedges the
+> kernel**: `BLKRRPART: Device or resource busy`, and neither `partx` nor `partprobe` can
+> recover it even with nothing mounted and no process holding the device. The on-disk table
+> is correct; a **REBOOT** is required before `/dev/sda1` reappears at its new size. Then
+> `resize2fs /dev/sda1` grows the ext4 **online** — no second unmount. Plan the reboot into
+> the window rather than discovering it, and note `sda1`'s start sector never moves, so the
+> existing data is not at risk.
 
 > **⚠️ Every UUID in this table changed on 2026-08-07** — p2 when 26.04 was reinstalled, and
 > p3/p4/p5 when they were re-made that day (see below). The previously recorded values
@@ -345,7 +379,9 @@ pre-migration system is still on it (§9).
 | 3 | 120 GiB | ext4 | `/var` | System var **without** docker: journald, apt, snapd state, `/var/log`. Today's /var minus docker is ~15G. Isolates log growth from both OS and docker. |
 | 4 | 600 GiB | ext4 | `/home` | Repos, IDE caches (`~/.cache` 16G, `~/.local` 11G today), Downloads. Today 72G used on a 79G partition — this ends the 96%-full era. |
 | 5 | 900 GiB | ext4 | `/var/lib/docker` | **The minikube cluster node, every k8s image, host images, buildkit cache.** Today ~73G used; 900G gives Jenkins build churn and the §8 growth room to never trigger DiskPressure. |
-| — | ~2.0 TiB | — | *unallocated tail* | Future: §8 `platform-data` partition (minikube-mnt + registry on NVMe), or growing partition 5 (it is last on purpose — it can grow contiguously into the tail). |
+| 6 | 500 GiB | ext4 | `/mnt/minikube-mnt` | **DONE 2026-08-07** (§8): the shared cluster volume — every app DB, Jenkins, Vault, Grafana. Label `minikube-data`. |
+| 7 | 300 GiB | ext4 | `/mnt/kachra` | **DONE 2026-08-07** (§8): registry blobs. Label `Kachra`, swapped off `sda2` so no script changed. |
+| — | ~1.2 TiB | — | *unallocated tail* | Still free. Partition 5 is no longer last, so it can no longer grow contiguously — carve a new partition instead (that is how p6/p7 were added, with `sfdisk --no-reread --append` + `partx -a`, safe while the other partitions stay mounted). |
 
 - **Swap: none on disk.** The box runs **zram** (zram-tools: `ALGO=zstd`, `PERCENT=35`
   ≈ 33G on 96G RAM) — reproduce that in §5 instead. A disk swap partition would only be
@@ -734,9 +770,29 @@ Only after the soak passes, consider §8/§9.
 
 ---
 
-## 8. Optional phase 2 — move the hot platform data to the NVMe
+## 8. ~~Optional phase 2~~ — move the hot platform data to the NVMe · **DONE 2026-08-07**
 
-*(Do this days/weeks later, as its own maintenance window — never bundled with the swap.)*
+> **STATUS: COMPLETE, but NOT by the mechanism described below.** Keep this section for its
+> motivation and measurements; ignore its `platform-data` / bind-mount recipe, which was
+> never used. What actually happened:
+>
+> | | Planned here | Actually done |
+> |---|---|---|
+> | Mechanism | one `platform-data` partition + bind mounts | **two partitions, mounted directly** |
+> | Shared volume | bind onto `/mnt/minikube-backups/minikube-mnt` | **p6 `minikube-data` → `/mnt/minikube-mnt`** |
+> | Registry blobs | bind from the HDD | **p7 `Kachra` → `/mnt/kachra`** (label swapped off `sda2`) |
+> | Script changes | none (bind preserves paths) | none for the registry; the shared volume's host path DID change — see the as-built table |
+>
+> Direct mounts beat the bind-mount trick here: a bind hides *which device* is really
+> backing the path, and `verify-recovery.sh` §5 checks exactly that. Mounting p6 at the
+> literal path also means a failure to mount is **invisible** — the path still exists as a
+> directory on the parent filesystem and everything keeps working, 31× slower, with no
+> error anywhere. That is why §5 grew a `minikube-data` check the same day.
+>
+> Measured before/after on this box (`dd bs=4k count=1000 oflag=dsync`, the operation every
+> database commit blocks on): **29.6 ms per write on the WD10EZEX → 0.96 ms on the GM9000.**
+
+*(Original plan follows, retained for context.)*
 
 **Motivation:** after §6, everything I/O-heavy except one thing is on the NVMe. The
 exception is `minikube-mnt` — Jenkins home, Grafana, Vault, and **every app database**

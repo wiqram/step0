@@ -12,6 +12,87 @@ just went through) and [`nginx/CLAUDE.md`](../nginx/CLAUDE.md) (the NPM stack).
 
 ---
 
+## 0a. What 26.04 actually broke — found the hard way, 2026-08-07
+
+This box did not take the in-place path: it was **reinstalled** on 26.04 and rebuilt with
+`restore-scratch.sh`. That run surfaced eleven distinct bugs, every one of them invisible to
+`--dry-run`. All are fixed in the scripts now; this is the record of *why*, so the next
+26.04 box does not rediscover them.
+
+| # | 26.04 change | What it did | Fixed by |
+|---|---|---|---|
+| 1 | cgroup v1 removed | docker will not start with `native.cgroupdriver=cgroupfs` | phase 1 writes `systemd`, warns on a stale daemon.json |
+| 2 | — | kubectl pinned `v1.31` while minikube 1.38.1 deploys k8s **1.35.1** — four minors of skew | repo pinned `v1.35` |
+| 3 | `ubuntu-drivers-common` 1:0.10.9 | `autoinstall` **deleted**, now `install`. Prints usage, exits 0-ish, `run()` ignored it → phase logged "driver installed" with **no driver** | prefer `install`, then VERIFY with `dpkg` |
+| 4 | — | phase 2's `cp` cannot overwrite a root-owned archive (backups run from root's cron) | chown before copy |
+| 5 | — | `start-scratch.sh` was committed **100644** — phase 6 could never run on a fresh clone | git mode 100755 |
+| 6 | — | helm's repo LIST restores but its index CACHE does not; `helm repo add` is skip-if-present, so installs die "no cached repo found" *after* namespaces/PVs exist | `helm repo update` before bring-up |
+| 7 | — | `tar`/`cp` ran as `cloud`; neither restores ownership without root | `sudo tar -xpzf`, `sudo cp -a` |
+| 8 | **different system UIDs** | see below — the subtle one | `--numeric-owner` |
+| 9 | — | vault helm chart unpinned; a rebuild takes whatever is latest that day | `VAULT_CHART_VERSION=0.33.0` |
+| 10 | ships **apache2 enabled** | holds `:80`, so nginx-proxy-manager (all public ingress + LE renewal) cannot bind | `free_web_ports()` in phase 1, re-checked in phase 8 |
+| 11 | **`sudo` is now `sudo-rs`** | see below — the dangerous one | phase 0 dies without a tty |
+
+### #8 — tar restores the user NAME, not the UID
+
+`tar` records both, and on extract **as root** it resolves the *name* against the
+**destination's** `/etc/passwd`. Across a distro version that silently relocates data:
+
+```
+old box (24.04):  vault storage = uid 100, named `systemd-network`
+new box (26.04):  `systemd-network` = 998,   uid 100 = `syslog`
+result:           vault-data restored to 998; vault runs as 100; permission denied
+```
+
+`vault-0` then sat in a readiness loop on `open /vault/data/core/_migration: permission
+denied` — *after* minikube was Ready and monitoring deployed, i.e. half-built rather than
+cleanly failed. Directories whose uid had **no name at all** (postgres `70`, loki `10001`)
+came through perfectly, which made it look like random per-app inconsistency rather than one
+bug. Container UIDs are numeric facts; the names are noise that varies per release.
+`--numeric-owner` on **both** sides — create *and* extract — is the fix.
+
+> Related: you cannot "normalise" this data to a single owner. PostgreSQL refuses to start
+> unless its data directory is `0700`/`0750` (*"data directory has invalid permissions"*),
+> and `0700` grants access to the owner alone — so pgdata must be owned by the uid postgres
+> runs as. `verify-recovery.sh` §5 therefore asserts "not owned by uid 1000" rather than
+> exact UIDs, which legitimately differ per image generation.
+
+### #11 — sudo-rs will not use a cached credential without a tty
+
+26.04 ships `sudo-rs` 0.2.13 as the default `sudo`. Run headless (nohup, CI, an agent),
+**every** `sudo` fails with *"A terminal is required to authenticate"* — and because `run()`
+did not check exit status and `mark_phase` advanced unconditionally, phase 1 logged success
+and marked itself done with docker, kubectl, minikube and helm all absent. The next run then
+*skipped* phase 1 as complete. This single behaviour is why several of the other bugs stayed
+hidden long enough to surface later as a half-built platform.
+
+Phase 0 now refuses to start in that situation. To run headless deliberately, give the shell
+a working non-interactive sudo first:
+
+```bash
+printf '#!/bin/sh\necho $PASSWORD\n' > /tmp/askpass && chmod 700 /tmp/askpass
+mkdir -p /tmp/sudoshim && printf '#!/bin/sh\nexec /usr/bin/sudo -A "$@"\n' > /tmp/sudoshim/sudo
+chmod 755 /tmp/sudoshim/sudo
+SUDO_ASKPASS=/tmp/askpass PATH=/tmp/sudoshim:$PATH ./restore-scratch.sh
+```
+
+### Smaller things
+
+- **`nfs-common` is not installed by default**, so the `/mnt/wdcloud` fstab automount fails
+  (`mount-start-limit-hit`) until phase 1 installs it. Harmless for the script's own
+  ordering, but a fresh box looks like the NAS is unreachable.
+- **NVIDIA**: `nvidia-driver-580` (`580.173.02-0ubuntu0.26.04.1`) builds cleanly against
+  kernel 7.0.0-29 via DKMS and matches what 24.04 ran. Secure Boot is off here, so no MOK
+  enrolment. `nouveau` is blacklisted by `/lib/modprobe.d/nvidia-graphics-drivers.conf`,
+  which the driver package puts into the initramfs — **a reboot is required**; before it,
+  `modprobe nvidia` fails "No such device" because nouveau still owns the card.
+- **Docker's `resolute` repo exists day one** — `get.docker.com` works unmodified.
+- `systemctl is-enabled httpd` prints **`alias`** and exits **0** on Ubuntu
+  (`apache2.service` declares `Alias=httpd.service`), while a genuinely disabled `apache2`
+  prints `disabled` and exits **1**. Test the reported STATE, never the exit status.
+
+---
+
 ## 0. The blocker: this box runs cgroup v1, and 26.04 has deleted it
 
 Ubuntu 26.04 ships **systemd 259**, and the release notes state that support for cgroup v1

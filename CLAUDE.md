@@ -62,9 +62,33 @@ to a Kubernetes NodePort on `172.16.238.2`.
 
 ## Conventions & facts to respect
 
+- **Host storage layout (as-built 2026-08-07).** Everything I/O-heavy is on the 4TB
+  GM9000 NVMe; the 1TB WD10EZEX (`sda`) is backup staging only.
+
+  | Mount | Device | Label | Holds |
+  |---|---|---|---|
+  | `/` · `/var` · `/home` · `/var/lib/docker` | nvme p2/p3/p4/p5 | — · `ubuntu-var` · `ubuntu-home` · `docker-data` | OS, logs, home, docker graph |
+  | `/mnt/minikube-mnt` | nvme **p6** | `minikube-data` | the shared cluster volume — every app DB, Jenkins, Vault, Grafana |
+  | `/mnt/kachra` | nvme **p7** | `Kachra` | registry blobs (bind-mounted into `minikube-mnt/container-registry-images`) |
+  | `/mnt/minikube-backups` | **sda1** | `minikube-backups` | weekly `private-cloud-*.tgz` staging + salvage dirs |
+  | `/mnt/wdcloud` | NFS 192.168.50.169 | — | off-site archive mirror |
+
+  Two things that bite if forgotten: the shared volume is **`/mnt/minikube-mnt`**, no
+  longer nested under `/mnt/minikube-backups/` (the in-node path is still `/mnt`, so no
+  manifest changed); and `sda1` is a *staging tier*, needing ~2× the largest archive free
+  (~85 G) because `backup-minikube-mnt.sh` writes there before copying to the NAS.
+  Details and the 31× fsync measurement: `GM9000-MIGRATION.md` §1.2/§8.
+
+- **Datastore directories are owned by their container's UID, not by `cloud`** —
+  vault `100`, loki `10001`, postgres `70`/`999`, mysql/mongo `999`. They cannot be
+  normalised to one owner: PostgreSQL refuses to start unless pgdata is `0700`/`0750`,
+  which grants access to the owner alone. Restores MUST use `tar --numeric-owner`, or the
+  user *names* get resolved against the new box's `/etc/passwd` and the data lands on the
+  wrong UID (see `UBUNTU-UPGRADE.md` §0a #8). `verify-recovery.sh` §5 guards both.
+
 - **Vault storage is a pre-created durable PV — never let it go dynamic again.**
   `k8s/vault-backup/vault-data-pv.yaml` (Retain, hostPath `/mnt/vault-data` =
-  host `/mnt/minikube-backups/minikube-mnt/vault-data`) MUST be applied before
+  host `/mnt/minikube-mnt/vault-data`) MUST be applied before
   `start-vault.sh` (start-scratch does this) so the `data-vault-0` PVC binds it.
   The pre-2026-07-20 dynamic `/tmp` PV silently destroyed all runtime-written KV
   (follower broker secrets, admin platform keys) on a minikube rebuild. Daily
