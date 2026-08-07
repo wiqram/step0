@@ -273,6 +273,25 @@ phase1_tooling() {
   # time phase 7 discovers the clash it has already left a half-created NPM container behind.
   free_web_ports
 
+  # Raise the inotify limits BEFORE the cluster exists. The kernel default of 128 user
+  # instances is far too low for a node running ~40 pods: promtail watches every container
+  # log file and dies at startup with
+  #   failed to make file target manager: too many open files
+  # which reads as a promtail bug rather than a host limit. Hit on the fresh 26.04 install
+  # 2026-08-07. The minikube node is a CONTAINER sharing this kernel, so setting it here is
+  # what fixes the node — there is nothing to set inside minikube.
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "  DRYRUN> write /etc/sysctl.d/99-kubernetes-inotify.conf + sysctl -p"
+  elif [ ! -f /etc/sysctl.d/99-kubernetes-inotify.conf ]; then
+    printf '# Kubernetes node inotify limits — see restore-scratch.sh phase 1.\n# Default 128 instances starves promtail ("too many open files") on a ~40-pod node.\nfs.inotify.max_user_instances = 1024\nfs.inotify.max_user_watches = 524288\n' \
+      | sudo tee /etc/sysctl.d/99-kubernetes-inotify.conf >/dev/null \
+      && sudo sysctl -p /etc/sysctl.d/99-kubernetes-inotify.conf >/dev/null 2>&1 \
+      && log "inotify limits raised (1024 instances / 524288 watches)" \
+      || log "WARN: could not raise inotify limits — promtail may fail with 'too many open files'."
+  else
+    log "inotify limits already configured (/etc/sysctl.d/99-kubernetes-inotify.conf)"
+  fi
+
   # Order the docker unit behind its own partition, BEFORE docker exists. On this box
   # /var/lib/docker is a separate filesystem (GM9000-MIGRATION.md §1.2, p5 'docker-data').
   # Without this drop-in dockerd can start before that mount lands, write its whole graph

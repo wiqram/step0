@@ -455,6 +455,55 @@ else
   warn "$MNT_VOL does not exist — the shared cluster volume is missing"
 fi
 
+# --- Logical DB snapshots: the ONLY restorable copy of the Mongo databases -------------
+# The weekly archive tars the raw datastore directories while the databases are RUNNING.
+# Postgres and MySQL survive that — they replay a WAL/binlog on startup. MongoDB does NOT:
+# WiredTiger writes are not atomic across files, so a live tar captures blocks from
+# different moments, and the restored copy fails its own checksums with
+#   WiredTiger.wt: potential hardware corruption, read checksum error ...
+# (the wording says hardware; it is not). Proven on 2026-08-07: the `mongo` deployment
+# CrashLoopBackOff'd on exactly this after a faithful --numeric-owner restore, and had to be
+# rebuilt from a mongodump archive instead.
+#
+# So the raw yolo-quantstore / trading-microservices / yolo-notifications directories in the
+# archive are NOT a usable Mongo restore source. The db-snapshot CronJob's logical dumps in
+# yolo-db-snapshots/<db>/<ts>/*.archive.gz ARE — and nothing verified they existed until now.
+# A DR that discovers this at restore time has already lost the data.
+SNAP_ROOT="${SNAP_ROOT:-$MNT_VOL/yolo-db-snapshots}"
+SNAP_MAX_AGE_DAYS="${SNAP_MAX_AGE_DAYS:-2}"
+if [ -d "$SNAP_ROOT" ]; then
+  # DISCOVER the per-database trees rather than hardcoding names. The snapshot CronJob's
+  # comments say private/notifications/quant, but this box also has atlas/ and postgres/ —
+  # a hardcoded list silently skips whatever it does not know about, and a database with no
+  # verified backup is exactly what this check exists to catch.
+  _snap_dbs="$(find "$SNAP_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort)"
+  [ -z "$_snap_dbs" ] && warn "$SNAP_ROOT exists but contains no per-database trees — no logical DB backups at all"
+  for _db in $_snap_dbs; do
+    _d="$SNAP_ROOT/$_db"
+    # Newest dump by mtime, whatever the timestamped dirs are called. Match BOTH formats:
+    # mongodump writes *.archive.gz, pg_dump writes *.dump/*.sql — matching only the mongo
+    # one reports a healthy postgres tree as a FAIL (it did, on the first run of this check).
+    _pat=( -name '*.archive.gz' -o -name '*.dump' -o -name '*.sql' -o -name '*.sql.gz' )
+    _a="$(sudo -n find "$_d" \( "${_pat[@]}" \) -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1)"
+    [ -z "$_a" ] && _a="$(find "$_d" \( "${_pat[@]}" \) -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1)"
+    if [ -z "$_a" ]; then
+      fail "$_db: no dump file (*.archive.gz/*.dump/*.sql) under $_d — for Mongo the raw datastore dirs in the weekly tar are NOT a valid restore source, so this database may have no recoverable backup"
+      continue
+    fi
+    _age=$(( ( $(date +%s) - ${_a%%.*} ) / 86400 ))
+    _sz=$(stat -c %s "${_a#* }" 2>/dev/null || sudo -n stat -c %s "${_a#* }" 2>/dev/null)
+    if [ "${_sz:-0}" -lt 1024 ]; then
+      fail "$_db: newest snapshot $(basename "${_a#* }") is ${_sz:-0} bytes — an empty dump restores nothing"
+    elif [ "$_age" -gt "$SNAP_MAX_AGE_DAYS" ]; then
+      warn "$_db: newest DB snapshot is ${_age}d old ($(basename "$(dirname "${_a#* }")")) — the db-snapshot CronJob may be failing; this is the only restorable copy"
+    else
+      pass "$_db: DB snapshot ${_age}d old, $(( _sz / 1024 ))KB ($(basename "$(dirname "${_a#* }")"))"
+    fi
+  done
+else
+  info "$SNAP_ROOT absent — yolo not deployed on this box?"
+fi
+
 # Root headroom. Everything above exists to keep this number healthy.
 _rootuse="$(df -h --output=pcent / 2>/dev/null | tail -1 | tr -d ' %')"
 if [ -n "$_rootuse" ]; then
