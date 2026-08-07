@@ -79,6 +79,27 @@ to a Kubernetes NodePort on `172.16.238.2`.
   (~85 G) because `backup-minikube-mnt.sh` writes there before copying to the NAS.
   Details and the 31× fsync measurement: `GM9000-MIGRATION.md` §1.2/§8.
 
+- **Every PVC that holds data MUST declare `storageClassName: manual` and bind an explicit
+  hostPath PV.** Omitting it falls through to minikube's default `standard` class, a dynamic
+  provisioner writing to `/tmp/hostpath-provisioner` INSIDE the minikube container — a path
+  that is **not** under `/mnt/minikube-mnt`, so `minikube delete` destroys it and the weekly
+  DR archive never contained it. This is silent: the app redeploys, migrations recreate the
+  schema, everything looks healthy, and you find out only when you try to restore. Found
+  2026-08-07 on bestrentaladmin's postgres (the only DB on the box with no backup, while all
+  four siblings were durable) and open-webui's 890 MB of chat history. Copy the pattern from
+  `dyingpaleblue-postgres-pv`: `storageClassName: manual`, `persistentVolumeReclaimPolicy:
+  Retain`, `hostPath: /mnt/<name>` (in-node `/mnt` = host `/mnt/minikube-mnt`), and pin the
+  PVC with `volumeName`. `verify-recovery.sh` FAILs on any new offender; genuinely
+  disposable config volumes go in its `PVC_EPHEMERAL_OK` list.
+
+- **Never copy a running database.** Every restore/migration must scale the workload to 0
+  first. MongoDB is the unforgiving case — WiredTiger writes are not atomic across files, so
+  a live copy restores faithfully and then fails its own checksums
+  (`WiredTiger.wt: potential hardware corruption`); Postgres and MySQL survive only because
+  they replay a WAL/binlog. This is why `backup-minikube-mnt.sh`'s raw datastore dirs are
+  **not** a valid Mongo restore source and the `db-snapshot` CronJob's logical dumps in
+  `minikube-mnt/yolo-db-snapshots/` are. Recovery procedure: `RESTART-RECOVERY.md`.
+
 - **Datastore directories are owned by their container's UID, not by `cloud`** —
   vault `100`, loki `10001`, postgres `70`/`999`, mysql/mongo `999`. They cannot be
   normalised to one owner: PostgreSQL refuses to start unless pgdata is `0700`/`0750`,

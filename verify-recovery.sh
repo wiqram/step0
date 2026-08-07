@@ -579,6 +579,41 @@ else
   info "$SNAP_ROOT absent — yolo not deployed on this box?"
 fi
 
+# --- PVC durability: anything on the default StorageClass is NOT backed up --------------
+# A PVC that omits storageClassName falls through to minikube's default `standard` class —
+# a dynamic provisioner writing to /tmp/hostpath-provisioner INSIDE the minikube container
+# (host /var/lib/docker/volumes/minikube/_data/). That path is not under /mnt/minikube-mnt,
+# so `minikube delete` — every cold rebuild — destroys it, and the weekly DR archive never
+# contained it. The convention here is an explicit hostPath PV with storageClassName:
+# manual, whose /mnt/<name> maps to host /mnt/minikube-mnt/<name>.
+#
+# This is invisible without a check: the app redeploys, its migrations recreate the schema,
+# and everything looks healthy — you only discover it when you try to restore. Found on
+# 2026-08-07: bestrentaladmin's postgres (47MB) and open-webui (890MB of chat history) had
+# been running this way, bestrentaladmin being the ONLY database on the box with no backup
+# at all while all four of its siblings were durable. Same mechanism that destroyed Vault's
+# runtime KV before 2026-07-20.
+#
+# Known-benign names can be listed in PVC_EPHEMERAL_OK: some volumes genuinely hold nothing
+# worth keeping (mongo/redis *config* dirs are rewritten from the manifest on every start).
+PVC_EPHEMERAL_OK="${PVC_EPHEMERAL_OK:-mongodb-config mongodb-notifications-config quantstore-db-config redis-claim1}"
+if have kubectl; then
+  _dyn="$(kubectl get pvc -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"/"}{.metadata.name}{" "}{.spec.storageClassName}{"\n"}{end}' 2>/dev/null \
+           | awk '$2=="standard"{print $1}')"
+  if [ -z "$_dyn" ]; then
+    pass "every PVC uses a durable hostPath PV (nothing on the default StorageClass)"
+  else
+    for _p in $_dyn; do
+      _n="${_p#*/}"
+      if printf '%s\n' $PVC_EPHEMERAL_OK | grep -qx "$_n"; then
+        info "$_p is on the default StorageClass but is a known-disposable config volume"
+      else
+        fail "$_p uses the default 'standard' StorageClass — its data lives in the minikube container, is DESTROYED by minikube delete, and is in NO backup. Give it an explicit hostPath PV (storageClassName: manual, hostPath /mnt/<name>) like dyingpaleblue-postgres-pv, and migrate the data with the workload scaled to 0."
+      fi
+    done
+  fi
+fi
+
 # --- Jenkins agent workspace volume: a 10x build-speed setting with no declarative home ---
 # Jenkins agents get their /home/jenkins/agent workspace from the pod template's
 # workspaceVolume. It shipped as DynamicPVCWorkspaceVolume, which provisions a FRESH PVC per
