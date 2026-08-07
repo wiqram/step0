@@ -18,12 +18,12 @@
 # Requires: jenkins.traderyolo.com reachable (NPM + DNS up).
 # NOTE: best-effort, NOT set -e — a single unreachable job must not abort the rest.
 #
-##### WHY THIS IS THROTTLED (2026-07-29) ###########################################
-# This script used to POST all five jobs back-to-back (then yolo after a flat 60s).
-# On a ONE-NODE cluster that means ~6 concurrent Jenkins agents doing git clone +
-# docker build + docker push, WHILE the resulting rollouts create ~15 pods that each
-# need overlay2 layer setup — all funnelled into /var/lib/docker on sda7, an ageing
-# Samsung 840 SATA SSD shared with /.
+##### WHY THIS IS THROTTLED — original reason (2026-07-29), and what changed ########
+# ORIGINALLY AN IO WALL. This script used to POST all five jobs back-to-back (then yolo
+# after a flat 60s). On a ONE-NODE cluster that means ~6 concurrent Jenkins agents doing
+# git clone + docker build + docker push, WHILE the resulting rollouts create ~15 pods
+# that each need overlay2 layer setup — all funnelled into /var/lib/docker on sda7, an
+# ageing Samsung 840 SATA SSD shared with /.
 #
 # Measured during exactly that stampede: sda pinned at 95-99% util, ~180ms write-await,
 # ~150ms flush-await, /proc/pressure/io "full" ~48% — while the CPU was 88% IDLE and
@@ -32,9 +32,41 @@
 # in use" -> CreateContainerError retry loop (see tune-cri-dockerd-timeout.sh for the
 # full mechanism). Nothing came up.
 #
+##### THAT DISK IS GONE (2026-08-07) ###############################################
+# The box is now an i9-12900K / DDR5 / 4TB Predator GM9000 NVMe, and /var/lib/docker is
+# its own NVMe partition (nvme0n1p5). Measured on THIS hardware during a live build:
+#
+#   /proc/pressure/io "full"   0.09%   (the wait_for_io_calm threshold is 20%)
+#   nvme0n1 util               6.1%    (was 95-99%)
+#   write-await                ~3ms    (was ~180ms)
+#   4K synchronous write       0.96ms  (was 29.6ms on the WD10EZEX)
+#
+# Six of those concurrently would not come close to the wall, and the cri-dockerd timeout
+# cascade above was IO-driven, so it is largely designed out. The ORIGINAL justification
+# for this throttle no longer holds.
+#
+##### BUT THE BOTTLENECK MOVED, IT DID NOT VANISH ##################################
+# The constraint is now MEMORY, and it is not visible in a freshly-restored cluster.
+# The node has ~47Gi allocatable with kubelet eviction-hard memory.available<1Gi. Right
+# after a platform bring-up that reads as 6% requested — because NO apps are deployed
+# yet. THROTTLE=0 means ~6 Jenkins agents plus ~15 simultaneous pod rollouts against
+# that ceiling. This host also runs 76GiB, not the 96GB design point (see start-scratch's
+# own sizing warning), so the full app set is already tight at 51Gi.
+#
+# Trading an IO wall for an OOM-kill wall would be a bad deal: eviction is harder to
+# diagnose than slow disk, and it takes down running apps rather than just delaying new
+# ones. Before flipping this off, measure STEADY-STATE memory with every app deployed:
+#
+#   kubectl describe node minikube | sed -n '/Allocated resources/,/Events/p'
+#   free -g ; cat /proc/pressure/memory
+#
+# If that leaves >20Gi headroom (near-certain once the third RAM stick is in), THROTTLE=0
+# is justified. Cost of keeping it: builds run serially — ~40 min total at current
+# durations (bestrentaladmin alone is ~19 min, the rest 2.4-7.8) against ~20 min
+# unthrottled. That is a DR-day cost, not a daily one.
+#
 # So: deploy one app, wait for its Jenkins build to finish, wait for the disk to go
-# quiet, then start the next. Slower by the clock, far faster in practice, because
-# nothing has to be retried.
+# quiet, then start the next.
 #
 # Escape hatch: THROTTLE=0 restores the old fire-everything-at-once behaviour verbatim.
 ####################################################################################
