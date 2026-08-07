@@ -195,10 +195,18 @@ minikube addons enable nvidia-gpu-device-plugin
 #MINIKUBEIP=$(minikube ip)
 #allow minikube to connect to local docker images
 #eval $(minikube -p minikube docker-env)
-# Re-arm dev-box → prod minikube API access over 10GbE. DOCKER-USER rules are wiped on docker
-# restart, so a cluster rebuild must re-apply them. Best-effort (needs root); the installed
-# devbox-kube-access.service re-applies on every boot regardless. See enable-devbox-kube-access.sh.
+# Re-arm dev-box → prod minikube API access over 10GbE. DOCKER-USER rules AND Docker's
+# raw/PREROUTING direct-routing drops are rebuilt on every docker start, so a cluster rebuild must
+# re-apply ours. Best-effort (needs root); the installed devbox-kube-access.service re-applies on
+# boot and, since it is PartOf=docker.service, on a docker restart too.
 sudo -n "$HOME/Ideaprojects/STEP0/enable-devbox-kube-access.sh" || echo "devbox-kube-access: skipped (run 'sudo ./enable-devbox-kube-access.sh --install' once)"
+# A cold rebuild REGENERATES the cluster CA, which instantly invalidates any previously emitted
+# kubeconfig — including the dev box's copy, which keeps looking valid and fails as
+# `x509: certificate signed by unknown authority`. Re-emit here so the file on prod always matches
+# the cluster that is actually running and is ready to copy across. No root needed, and it only
+# writes a file in $HOME. The dev box still has to pull/merge it — see architecture.md §3.
+"$HOME/Ideaprojects/STEP0/enable-devbox-kube-access.sh" --emit-kubeconfig \
+  || echo "devbox-kube-access: kubeconfig re-emit skipped (re-run --emit-kubeconfig by hand)"
 ###########x`######grafana-prometheus###########################
 # Grafana's /var/lib/grafana is a DURABLE hostPath PV (kube-prometheus
 # manifests/grafana-dataVolume.yaml -> node /mnt/grafana-data == host

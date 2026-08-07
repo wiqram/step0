@@ -220,6 +220,24 @@ if have systemctl; then
       *) info "$svc = $st" ;;
     esac
   done
+
+  # `is-active` is NOT enough, and this is the lesson from 2026-08-07: the service reported
+  # active, both DOCKER-USER rules were present and correct, the link was up — and dev->prod was
+  # still 100% dead, because Docker >=28 drops off-host traffic to container IPs in a DIFFERENT
+  # table (raw/PREROUTING, priority -300, before conntrack and long before FORWARD). So also
+  # assert the raw ACCEPT that defeats that drop actually exists. See architecture.md §3.
+  if have iptables && [ "$(id -u)" -eq 0 ]; then
+    if iptables -t raw -C PREROUTING -s "$EXP_10G_PEER" -d "$EXP_NODE_IP" -p tcp --dport "$EXP_API_PORT" -j ACCEPT 2>/dev/null \
+    || iptables -t raw -S PREROUTING 2>/dev/null | grep -q -- "-s $EXP_10G_PEER/32 -d $EXP_NODE_IP/32 .*--dport $EXP_API_PORT -j ACCEPT"; then
+      pass "raw/PREROUTING ACCEPT present ($EXP_10G_PEER -> $EXP_NODE_IP:$EXP_API_PORT) — Docker's direct-routing drop is defeated"
+    elif iptables -t raw -S PREROUTING 2>/dev/null | grep -q -- "-d $EXP_NODE_IP/32 .*-j DROP"; then
+      fail "Docker's direct-routing DROP for $EXP_NODE_IP is active with NO matching ACCEPT — dev->prod kubectl/IntelliJ will time out with every other check passing. Fix: sudo ./enable-devbox-kube-access.sh   (confirm with: iptables -t raw -L PREROUTING -n -v — the DROP counter climbs)"
+    else
+      info "no raw/PREROUTING drop for $EXP_NODE_IP (Docker <28 behaviour, or network uses trusted_host_interfaces)"
+    fi
+  else
+    info "raw/PREROUTING check skipped (needs root) — by hand: sudo iptables -t raw -L PREROUTING -n -v"
+  fi
 fi
 
 # ============================== 4. HOST + DNS + SERVICES + CRON ==============================
