@@ -166,7 +166,16 @@ else
   echo "trigger-app-builds: throttled — one app at a time, waiting for build + disk."
 fi
 
-for app in qcguy predictonomy bestrentaladmin dyingpaleblue ollama yolo; do
+# The deploy list comes from the MANIFEST, in file order — not from a literal list here.
+# Until 2026-08-07 this loop named the six apps directly while jenkins-jobs.manifest only
+# supplied the app->job mapping, so adding a row to the manifest deployed NOTHING and the
+# two could drift apart silently. That is how qcx and prop-investech ended up with working
+# Jenkins jobs that no bootstrap or DR run ever triggered. One source of truth now.
+APPS="$(awk '!/^#/ && NF>=4 {print $1}' "$MANIFEST" 2>/dev/null)"
+[ -n "$APPS" ] || { echo "trigger-app-builds: no usable rows in $MANIFEST — nothing to deploy." >&2; exit 1; }
+echo "trigger-app-builds: deploying in manifest order: $(echo "$APPS" | tr '\n' ' ')"
+
+for app in $APPS; do
   # The legacy path kept its flat 60s pause before the parameterised yolo pipeline; the
   # throttled path already waits on the real signal, so it needs no fixed sleep.
   if [ "$THROTTLE" = "0" ] && [ "$app" = "yolo" ]; then

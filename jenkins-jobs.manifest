@@ -1,8 +1,28 @@
 # app              job                    endpoint             build-token
 # (endpoint: build | buildWithParameters — yolo's job is parameterised)
+#
+# THIS FILE IS THE DEPLOY LIST. trigger-app-builds.sh reads its app column, in order,
+# so adding a row here is all it takes to deploy an app. (Until 2026-08-07 the script
+# also carried a hardcoded list, and a row added here alone did nothing.)
+#
+# ORDER MATTERS: yolo stays LAST. It is the heaviest pipeline, and monitoring/grafana
+# hard-mounts two ConfigMaps that only the yolo deploy creates (grafana-alerting-yolo,
+# grafana-dashboard-yolo-pipeline — see kube-prometheus manifests/YOLO-OWNERSHIP.md), so
+# Grafana stays ContainerCreating until yolo lands.
+#
+# build-token: Jenkins' per-job remote-trigger token. jenkins-deploy-url.sh builds
+#   https://<cred>@jenkins.../job/<job>/<endpoint>?token=<build-token>
+# Because that URL carries the credential, the request is AUTHENTICATED and Jenkins only
+# consults the token as the ANONYMOUS alternative — an authenticated user with Build
+# permission is allowed through whatever the token says. So this column must be non-empty
+# (jenkins-deploy-url.sh requires all four fields) but is not load-bearing here. Verified
+# 2026-08-07: prop-investech has NO authToken in its config.xml at all, and QCX's is
+# stored encrypted ({AQAAAB...}) so its plaintext cannot be recovered from Jenkins.
 qcguy            qcguy                  build                qcguy
 predictonomy     predictonomy           build                predict
 bestrentaladmin  bestrentaladmin        build                best
 dyingpaleblue    dyingpaleblue          build                dying
 ollama           ollama                 build                ollama
+qcx              QCX                    build                qcx
+prop-investech   prop-investech         build                prop-investech
 yolo             trading-microservices  buildWithParameters  yolo
