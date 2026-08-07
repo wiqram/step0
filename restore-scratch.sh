@@ -60,6 +60,7 @@ log()  { echo "[restore $(date '+%H:%M:%S')] $*"; }
 # later. A DR run that stops silently at 03:00 is the case worth catching.
 RS_START=$(date +%s)
 RS_NOTIFIED=0
+RS_INCOMPLETE=""   # space-separated phase numbers that had failing commands (see mark_phase)
 rs_notify() {
   [ "$DRY_RUN" = 1 ] && return 0
   ntfy_push "$NTFY_TOPIC_RESTORE_SCRATCH" "$1" "$2" "${3:-default}" "${4:-cloud}"
@@ -92,9 +93,36 @@ Last completed phase: $(rs_phase). Resume with:  ./restore-scratch.sh --from-pha
 }
 trap rs_on_exit EXIT
 need() { command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"; }
+# ---- phase integrity ------------------------------------------------------------------
+# The script is deliberately not `set -e`, and run() used to DISCARD the exit status of
+# every command it executed. Combined with a marker that advanced unconditionally, a phase
+# could fail from end to end and still report itself complete. That is not hypothetical:
+# on 2026-08-07 sudo-rs refused to authenticate without a tty, all ~30 mutating commands in
+# phase 1 failed, the log said "phase 1 done", the marker went to 1, and the box had no
+# docker, kubectl, minikube or helm. The next run then SKIPPED phase 1 because it was
+# "done". A DR tool that misreports its own state is worse than one that stops.
+#
+# So: run() records failures, and mark_phase refuses to advance past a phase that had any.
+# The phase is simply not marked — the run continues (a 100GB DR should not abort on one
+# bad command) but a re-run redoes that phase instead of skipping it. Commands that are
+# ALLOWED to fail already say so with `|| true`, which returns 0 and is not recorded; the
+# 8 such calls in this file are exactly the tolerated ones.
+RUN_FAILED=()
+
 # run: execute unless --dry-run (then just print). Use for every mutating command.
+# Returns the command's own exit status, so existing `run "..." || die "..."` still works.
 # shellcheck disable=SC2086,SC2294
-run()  { if [ "$DRY_RUN" = 1 ]; then echo "  DRYRUN> $*"; else log "+ $*"; eval "$@"; fi; }
+run()  {
+  if [ "$DRY_RUN" = 1 ]; then echo "  DRYRUN> $*"; return 0; fi
+  log "+ $*"
+  local rc=0
+  eval "$@" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    RUN_FAILED+=("rc=$rc  $*")
+    log "  ^^ FAILED (rc=$rc)"
+  fi
+  return "$rc"
+}
 
 # free_web_ports — nothing on the HOST may hold :80 or :443. nginx-proxy-manager binds both
 # (phase 7) and is the only public ingress: every *.traderyolo.com domain and every
@@ -149,8 +177,26 @@ phase_done() { [ -f "$MARKER" ] && [ "$(cat "$MARKER" 2>/dev/null)" -ge "$1" ] 2
 # already-further-along box does not regress it (marker = highest completed phase).
 mark_phase() {
   [ "$DRY_RUN" = 1 ] && return 0
+  # Refuse to certify a phase whose commands did not actually succeed. Clearing RUN_FAILED
+  # here is what scopes it per-phase: mark_phase is the last statement of every phase, and
+  # a phase that die()s never reaches this, so nothing leaks into the next one.
+  if [ "${#RUN_FAILED[@]}" -gt 0 ]; then
+    log "PHASE $1 NOT MARKED COMPLETE — ${#RUN_FAILED[@]} command(s) failed:"
+    local c
+    for c in "${RUN_FAILED[@]}"; do log "      $c"; done
+    log "      Marker stays at $(rs_phase). Fix the above, then: ./restore-scratch.sh --from-phase $1"
+    RS_INCOMPLETE="${RS_INCOMPLETE:+$RS_INCOMPLETE }$1"
+    rs_notify "restore-scratch phase $1 INCOMPLETE" \
+"${#RUN_FAILED[@]} command(s) failed in phase $1 on $(hostname -s); the phase was NOT marked done.
+First failure: ${RUN_FAILED[0]}
+Resume after fixing with:  ./restore-scratch.sh --from-phase $1" \
+      "high" "warning"
+    RUN_FAILED=()
+    return 0
+  fi
   local cur; cur="$(cat "$MARKER" 2>/dev/null)"; [[ "$cur" =~ ^[0-9]+$ ]] || cur=-1
   [ "$1" -gt "$cur" ] && echo "$1" > "$MARKER"
+  RUN_FAILED=()
   return 0
 }
 # should_run: true unless this phase already completed (honours --from-phase override)
@@ -935,6 +981,22 @@ MANUAL host-level steps NOT auto-reconstructed (credentials / can't be scripted 
 DONE
   mark_phase 9
   RS_NOTIFIED=1
+  # Never announce success over the top of phases that did not complete. Without this the
+  # closing banner is the loudest thing in a several-hour log, and a phase that quietly
+  # refused to mark itself scrolls past hours earlier.
+  if [ -n "$RS_INCOMPLETE" ]; then
+    log "=================================================================="
+    log "restore-scratch finished, but these phases had FAILING commands and"
+    log "were NOT marked complete:  $RS_INCOMPLETE"
+    log "Re-run the lowest one after fixing:  ./restore-scratch.sh --from-phase <n>"
+    log "=================================================================="
+    rs_notify "restore-scratch ended with INCOMPLETE phases" \
+"Host: $(hostname -s). Elapsed: $(rs_elapsed).
+Phases with failing commands: $RS_INCOMPLETE
+The platform is NOT fully restored. Re-run from the lowest:  ./restore-scratch.sh --from-phase <n>" \
+      "urgent" "warning,floppy_disk"
+    return 0
+  fi
   rs_notify "restore-scratch COMPLETE (platform up, apps NOT deployed)" \
 "All 9 phases finished on $(hostname -s) in $(rs_elapsed).
 
