@@ -384,7 +384,7 @@ check_mount_source Kachra           /mnt/kachra
 # block on. This check matters MORE than the others: because it is a nested mount, if p6
 # fails to mount the path still EXISTS (it is a plain directory on sda1) and everything
 # silently works — just 31x slower, on the HDD, with no error anywhere.
-check_mount_source minikube-data    /mnt/minikube-backups/minikube-mnt
+check_mount_source minikube-data    /mnt/minikube-mnt
 
 # Root headroom. Everything above exists to keep this number healthy.
 _rootuse="$(df -h --output=pcent / 2>/dev/null | tail -1 | tr -d ' %')"

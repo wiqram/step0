@@ -18,7 +18,7 @@
 #      <IG repo>/Vault-Secrets-NO-GIT-COMMIT/dev-age.key and phase 3 installs it).
 #      Without it the stack still boots on *.example placeholder creds.
 #      RECOVERY COPY lives on prod (2026-07-22): physical
-#      /mnt/minikube-backups/minikube-mnt/keys-sops-dev-box.txt (rides the weekly
+#      /mnt/minikube-mnt/keys-sops-dev-box.txt (rides the weekly
 #      backup -> WD Cloud like keys-sops-IMPORTANT.txt). Fetch from a box with
 #      prod-minikube kubectl: run a busybox pod with hostPath /mnt and
 #      `kubectl exec ... cat /host-mnt/keys-sops-dev-box.txt > keys.txt` (chmod 600).
@@ -175,7 +175,7 @@ phase3_env() {
     else
       log "WARN: no dev age key at $key (break-glass item #2) — env files will fall"
       log "      back to *.example placeholders; drop the key and re-run --from-phase 3"
-      log "      recovery copy: prod /mnt/minikube-backups/minikube-mnt/keys-sops-dev-box.txt"
+      log "      recovery copy: prod /mnt/minikube-mnt/keys-sops-dev-box.txt"
       log "      (kubectl hostPath-/mnt busybox pod, or the WD Cloud backup archive)"
     fi
   fi

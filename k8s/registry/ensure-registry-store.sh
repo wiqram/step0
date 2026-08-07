@@ -3,7 +3,7 @@
 # R8 (plan.md): persist the registry off /var so a cluster stop no longer wipes every image.
 #
 # MECHANISM (see k8s/registry/README.md for the full reasoning):
-#   minikube's docker driver binds ONE host dir into the node: /mnt/minikube-backups/minikube-mnt → /mnt.
+#   minikube's docker driver binds ONE host dir into the node: /mnt/minikube-mnt → /mnt.
 #   sdb2 (/mnt/kachra) is a separate disk that is NOT in the node. The docker driver takes only one
 #   --mount-string and its bind is rprivate, so we cannot add sdb2 to a *running* node. Instead we
 #   bind sdb2's image dir INTO the minikube-mnt tree on the HOST (persisted in /etc/fstab). Because
@@ -15,7 +15,7 @@
 set -euo pipefail
 
 SRC="/mnt/kachra/container-registry-images"                                   # sdb2 — durable, off /var
-DST="/mnt/minikube-backups/minikube-mnt/container-registry-images"            # inside the dir minikube binds to /mnt
+DST="/mnt/minikube-mnt/container-registry-images"            # inside the dir minikube binds to /mnt
 FSTAB_LINE="$SRC $DST none bind 0 0"
 
 sudo mkdir -p "$SRC" "$DST"

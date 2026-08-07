@@ -407,10 +407,15 @@ phase3_dirs() {
   check_partition_mount ubuntu-home /home
   check_partition_mount docker-data /var/lib/docker
 
-  run "sudo mkdir -p /mnt/minikube-backups/minikube-mnt"
+  run "sudo mkdir -p /mnt/minikube-mnt"
   run "sudo mkdir -p /mnt/kachra/container-registry-images"
   run "sudo mkdir -p /mnt/predictonomy-postgres /mnt/predictonomy-backups"
-  run "sudo chown -R cloud:cloud /mnt/minikube-backups /mnt/kachra"
+  # NOT -R, and NOT over minikube-mnt. A recursive chown here destroys the per-container
+  # UIDs inside the shared volume (vault=100, grafana=472, the postgres/mysql/mongo 999s),
+  # which phase 4 then cannot put back. Observed 2026-08-07: vault-0 wedged on
+  # "open /vault/data/core/_migration: permission denied" because core/ ended up 1000:1000
+  # mode 700 while vault runs as uid 100. Only the mountpoints themselves need to be cloud's.
+  run "sudo chown cloud:cloud /mnt/minikube-backups /mnt/kachra /mnt/minikube-mnt"
   # Per-app SOPS age keys offline mirror (normally restored by phase 4a with ~/.vault;
   # pre-create so seed-age-keys.sh (run by start-vault.sh in phase 6) can re-seed Vault).
   run "mkdir -p '$HOME/.vault/age-keys' && chmod 700 '$HOME/.vault/age-keys'"
@@ -428,23 +433,45 @@ phase4_extract() {
   # place selectively so we DON'T clobber the freshly-cloned STEP0 code with old code.
   local stage="/mnt/minikube-backups/restore-staging"
   run "rm -rf '$stage' && mkdir -p '$stage'"
-  run "tar -xzf '$ARCHIVE_PATH' -C '$stage'"
+  # `sudo tar -xpzf`, NOT `tar -xzf`. backup-minikube-mnt.sh runs from ROOT's crontab, so the
+  # archive carries the true per-container UIDs — but tar only RESTORES ownership when it runs
+  # as root (and --same-owner, which is root's default, needs -p to also keep the modes).
+  # Extracting as 'cloud' silently rewrites every file to cloud:cloud, which breaks every
+  # containerised datastore that runs as a non-root UID: vault (100), grafana (472),
+  # postgres/mysql/mongo (999). Observed 2026-08-07 — vault-0 could not read its own
+  # /vault/data/core (ended up 1000:1000 mode 700) and the restore stalled with the platform
+  # half-deployed. Same reason 4b below copies with `sudo cp -a`.
+  run "sudo tar -xpzf '$ARCHIVE_PATH' -C '$stage'"
 
   # 4a. ~/.vault FIRST — only copy of the Vault unseal key/root token. Verify non-empty.
   run "mkdir -p '$HOME/.vault' && chmod 700 '$HOME/.vault'"
-  run "cp -a '$stage/home/cloud/.vault/.' '$HOME/.vault/'"
+  # The stage is root-owned now (see the sudo tar above) and cluster-keys.json is 0600, so
+  # a plain cp as 'cloud' cannot even read it. Copy as root, then hand the tree back.
+  run "sudo cp -a '$stage/home/cloud/.vault/.' '$HOME/.vault/'"
+  run "sudo chown -R cloud:cloud '$HOME/.vault'"
   [ -s "$HOME/.vault/cluster-keys.json" ] || die "restored ~/.vault/cluster-keys.json is missing/empty — Vault cannot be unsealed"
   run "chmod 600 '$HOME/.vault/cluster-keys.json'"
   log "vault keys restored OK"
 
-  # 4b. The bulk shared volume.
-  run "cp -a '$stage/mnt/minikube-backups/minikube-mnt/.' /mnt/minikube-backups/minikube-mnt/"
+  # 4b. The bulk shared volume. `sudo cp -a` so the per-container UIDs survive (see the tar
+  # comment above). The SOURCE path inside the archive depends on when the archive was made:
+  # the volume lived at /mnt/minikube-backups/minikube-mnt until 2026-08-07, when it moved to
+  # its own NVMe partition at /mnt/minikube-mnt. Old archives are still perfectly valid
+  # restore sources, so accept either rather than silently restoring nothing.
+  local vol_src=""
+  for _c in "$stage/mnt/minikube-mnt" "$stage/mnt/minikube-backups/minikube-mnt"; do
+    [ -d "$_c" ] && { vol_src="$_c"; break; }
+  done
+  [ -n "$vol_src" ] || die "no minikube-mnt found in the archive (looked for /mnt/minikube-mnt and the pre-2026-08-07 /mnt/minikube-backups/minikube-mnt)"
+  log "shared volume source in archive: $vol_src"
+  run "sudo cp -a '$vol_src/.' /mnt/minikube-mnt/"
 
   # 4c. SOPS age key: minikube-mnt/keys-sops-IMPORTANT.txt -> ~/.config/sops/age/keys.txt
   #     (start-scratch's setup-jenkins-credentials.sh + per-app vaultSync need it).
-  if [ -s "/mnt/minikube-backups/minikube-mnt/keys-sops-IMPORTANT.txt" ]; then
+  if sudo test -s "/mnt/minikube-mnt/keys-sops-IMPORTANT.txt"; then
     run "mkdir -p '$HOME/.config/sops/age'"
-    run "cp '/mnt/minikube-backups/minikube-mnt/keys-sops-IMPORTANT.txt' '$HOME/.config/sops/age/keys.txt'"
+    run "sudo cp '/mnt/minikube-mnt/keys-sops-IMPORTANT.txt' '$HOME/.config/sops/age/keys.txt'"
+    run "sudo chown cloud:cloud '$HOME/.config/sops/age/keys.txt'"
     run "chmod 600 '$HOME/.config/sops/age/keys.txt'"
   else
     log "WARN: SOPS age key not found in minikube-mnt — app secret decryption will fail until it is placed."

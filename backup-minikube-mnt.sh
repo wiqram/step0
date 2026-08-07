@@ -34,7 +34,7 @@ note_warn() { NTFY_WARNINGS="$NTFY_WARNINGS
 - $1"; }
 
 # What to backup.
-backup_files="/mnt/minikube-backups/minikube-mnt"
+backup_files="/mnt/minikube-mnt"
 backup_files2="/home/cloud/Ideaprojects/nginx"
 backup_files3="/home/cloud/Ideaprojects/STEP0"
 backup_files4="/home/cloud/Ideaprojects/qcguy-ghost"
