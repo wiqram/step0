@@ -463,8 +463,36 @@ layer lands on the 120G root and has to be moved later.
 - **Go** → `/usr/local/go` from go.dev:
   `V=$(curl -fsSL https://go.dev/VERSION?m=text|head -1); curl -fsSL -o /tmp/$V.tgz https://go.dev/dl/$V.linux-amd64.tar.gz && sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf /tmp/$V.tgz`
 - **Node** → NodeSource apt (`deb.nodesource.com/node_24.x nodistro main`).
-- **apt** — `kubectl` (pkgs.k8s.io), `protobuf-compiler`, `jq`, `python3-venv`,
-  `zram-tools`, `ethtool`, `nfs-common`.
+- **apt** — **`openssh-server`**, `kubectl` (pkgs.k8s.io), `protobuf-compiler`, `jq`,
+  `python3-venv`, `zram-tools`, `ethtool`, `nfs-common`, `smartmontools`, `gddrescue`.
+
+⚠️ **`openssh-server` is NOT installed by Ubuntu Desktop** — only Server ships it. It was
+missed on the 2026-08-07 rebuild and only surfaced when **prod** complained it could not
+reach the dev box (`dpkg` state was `un` — never installed, nothing on port 22). This is
+not cosmetic: prod's `verify-recovery.sh` probes `DEV_OOB_SSH=vik@192.168.50.161` to
+confirm the dev box's egress, and the whole OOB story in §0 ("OOB to dev box while 10GbE
+is dark: `ssh vik@192.168.50.161`") depends on it. Nothing on the *dev* box misbehaves
+without it, so it will not be noticed from this side.
+
+```bash
+sudo apt-get install -y openssh-server && sudo systemctl enable --now ssh
+ss -lnt | grep ':22 '          # expect 0.0.0.0:22 and [::]:22
+```
+`~/.ssh/authorized_keys` comes across in §6.1 (it holds prod's `cloud@private-cloud→devbox`
+key), so key auth works the moment sshd exists — no key exchange needed. Ubuntu Desktop
+also leaves `ufw` **inactive**, so nothing else blocks it.
+
+⚠️ **A fresh install means NEW SSH HOST KEYS, and prod's `known_hosts` still has the old
+ones.** The first manual `ssh` from prod after the rebuild aborts with
+`REMOTE HOST IDENTIFICATION HAS CHANGED` — which reads like an attack, not a migration
+artefact. On **prod**, drop the stale entries for both addresses the dev box answers on:
+
+```bash
+ssh-keygen -R 192.168.50.161      # LAN / OOB
+ssh-keygen -R 10.10.10.2          # 10GbE /30
+```
+(`verify-recovery.sh` itself is immune — it passes `-o UserKnownHostsFile=/dev/null` — so
+this bites interactive use only, which is exactly when you are least expecting it.)
 - **npm -g** — `grpc-tools` (provides `grpc_tools_node_protoc`; installs into
   `~/.npm-global/bin` via the copied `.npmrc`, so that dir must be on PATH).
 - The `protoc-gen-go` / `-go-grpc` / `-grpc-gateway` / `-openapiv2` plugins come across
@@ -832,6 +860,12 @@ or just re-run the apply, which is idempotent.
 - [ ] **`./desktop-settings.sh --status` is clean** (§6.5). Listed first because it is the
       one item that fails silently — nothing else in the migration misbehaves when the
       desktop settings are wrong, so it is only ever caught by looking.
+- [ ] **`systemctl is-active ssh` → active, `ss -lnt | grep ':22 '` listening** (§5.6).
+      Same class of silent failure: Ubuntu Desktop omits `openssh-server`, and the dev box
+      works perfectly without it — the only symptom appears on **prod**, as a failed
+      `verify-recovery.sh` dev-egress probe or an unreachable OOB login. Then, from prod:
+      `ssh-keygen -R 192.168.50.161 && ssh-keygen -R 10.10.10.2` (new host keys), and
+      `ssh vik@192.168.50.161 ip route get 10.10.10.1` must report `src 10.10.10.2`.
 - [ ] `findmnt /boot/efi` → **`/dev/nvme0n1p1`**, not `sda1` (the decoupled ESP — the
       headline goal); GRUB menu offers Windows; **Windows actually boots** via that
       entry and via the BIOS menu.
