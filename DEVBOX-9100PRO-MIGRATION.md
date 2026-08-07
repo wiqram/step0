@@ -760,10 +760,32 @@ resolves sunset/sunrise through geoclue, so on a box with location services off 
 enabled-but-never-active. A fresh install starts with location off, so leave the manual
 window unless you turn location services on.
 
+⚠️ **This step is easy to skip, and skipping it is invisible.** Applied on the rebuilt box
+only on 2026-08-07, *after* §7 had otherwise been signed off — nothing in the rest of the
+migration fails, errors or looks wrong without it, so it does not surface on its own. Two
+settings had drifted from the desired state on the fresh install:
+
+```
+~ night-light-enabled  is: false  want: true
+~ intellihide          is: true   want: false
+```
+
+`--status` is the only thing that will tell you, so **run it as an explicit checklist item**
+rather than assuming a fresh install matches. It is in §7's list for that reason. Both are
+now applied and `--status` is clean.
+
+Also worth knowing: `--status` **exits 0 even when it reports drift** (it prints
+`drift detected — run ./desktop-settings.sh to re-apply`), despite the line above
+promising `exit 1 if drifted`. Do not gate a script on its exit code — grep the output,
+or just re-run the apply, which is idempotent.
+
 ---
 
 ## 7. Verification
 
+- [ ] **`./desktop-settings.sh --status` is clean** (§6.5). Listed first because it is the
+      one item that fails silently — nothing else in the migration misbehaves when the
+      desktop settings are wrong, so it is only ever caught by looking.
 - [ ] `findmnt /boot/efi` → **`/dev/nvme0n1p1`**, not `sda1` (the decoupled ESP — the
       headline goal); GRUB menu offers Windows; **Windows actually boots** via that
       entry and via the BIOS menu.
