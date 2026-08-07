@@ -96,6 +96,54 @@ need() { command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
 # shellcheck disable=SC2086,SC2294
 run()  { if [ "$DRY_RUN" = 1 ]; then echo "  DRYRUN> $*"; else log "+ $*"; eval "$@"; fi; }
 
+# free_web_ports — nothing on the HOST may hold :80 or :443. nginx-proxy-manager binds both
+# (phase 7) and is the only public ingress: every *.traderyolo.com domain and every
+# Let's Encrypt HTTP-01 renewal goes through it.
+#
+# A stock Ubuntu install ships apache2 ENABLED and listening on :80. Found on 2026-08-07 on
+# the freshly-installed 26.04 box: `docker compose up` failed with
+#   failed to bind host port 0.0.0.0:80/tcp: address already in use
+# and — the part that actually cost time — compose left the NPM container CREATED but
+# attached to no network with no published ports, so the next `up` merely STARTED that
+# broken container. It sat "unhealthy" resolving nothing, which looks nothing like a port
+# clash. Hence: clear the ports BEFORE anything tries to bind them, and force-recreate in
+# phase 7 rather than trusting a container that may be a corpse of a failed create.
+#
+# Deliberately not a `die`: an operator may be running some other proxy on purpose. We stop
+# and disable the known offenders, then report anything still holding the ports.
+
+# web_server_wants_ports <svc> — true only if <svc> is really enabled at boot or running now.
+# Test the REPORTED STATE, never the exit status: `systemctl is-enabled httpd` prints "alias"
+# and exits 0 on Ubuntu (apache2.service declares Alias=httpd.service), so an exit-status test
+# "finds" a service that is not installed. Meanwhile a genuinely disabled apache2 prints
+# "disabled" and exits 1 — i.e. the exit status is backwards for both cases that matter.
+web_server_wants_ports() {
+  local en ac
+  en="$(systemctl is-enabled "$1" 2>/dev/null)"
+  ac="$(systemctl is-active  "$1" 2>/dev/null)"
+  case "$en" in enabled|enabled-runtime) return 0 ;; esac
+  [ "$ac" = "active" ]
+}
+
+free_web_ports() {
+  local svc still
+  for svc in apache2 nginx lighttpd caddy; do
+    if web_server_wants_ports "$svc"; then
+      log "WARN: host service '$svc' is enabled/active and will fight nginx-proxy-manager for :80/:443 — disabling it"
+      run "sudo systemctl disable --now $svc || true"
+    fi
+  done
+  # Report whatever is left, whoever it is. ss needs root to name the process.
+  still="$(sudo -n ss -tlnp 2>/dev/null | grep -E ':(80|443)\s' || true)"
+  if [ -n "$still" ]; then
+    log "WARN: something is STILL listening on :80/:443 — nginx-proxy-manager will fail to bind:"
+    printf '%s\n' "$still" | sed 's/^/        /'
+    log "      Free those ports before phase 7, or NPM (all public ingress + cert renewal) stays down."
+  else
+    log "ports :80/:443 are free for nginx-proxy-manager"
+  fi
+}
+
 phase_done() { [ -f "$MARKER" ] && [ "$(cat "$MARKER" 2>/dev/null)" -ge "$1" ] 2>/dev/null; }
 # mark_phase ratchets: it only ever advances the marker, so a --from-phase re-run on an
 # already-further-along box does not regress it (marker = highest completed phase).
@@ -118,7 +166,26 @@ phase0_preflight() {
   log "PHASE 0 — preflight"
   [ "$(whoami)" = "cloud" ] || die "run as user 'cloud' (got $(whoami))"
   [ "$HOME" = "/home/cloud" ] || die "unexpected \$HOME: $HOME"
-  sudo -n true 2>/dev/null || log "NOTE: sudo may prompt for a password during install phases."
+  # sudo has to work for the WHOLE run, not just the first minute. Ubuntu 26.04 ships
+  # sudo-rs (0.2.x) as the default `sudo`, and it will not use a cached credential without a
+  # controlling tty. Run headless (nohup/CI/an agent) every single `sudo` then fails with
+  # "sudo: A terminal is required to authenticate" — and because run() does not check exit
+  # status, the phases keep going, log success, and ratchet the phase marker. On 2026-08-07
+  # that produced a "completed" phase 1 with docker, kubectl, minikube and helm all absent.
+  # A DR that lies about what it did is worse than one that stops, so: stop.
+  if ! sudo -n true 2>/dev/null; then
+    if [ -t 0 ]; then
+      log "NOTE: sudo will prompt for a password during install phases."
+    else
+      die "sudo needs a password and there is no tty — on Ubuntu 26.04 (sudo-rs) EVERY mutating
+step would fail silently while this script reported success. Either run it from a real terminal,
+or give this shell a working non-interactive sudo first, e.g.:
+    printf '#!/bin/sh\\necho \$YOUR_PASSWORD\\n' > /tmp/askpass && chmod 700 /tmp/askpass
+    mkdir -p /tmp/sudoshim && printf '#!/bin/sh\\nexec /usr/bin/sudo -A \"\$@\"\\n' > /tmp/sudoshim/sudo
+    chmod 755 /tmp/sudoshim/sudo
+    SUDO_ASKPASS=/tmp/askpass PATH=/tmp/sudoshim:\$PATH ./restore-scratch.sh"
+    fi
+  fi
   need curl
   cat <<'PRE'
 ------------------------------------------------------------------
@@ -155,6 +222,10 @@ phase1_tooling() {
   # base packages (ethtool is needed in phase 8 to find the atlantic 10GbE NIC by driver)
   run "sudo apt-get update -y"
   run "sudo apt-get install -y ca-certificates curl gnupg jq git apt-transport-https nfs-common ethtool"
+
+  # Clear :80/:443 now, not at phase 7. A stock Ubuntu ships apache2 enabled, and by the
+  # time phase 7 discovers the clash it has already left a half-created NPM container behind.
+  free_web_ports
 
   # Order the docker unit behind its own partition, BEFORE docker exists. On this box
   # /var/lib/docker is a separate filesystem (GM9000-MIGRATION.md §1.2, p5 'docker-data').
@@ -447,6 +518,13 @@ phase4_extract() {
   run "mkdir -p '$HOME/.vault' && chmod 700 '$HOME/.vault'"
   # The stage is root-owned now (see the sudo tar above) and cluster-keys.json is 0600, so
   # a plain cp as 'cloud' cannot even read it. Copy as root, then hand the tree back.
+  # Check the SOURCE before copying. Testing only the destination is what made this guard
+  # useless on 2026-08-07: the extract had failed, the copy copied nothing, and the check
+  # still passed against the cluster-keys.json left behind by an EARLIER run — so the script
+  # logged "vault keys restored OK" having restored nothing. The one file that cannot be
+  # regenerated deserves a check that cannot be satisfied by stale data.
+  sudo test -s "$stage/home/cloud/.vault/cluster-keys.json" \
+    || die "cluster-keys.json is missing/empty IN THE ARCHIVE ($stage/home/cloud/.vault/) — the extract did not produce it. Vault cannot be unsealed; fix the extract before continuing."
   run "sudo cp -a '$stage/home/cloud/.vault/.' '$HOME/.vault/'"
   run "sudo chown -R cloud:cloud '$HOME/.vault'"
   [ -s "$HOME/.vault/cluster-keys.json" ] || die "restored ~/.vault/cluster-keys.json is missing/empty — Vault cannot be unsealed"
@@ -598,9 +676,33 @@ phase7_nginx() {
   should_run 7 || { log "phase 7 already done, skipping"; return; }
   log "PHASE 7 — bring up nginx-proxy-manager (all proxy hosts + certs)"
   [ -f /home/cloud/Ideaprojects/nginx/docker-compose.yml ] || die "nginx compose missing (phase 5)"
+  # Belt and braces: phase 1 already cleared :80/:443, but a reboot or an apt run between
+  # then and now can bring apache2 back, and this is the step that actually needs the ports.
+  free_web_ports
   # 5million network now exists (created by start-scratch in phase 6). NPM data/ +
   # letsencrypt/ were overlaid in phase 5, so all proxy hosts + certs come back.
-  run "cd /home/cloud/Ideaprojects/nginx && docker compose up -d"
+  #
+  # --force-recreate, NOT a plain `up -d`. When a create fails partway (2026-08-07: the
+  # port-80 bind lost to apache2) compose leaves the container EXISTING but attached to no
+  # network and publishing no ports. A later `up -d` sees a container by that name and just
+  # STARTS it, so NPM comes up "unhealthy", cannot resolve its own db, and serves nothing —
+  # with no mention of ports anywhere in the logs. Recreating costs a few seconds and makes
+  # the outcome independent of whatever wreckage a previous attempt left.
+  run "cd /home/cloud/Ideaprojects/nginx && docker compose up -d --force-recreate"
+  # Verify rather than assume: `docker compose up` exits 0 for a container that then dies.
+  if [ "$DRY_RUN" != 1 ]; then
+    sleep 15
+    if docker ps --filter name=nginx-proxy-manager --format '{{.Status}}' 2>/dev/null | grep -q '^Up'; then
+      log "nginx-proxy-manager is up ($(docker port nginx-proxy-manager 2>/dev/null | tr '\n' ' '))"
+      docker exec nginx-proxy-manager nginx -t >/dev/null 2>&1 \
+        && log "NPM nginx config test OK" \
+        || log "WARN: NPM is running but 'nginx -t' failed — check the proxy host confs."
+    else
+      log "WARN: nginx-proxy-manager is NOT up after phase 7. Public ingress and cert renewal are DOWN."
+      log "      docker logs nginx-proxy-manager | tail -30"
+      log "      Common cause: something else holds :80/:443 (see the free_web_ports warnings above)."
+    fi
+  fi
   mark_phase 7
 }
 
@@ -608,6 +710,17 @@ phase7_nginx() {
 phase8_automation() {
   should_run 8 || { log "phase 8 already done, skipping"; return; }
   log "PHASE 8 — re-arm restart policy, crontabs, host units/network, unseal loop"
+
+  # Boot-persistence check for the web ports. Phase 1 disabled the offenders and phase 7
+  # needed the ports NOW; this asks the different question "will they still be free after a
+  # reboot?". apache2 in particular is re-enabled by some apt operations, and the failure is
+  # invisible until the next restart takes every public domain down at once.
+  for _svc in apache2 nginx lighttpd caddy; do
+    if web_server_wants_ports "$_svc"; then
+      log "WARN: '$_svc' is enabled at boot and will race nginx-proxy-manager for :80/:443 after a reboot — disabling"
+      run "sudo systemctl disable --now $_svc || true"
+    fi
+  done
 
   # Keep the cluster across host reboots.
   run "docker update --restart=unless-stopped minikube || true"
