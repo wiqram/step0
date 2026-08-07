@@ -376,6 +376,15 @@ check_mount_source ubuntu-home      /home
 check_mount_source docker-data      /var/lib/docker
 check_mount_source minikube-backups /mnt/minikube-backups
 check_mount_source Kachra           /mnt/kachra
+# 2026-08-07: minikube-mnt moved off the HDD onto its own NVMe partition (p6,
+# 'minikube-data'), mounted AT the existing path so no script needed changing. Every PV
+# the cluster fsyncs lives here — five Postgres, MySQL, Mongo, Redis, Loki, Vault,
+# Jenkins. Measured on this box: 4K synchronous writes are 0.96ms on p6 vs 29.6ms on the
+# WD10EZEX (7200rpm) it came from, a 31x difference on the one operation those workloads
+# block on. This check matters MORE than the others: because it is a nested mount, if p6
+# fails to mount the path still EXISTS (it is a plain directory on sda1) and everything
+# silently works — just 31x slower, on the HDD, with no error anywhere.
+check_mount_source minikube-data    /mnt/minikube-backups/minikube-mnt
 
 # Root headroom. Everything above exists to keep this number healthy.
 _rootuse="$(df -h --output=pcent / 2>/dev/null | tail -1 | tr -d ' %')"
