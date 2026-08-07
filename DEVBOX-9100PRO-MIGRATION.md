@@ -539,6 +539,25 @@ sudo rsync -aHAX \
 The `.profile`/`.bashrc` exclusions are the important ones — see the note at the end of
 this section. (`java_error_in_idea.hprof` alone is 3.1G of IntelliJ heap dump.)
 
+⚠️ **Close Chrome (and any app whose profile you are restoring) BEFORE the copy — and
+verify it, don't assume it.** Chrome keeps `~/.config/google-chrome` open as live
+LevelDB/SQLite; rsyncing over it while it runs leaves the on-disk profile and the
+process's in-memory state disagreeing, and `--delete`/`--delete-after` will additionally
+remove profile files the running browser has created. This bit on 2026-08-07 (Chrome was
+up; 80 WhatsApp-Web IndexedDB `.ldb` files went missing). The fix is a clean restore with
+the app **shut down**, which worked perfectly — 8.1G / 36,800 files, zero diffs:
+
+```bash
+pgrep -c chrome                     # must be 0 — check, don't assume
+mv ~/.config/google-chrome ~/.config/google-chrome.pre-restore   # safety net
+sudo rsync -aHAX --delete /mnt/old/home/vik/.config/google-chrome/ ~/.config/google-chrome/
+sudo chown -R vik:vik ~/.config/google-chrome
+rm -f ~/.config/google-chrome/Singleton{Lock,Socket,Cookie}      # stale locks from the old box
+```
+That last line matters: a copied profile carries `Singleton*` locks naming the old
+machine/PID, and Chrome refuses to start on them. The same shut-it-down-first rule
+applies to Thunderbird, Signal, Steam and the JetBrains IDEs.
+
 Outside `$HOME`, also take **`/usr/local/bin/helm`** and **`/usr/local/bin/minikube`**
 (the rest of that dir is 2022-era `docker-compose`/`node`/`kubectl` you now get from
 apt). `/mnt/old/root/.ssh` is empty and `/etc/samba/smb.conf` is stock — neither needs
