@@ -125,9 +125,16 @@ install_unit() {
   install -m 0755 "$SELFDIR/$(basename "${BASH_SOURCE[0]}")" "$STABLE_PATH"
   cat > "$UNIT_PATH" <<EOF
 [Unit]
-Description=Allow dev box to reach prod minikube API over 10GbE (DOCKER-USER rules)
+Description=Allow dev box to reach prod minikube API over 10GbE (DOCKER-USER + raw/PREROUTING)
 After=docker.service
 Wants=docker.service
+# PartOf is what makes this survive a dockerd RESTART, not just a reboot. Docker rebuilds
+# DOCKER-USER *and* its raw/PREROUTING direct-routing drops from scratch every time it starts,
+# which silently discards our rules — and a plain `After=` oneshot only ever runs at boot, so
+# before 2026-08-07 any `systemctl restart docker` (or a docker package upgrade) left dev-box
+# access dead until the next reboot, with the unit still reporting active. PartOf propagates
+# docker's restart to us, so ExecStart re-runs and re-applies both sets of rules.
+PartOf=docker.service
 
 [Service]
 Type=oneshot

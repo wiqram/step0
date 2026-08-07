@@ -504,6 +504,36 @@ else
   info "$SNAP_ROOT absent — yolo not deployed on this box?"
 fi
 
+# --- Jenkins agent workspace volume: a 10x build-speed setting with no declarative home ---
+# Jenkins agents get their /home/jenkins/agent workspace from the pod template's
+# workspaceVolume. It shipped as DynamicPVCWorkspaceVolume, which provisions a FRESH PVC per
+# agent. With minikube's `standard` class (volumeBindingMode: Immediate) the pod cannot
+# schedule until that PVC exists, so every build paid a
+#   FailedScheduling: pod has unbound immediate PersistentVolumeClaims
+# plus the scheduler's exponential back-off. Measured on this box 2026-08-07, same job, same
+# stage: 102.5s to provision an agent vs 4.1s when one was reused; qcguy end-to-end went
+# 3.1 min -> 0.3 min (10x) after switching to EmptyDirWorkspaceVolume, and
+# "Deploy K8s" 83.8s -> 2.2s. The workspace is ephemeral (fresh clone every build) and the
+# PVC's reclaim policy was Delete, so the PVC was pure cost for zero benefit.
+#
+# Why this check exists rather than just a doc note: there is NO Jenkins Configuration-as-Code
+# here. The setting lives only in JENKINS_HOME/config.xml — persisted state, not something a
+# script recreates. It survives pod restarts, minikube rebuilds and DR restores, BUT any
+# archive taken before 2026-08-07 still contains DynamicPVC, so restoring one silently
+# reverts it. Builds get 10x slower again with nothing in any log to say why.
+JENKINS_CFG="${JENKINS_CFG:-$MNT_VOL/jenkins/config.xml}"
+if [ -e "$JENKINS_CFG" ]; then
+  _wv="$(sudo -n grep -o 'EmptyDirWorkspaceVolume\|DynamicPVCWorkspaceVolume' "$JENKINS_CFG" 2>/dev/null | head -1)"
+  [ -z "$_wv" ] && _wv="$(grep -o 'EmptyDirWorkspaceVolume\|DynamicPVCWorkspaceVolume' "$JENKINS_CFG" 2>/dev/null | head -1)"
+  case "$_wv" in
+    EmptyDirWorkspaceVolume)   pass "Jenkins agent workspace = emptyDir (no per-build PVC; ~98s/agent saved)" ;;
+    DynamicPVCWorkspaceVolume) warn "Jenkins agent workspace is DynamicPVC — every build provisions a PVC and waits on scheduler back-off (~98s per agent, measured 10x slower end-to-end). Fix: scale deploy/jenkins to 0, in $JENKINS_CFG replace the workspaceVolume class with ...volumes.workspace.EmptyDirWorkspaceVolume plus <memory>false</memory>, scale back to 1. Jenkins rewrites config.xml on shutdown, so it MUST be stopped before editing." ;;
+    *)                         info "could not read the Jenkins workspaceVolume class from $JENKINS_CFG" ;;
+  esac
+else
+  info "$JENKINS_CFG not present — jenkins not deployed on this box?"
+fi
+
 # Root headroom. Everything above exists to keep this number healthy.
 _rootuse="$(df -h --output=pcent / 2>/dev/null | tail -1 | tr -d ' %')"
 if [ -n "$_rootuse" ]; then

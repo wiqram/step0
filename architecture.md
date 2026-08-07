@@ -540,6 +540,53 @@ means a *manually rebuilt* NPM needs the toggle re-set by hand.
   **`vault`, `sops`, `age`, `jq`** on the agent image, the `sops-age-key` credential, and
   the per-app `vault-approle-id`/`vault-approle-secret` credentials. If you rebuild the
   inbound-agent image, add those CLIs (see vault `plan.md`).
+  ⚠️ **That job is RETIRED** (disabled in Jenkins, `ci/Jenkinsfile` deleted from the vault
+  repo on 2026-06-14, commit `64fe5a9`). Each app now owns its secrets in its own repo's
+  `vault/` dir and refreshes Vault at deploy via the `vaultSync(app)` shared library. Do not
+  re-enable it or add it to `jenkins-jobs.manifest`.
+
+#### Agent workspace volume — the single biggest build-speed setting
+
+Jenkins agent pods take their `/home/jenkins/agent` workspace from the pod template's
+`workspaceVolume`. It shipped as **`DynamicPVCWorkspaceVolume`**, which provisions a *fresh
+PVC per agent*. minikube's `standard` StorageClass is `volumeBindingMode: Immediate`, so the
+pod cannot be scheduled until that PVC exists — every build paid
+
+```
+FailedScheduling: pod has unbound immediate PersistentVolumeClaims
+```
+
+plus the scheduler's **exponential back-off** between retries. Measured 2026-08-07, same job
+and same stage, the only difference being whether an agent had to be provisioned:
+
+| | `DynamicPVC` | `emptyDir` |
+|---|---|---|
+| `qcguy` end-to-end | 3.1 min | **0.3 min** (10x) |
+| ⤷ Refresh Vault secrets | 102.5s | 14.6s |
+| ⤷ Deploy K8s | 83.8s | 2.2s |
+| `dyingpaleblue` end-to-end | ~1.5 min | 1.4 min |
+
+Pipelines spawn 2–4 agents each, so this was **~98s of pure provisioning per agent** —
+minutes per build, on builds with 1–3 minutes of real work. The PVC stored nothing worth
+keeping: the workspace is recreated from a fresh clone every build and the reclaim policy was
+`Delete`. Now `EmptyDirWorkspaceVolume` (+ `<memory>false</memory>`), which lands on the
+node's NVMe anyway.
+
+> **This is why the GM9000 appeared to make no difference to builds.** The disk was never the
+> bottleneck — image pulls were already 1.77 GB in 0.147s. Roughly 70% of build time was the
+> control plane waiting on PVCs. The NVMe upgrade is real and is what made the *databases*
+> 31x faster (4K fsync 29.6ms → 0.96ms); builds needed this instead. Measure where the time
+> actually goes (`/job/<name>/<n>/wfapi/describe`) before buying hardware for it.
+
+**It has no declarative home.** There is no Jenkins Configuration-as-Code here: the setting
+lives only in `JENKINS_HOME/config.xml`, i.e. persisted state on the `/mnt/jenkins` hostPath
+PV. It survives pod restarts, `minikube delete`, and a DR restore — but **any archive taken
+before 2026-08-07 still contains `DynamicPVC`**, so restoring one silently reverts it and
+builds go 10x slower with nothing in any log to explain why. `verify-recovery.sh` therefore
+checks the class explicitly. Editing it requires Jenkins to be **stopped first**
+(`kubectl scale deploy/jenkins -n jenkins --replicas=0`) — Jenkins rewrites `config.xml` on
+shutdown and will discard an edit made while it is running. Full procedure in
+`RESTART-RECOVERY.md`.
 
 ### Image Registry
 - Two mechanisms coexist: the Minikube `registry` addon (in-cluster, `172.16.238.2:5000`)
