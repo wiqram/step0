@@ -502,6 +502,21 @@ fi
 # A DR that discovers this at restore time has already lost the data.
 SNAP_ROOT="${SNAP_ROOT:-$MNT_VOL/yolo-db-snapshots}"
 SNAP_MAX_AGE_DAYS="${SNAP_MAX_AGE_DAYS:-2}"
+SNAP_NS="${SNAP_NS:-yolo}"
+
+# A stale tree is only a problem if something is still supposed to be refreshing it. When a
+# database is RETIRED its snapshot tree stays on disk and ages forever, so a naive freshness
+# check nags about it every single run — and a warning that can never be cleared trains you
+# to ignore the ones that matter. `atlas` is exactly that: retired on 2026-07-05 by the
+# MONGO-MIGRATE cutover from MongoDB Atlas to in-cluster mongo, last snapshot 2026-07-03.
+# So ask the cluster which databases still have a snapshot CronJob, and only hold THOSE to
+# the freshness bar. Self-correcting: retire a database and this stops nagging on its own;
+# add one and it starts checking without anybody editing this file.
+SNAP_JOBS=""
+if have kubectl; then
+  SNAP_JOBS="$(kubectl get cronjobs -n "$SNAP_NS" -o name 2>/dev/null \
+                | sed 's|.*/db-snapshot-||' | grep -v '^cronjob' || true)"
+fi
 if [ -d "$SNAP_ROOT" ]; then
   # DISCOVER the per-database trees rather than hardcoding names. The snapshot CronJob's
   # comments say private/notifications/quant, but this box also has atlas/ and postgres/ —
@@ -523,12 +538,41 @@ if [ -d "$SNAP_ROOT" ]; then
     fi
     _age=$(( ( $(date +%s) - ${_a%%.*} ) / 86400 ))
     _sz=$(stat -c %s "${_a#* }" 2>/dev/null || sudo -n stat -c %s "${_a#* }" 2>/dev/null)
+    # Is anything still scheduled to refresh this tree? Empty SNAP_JOBS means we could not
+    # ask (no kubectl / cluster down / yolo not deployed) — then fall back to checking
+    # everything, because silently skipping a live database is the worse failure.
+    _live=1
+    if [ -n "$SNAP_JOBS" ] && ! printf '%s\n' "$SNAP_JOBS" | grep -qx "$_db"; then
+      _live=0
+    fi
     if [ "${_sz:-0}" -lt 1024 ]; then
       fail "$_db: newest snapshot $(basename "${_a#* }") is ${_sz:-0} bytes — an empty dump restores nothing"
+    elif [ "$_live" = 0 ]; then
+      info "$_db: no db-snapshot-$_db CronJob targets this tree — retired database, ${_age}d old snapshot kept for history (not a failure)"
     elif [ "$_age" -gt "$SNAP_MAX_AGE_DAYS" ]; then
       warn "$_db: newest DB snapshot is ${_age}d old ($(basename "$(dirname "${_a#* }")")) — the db-snapshot CronJob may be failing; this is the only restorable copy"
     else
       pass "$_db: DB snapshot ${_age}d old, $(( _sz / 1024 ))KB ($(basename "$(dirname "${_a#* }")"))"
+    fi
+  done
+  # The reverse gap: a CronJob exists but has produced no tree at all — a database with NO
+  # backup, which the per-tree loop cannot see because it only iterates over trees that
+  # exist. Distinguish two very different cases, or this FAILs on every fresh restore:
+  #   - the job has NEVER been scheduled (lastScheduleTime empty): normal on a young
+  #     cluster, and normal for a newly added target. WARN, and say when it will resolve.
+  #   - the job HAS run and still produced nothing: it is failing. FAIL.
+  # Both matter because for Mongo the raw datastore dirs in the weekly tar are not a valid
+  # restore source, so "no logical dump" really does mean "no way back".
+  for _j in $SNAP_JOBS; do
+    [ -d "$SNAP_ROOT/$_j" ] && continue
+    _last="$(kubectl get cronjob "db-snapshot-$_j" -n "$SNAP_NS" \
+               -o jsonpath='{.status.lastScheduleTime}' 2>/dev/null)"
+    _sched="$(kubectl get cronjob "db-snapshot-$_j" -n "$SNAP_NS" \
+               -o jsonpath='{.spec.schedule}' 2>/dev/null)"
+    if [ -z "$_last" ]; then
+      warn "db-snapshot-$_j has never run yet (schedule '${_sched:-?}') and $SNAP_ROOT/$_j does not exist — that database has NO logical backup until its first run. Expected on a freshly rebuilt cluster or a newly added target; re-check after the next scheduled run."
+    else
+      fail "db-snapshot-$_j last ran $_last but $SNAP_ROOT/$_j was never written — the job is failing and that database has no logical backup. Check: kubectl -n $SNAP_NS logs job/\$(kubectl -n $SNAP_NS get jobs -o name | grep db-snapshot-$_j | tail -1 | cut -d/ -f2)"
     fi
   done
 else
