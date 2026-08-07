@@ -76,6 +76,23 @@ MANIFEST="${JENKINS_DEPLOY_MANIFEST:-$SELFDIR/jenkins-jobs.manifest}"
 ENV_FILE="${JENKINS_DEPLOY_ENV:-$SELFDIR/.env}"
 
 THROTTLE="${THROTTLE:-1}"                         # 0 = legacy, fire everything at once
+# MAX_PARALLEL: how many apps may be in flight at once when throttled. 1 = the historical
+# strictly-serial behaviour and still the DEFAULT, so nothing changes unless you opt in.
+#
+# Why >1 is now reasonable, measured on this box 2026-08-07 (see the throttle notes above):
+# builds are dominated by LATENCY, not throughput — agent-pod PVC provisioning plus
+# scheduler back-off (~30-60s), and `rollout status` waiting on readiness probes (~70-85s).
+# A 1.77GB image pulls in 0.147s. Running apps concurrently overlaps that dead time almost
+# for free; it does NOT multiply disk or CPU load the way the 2026-07-29 stampede did.
+#
+# But do not expect N x speedup. The Jenkins kubernetes cloud has containerCap=10, and a
+# SINGLE app already reaches it (each podTemplate stage spawns an agent, and yolo runs 6
+# parallel test branches). Beyond ~2-3 apps the extra ones mostly queue for agent slots, so
+# raising containerCap is the complementary change — this knob alone will not do it.
+# Peak observed during a fully SERIAL run: 20GB/51GiB memory, 10455m/22000m CPU, 10 agents.
+MAX_PARALLEL="${MAX_PARALLEL:-1}"
+case "$MAX_PARALLEL" in ''|*[!0-9]*) echo "trigger-app-builds: MAX_PARALLEL must be a positive integer (got '$MAX_PARALLEL')" >&2; exit 2 ;; esac
+[ "$MAX_PARALLEL" -lt 1 ] && MAX_PARALLEL=1
 JENKINS_HOST="${JENKINS_HOST:-jenkins.traderyolo.com}"
 POLL_INTERVAL="${POLL_INTERVAL:-10}"              # seconds between polls
 BUILD_WAIT_TIMEOUT="${BUILD_WAIT_TIMEOUT:-2400}"  # 40m, then stop waiting and move on
@@ -189,11 +206,20 @@ deploy() {
   baseline="$(last_build_num "$job")"
   trigger "$app"
   wait_for_build "$job" "$baseline"
-  wait_for_io_calm
+  # wait_for_io_calm is a SERIAL pacing device: it spaces one deploy from the next. Under
+  # MAX_PARALLEL>1 the disk is never idle until every build finishes, so each worker would
+  # simply burn IO_CALM_TIMEOUT (15m) waiting for a condition its own siblings prevent —
+  # making "parallel" slower than serial. Skip it; the concurrency cap is the pacing now.
+  [ "$MAX_PARALLEL" -le 1 ] && wait_for_io_calm
+  return 0
 }
 
 if [ "$THROTTLE" = "0" ]; then
   echo "trigger-app-builds: THROTTLE=0 — firing all jobs at once (legacy behaviour)."
+elif [ "$MAX_PARALLEL" -gt 1 ]; then
+  echo "trigger-app-builds: throttled, up to $MAX_PARALLEL app(s) in flight (MAX_PARALLEL=$MAX_PARALLEL)."
+  echo "  NOTE: Jenkins containerCap is 10 agent pods and one app can reach it alone —"
+  echo "        past ~2-3 concurrent apps the rest queue for agent slots, not CPU or disk."
 else
   echo "trigger-app-builds: throttled — one app at a time, waiting for build + disk."
 fi
@@ -207,14 +233,30 @@ APPS="$(awk '!/^#/ && NF>=4 {print $1}' "$MANIFEST" 2>/dev/null)"
 [ -n "$APPS" ] || { echo "trigger-app-builds: no usable rows in $MANIFEST — nothing to deploy." >&2; exit 1; }
 echo "trigger-app-builds: deploying in manifest order: $(echo "$APPS" | tr '\n' ' ')"
 
-for app in $APPS; do
-  # The legacy path kept its flat 60s pause before the parameterised yolo pipeline; the
-  # throttled path already waits on the real signal, so it needs no fixed sleep.
-  if [ "$THROTTLE" = "0" ] && [ "$app" = "yolo" ]; then
-    echo "building yolo pipeline but before that sleeping for 1 min"
-    sleep 1m
-  fi
-  deploy "$app"
-done
+if [ "$THROTTLE" != "0" ] && [ "$MAX_PARALLEL" -gt 1 ]; then
+  # Bounded fan-out. Each app runs in its own subshell so it still WAITS for its own build
+  # and reports that build's real result; only the waiting overlaps. Output is prefixed
+  # per app because eight concurrent workers on one stdout is unattributable — and a build
+  # failure you cannot attribute is worse than a slow run.
+  for app in $APPS; do
+    { deploy "$app" 2>&1 | sed "s/^/[$app] /"; } &
+    # Block until a slot frees. `wait -n` needs bash 4.3+ (this box is 5.3); the sleep is a
+    # fallback so an older bash degrades to polling rather than spawning everything at once.
+    while [ "$(jobs -rp | wc -l)" -ge "$MAX_PARALLEL" ]; do
+      wait -n 2>/dev/null || sleep 2
+    done
+  done
+  wait
+else
+  for app in $APPS; do
+    # The legacy path kept its flat 60s pause before the parameterised yolo pipeline; the
+    # throttled path already waits on the real signal, so it needs no fixed sleep.
+    if [ "$THROTTLE" = "0" ] && [ "$app" = "yolo" ]; then
+      echo "building yolo pipeline but before that sleeping for 1 min"
+      sleep 1m
+    fi
+    deploy "$app"
+  done
+fi
 
 echo "trigger-app-builds: all app build jobs triggered."
