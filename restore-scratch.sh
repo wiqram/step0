@@ -255,8 +255,26 @@ JSON
   # minikube --gpus all works. We install ubuntu-drivers' recommended + the toolkit.
   if ! command -v nvidia-smi >/dev/null 2>&1; then
     run "sudo apt-get install -y ubuntu-drivers-common"
-    run "sudo ubuntu-drivers autoinstall"
-    log "WARNING: NVIDIA driver installed — a REBOOT is likely required before GPU passthrough works."
+    # 2026-08-07: ubuntu-drivers-common 1:0.10.9 (Ubuntu 26.04) rewrote the CLI as a
+    # click app — `autoinstall` is GONE, the subcommand is now `install`. The old form
+    # does NOT fail loudly: it prints a usage block and exits, and run() does not check
+    # status, so phase 1 logged "driver installed" and marked itself done with no driver
+    # present at all. That only surfaces much later, when `minikube start --gpus all`
+    # comes up with no GPU. Prefer `install`; fall back to `autoinstall` on <=24.04.
+    if ubuntu-drivers -h 2>&1 | grep -qE '^[[:space:]]+install\b'; then
+      run "sudo ubuntu-drivers install"
+    else
+      run "sudo ubuntu-drivers autoinstall"
+    fi
+    # Verify rather than assume — this is the failure mode described above.
+    if dpkg -l 2>/dev/null | grep -q '^ii  nvidia-driver-'; then
+      log "WARNING: NVIDIA driver installed — a REBOOT is required before GPU passthrough works."
+    else
+      log "WARN: no nvidia-driver-* package present after ubuntu-drivers ran."
+      log "      minikube --gpus all (phase 6) will get NO GPU. Install by hand:"
+      log "        sudo ubuntu-drivers list && sudo apt-get install -y nvidia-driver-580"
+      log "      then REBOOT and resume with: ./restore-scratch.sh --from-phase 2"
+    fi
   fi
   if ! command -v nvidia-ctk >/dev/null 2>&1; then
     run "curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg"
@@ -310,6 +328,15 @@ phase2_pull() {
   latest="$(printf '%s\n' "$listing" | pick_latest_archive)"
   [ -n "$latest" ] || die "no private-cloud-*.tgz found in $WD_DEST"
   log "latest backup: $latest"
+  # backup-minikube-mnt.sh runs from ROOT's crontab (it needs the 0600 SMB creds), so any
+  # archive already sitting in $BACKUP_DIR is root:root 0644. This cp runs as 'cloud', and
+  # cp opens the destination O_WRONLY|O_TRUNC rather than unlinking it — so overwriting a
+  # root-owned archive fails with EACCES even though 'cloud' owns the directory. Only bites
+  # on a RE-run (or a box where a backup already landed), which is exactly the DR case.
+  # Hand the existing archives to 'cloud' first; harmless when they are already cloud's.
+  if [ -e "$BACKUP_DIR/$(basename "$latest")" ] && [ ! -w "$BACKUP_DIR/$(basename "$latest")" ]; then
+    run "sudo chown cloud:cloud '$BACKUP_DIR'/private-cloud-*.tgz"
+  fi
   cp "$latest" "$BACKUP_DIR/" || die "copy from WD Cloud failed"
   ARCHIVE_PATH="$BACKUP_DIR/$(basename "$latest")"
   echo "$ARCHIVE_PATH" > "$BACKUP_DIR/.restore-archive"
