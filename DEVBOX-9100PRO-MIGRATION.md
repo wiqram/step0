@@ -533,14 +533,55 @@ So rather than curate, take the lot and exclude the junk — one command, nothin
 
 ```bash
 sudo rsync -aHAX \
+  --exclude='/.cache' \
   --exclude='java_error_in_idea*' --exclude='*.hprof' --exclude='replay_pid*.log' \
   --exclude='.claude.json.backup.*' --exclude='.local/share/Trash' \
   --exclude='/.profile' --exclude='/.bashrc' --exclude='/IdeaProjects/step0' \
   /mnt/old/home/vik/ /home/vik/ && sudo chown -R vik:vik /home/vik
 ```
 
-The `.profile`/`.bashrc` exclusions are the important ones — see the note at the end of
-this section. (`java_error_in_idea.hprof` alone is 3.1G of IntelliJ heap dump.)
+The `.profile`/`.bashrc` exclusions matter — see the note at the end of this section.
+(`java_error_in_idea.hprof` alone is 3.1G of IntelliJ heap dump.)
+
+⚠️ **`--exclude='/.cache'` is NOT optional, and omitting it cost a 90-second shutdown on
+every boot.** `~/.cache` is regenerable by definition, and cache *formats* are exactly
+what changes across a two-release jump. The concrete failure (2026-08-07): the sweep
+carried 24.04's **Tracker search index** into 26.04, where tracker3 has been replaced by
+**`localsearch` 3.11**, which wants database schema **version 32**:
+
+```
+localsearch-3: Error opening readwrite database: database disk image is malformed
+localsearch-3: Failed to register: Database version is too old: got version 0, but 32 is needed
+```
+
+The chain from there is worth understanding, because nothing in it points at the cause:
+`localsearch-3` crash-loops until systemd gives up (`Start request repeated too quickly`)
+→ D-Bus keeps trying to activate `org.freedesktop.Tracker3.Miner.Files` and blocks for its
+full **120s** timeout → **`gnome-session-binary` will not exit while an activation is
+outstanding** → systemd `SIGTERM`s `session-N.scope`, waits the whole
+`DefaultTimeoutStopSec` (**90s**) and `SIGKILL`s it. All you see on the console is:
+
+```
+[ *** ] Job session-3.scope/stop running (43s / 1min 30s)
+```
+
+Fix — the index is a cache, so simply delete it and let it rebuild:
+```bash
+systemctl --user stop localsearch-3.service
+rm -rf ~/.cache/tracker3 ~/.local/share/tracker3
+systemctl --user reset-failed localsearch-3.service && systemctl --user start localsearch-3.service
+# prove the activation that wedged the session now works:
+gdbus call --session --dest org.freedesktop.Tracker3.Miner.Files \
+  --object-path /org/freedesktop/Tracker3/Miner/Files --method org.freedesktop.DBus.Peer.Ping
+```
+`systemctl --user list-units --state=failed` should then be empty. Expect a rebuild (~200M+
+here) while it re-indexes the restored home.
+
+**Diagnostic worth reusing:** a `Job <unit>/stop running (Ns / 1min 30s)` console message
+always means *that unit ignored SIGTERM*, never that the machine is slow. Read the previous
+boot's shutdown with `journalctl -b -1 | grep -iE 'Stopping timed out|Killing process'` —
+it names the exact PID and process. (This requires a persistent journal, i.e.
+`/var/log/journal` existing, which it does here.)
 
 ⚠️ **Close Chrome (and any app whose profile you are restoring) BEFORE the copy — and
 verify it, don't assume it.** Chrome keeps `~/.config/google-chrome` open as live
