@@ -97,9 +97,13 @@ org.gnome.settings-daemon.plugins.color|night-light-temperature|uint32 2700
 # because dock-fixed pins the dock regardless — chasing those two is the usual wasted
 # hour. Setting dock-fixed=false is exactly what the "Auto-hide the Dock" switch in
 # Settings > Ubuntu Desktop does; the other keys then take effect as they always meant to.
-# With intellihide=ALL_WINDOWS (left as-is) the dock hides when a window would overlap it,
-# rather than hiding unconditionally. For unconditional hiding, set intellihide false.
+# `intellihide` is the second half of the behaviour and is NOT what its name suggests:
+# true means "hide only when a window would overlap the dock", so on an empty desktop the
+# dock sits there permanently. false means hide unconditionally, revealed only by the
+# pointer at the screen edge — which is what "always hide" actually means. That is the
+# setting here. (Ubuntu's Settings panel has no switch for this; it is dconf-only.)
 org.gnome.shell.extensions.dash-to-dock|dock-fixed|false
+org.gnome.shell.extensions.dash-to-dock|intellihide|false
 
 # --- add further settings below; keep them grouped and commented like the above ---
 EOF
