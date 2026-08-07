@@ -6,15 +6,28 @@ Runbook for replacing the dev box's M.2 (Samsung 980 1TB) with a **Samsung 9100 
 2026-08-06 from a live SSH survey of the box; **retargeted 2026-08-07 to Ubuntu 26.04
 LTS** (was 24.04) after the 9100 PRO was physically fitted.
 
-**Status 2026-08-07 — hardware is IN.** The 9100 PRO is `nvme0n1`: blank (no partition
-table), in **M.2_1**, negotiating **32.0 GT/s ×4 = PCIe 5.0 ×4** (`current_link_speed`
-== `max_link_speed`, so it is not slot-limited). The 980 has already been relocated to
-a Gen4 slot as `nvme1n1` and is still the live `/`. §3 steps 1–3 are therefore **done**;
-the next real action is §2.4c (partition the new disk) then §3 step 4.
+**Status 2026-08-07 (evening) — §2 through §6 are DONE; the box is rebuilt and working.**
+Ubuntu 26.04 LTS is installed on the 9100 PRO and running: `/boot/efi` is
+`nvme0n1p1` (**the ESP decoupling, this migration's headline goal, achieved**), `/` on
+p2, `/home` on p5, the drive links at **32.0 GT/s ×4 = PCIe 5.0 ×4**. NVIDIA 595.84,
+Docker 29.7.2 with its data on p4, Go 1.26.5, Node 24, kubectl 1.34.10, ollama 0.32.6
+serving all four models on `10.10.10.2:11434`, and the dev compose stack green
+(**12 containers, `verify-dev` 20/20**). Everything salvageable has been pulled off the
+980, including a 33G copy of its `ubuntu-backup` partition.
 
-⚠️ **Device names have flipped since the 2026-08-06 survey below.** The new disk took
-`nvme0n1`; the old 980 is now `nvme1n1`. §0's table still uses the pre-fit names —
-read it as history. Everywhere else in this doc, `nvme0n1` = the 9100 PRO.
+**What is still open:**
+- **§4.1's `/var` → p3 move.** Deferred, not forgotten: p3 is formatted and empty and
+  `/var` still lives on the 120G root. `/var/lib/docker` → p4 **is** done. Needs a
+  reboot; see the revised §4.1 for doing it safely post-install.
+- **§7's from-prod checks.** The prod box was powered off, so the 10GbE peer, the
+  `prod-minikube` context and `verify-recovery.sh`'s dev probes are all **unverified
+  end-to-end**. The dev-side config is correct and the watchdog is doing its job
+  (bouncing a dead peer on schedule) — but "configured" is not "proven".
+- **§8.1.** SATA still unplugged; see the health warning now at the top of that section.
+
+⚠️ **Device names flipped when the new disk went in.** The 9100 PRO took `nvme0n1`; the
+old 980 is `nvme1n1`. §0's table still uses the pre-fit names — read it as history.
+Everywhere else in this doc, `nvme0n1` = the 9100 PRO.
 
 The dev box is `vik@10.10.10.2` (10GbE /30 to prod) / `vik@192.168.50.161` (LAN OOB).
 It matters to prod in three ways, all restored in §6: it serves **ollama to prod yolo**
@@ -85,21 +98,26 @@ helper, and it runs the **10GbE link watchdog** on its end of the /30.
 10. First boot: updates; enable os-prober → `update-grub` picks up Windows (+ the old
     ubuntu as rollback) (§5.1).
 
-**C. Rebuild (~half a day, mostly §5–§6)**
-11. zram + docker-mount guard + NVIDIA driver (MOK prompt possible — Secure Boot is on)
-    + docker + snaps/toolchain (§5). **Read §5.0 first — the 26.04 deltas.**
-12. Mount the old 980 read-only; copy identity + config + data per the §6.1 list.
-13. Ollama back exactly as it was: binary + the three systemd overrides +
+**C. Rebuild (~half a day, mostly §5–§6)** — ✅ *all of C done 2026-08-07*
+11. ✅ zram + docker-mount guard + NVIDIA driver (**no MOK prompt** — see §5.0)
+    + docker + snaps/toolchain (§5). **Read §5.0 first — the 26.04 deltas are real and
+    two of them fail silently.**
+12. ✅ Mount the old 980 read-only; copy identity + config + data per the §6.1 list.
+13. ✅ Ollama back exactly as it was: binary + the **four** systemd env overrides +
     `ollama-warm.service` + the model store (two models are custom-built — copy, don't
     re-pull) (§6.2).
-14. 10GbE + prod wiring: eno1 static `10.10.10.2/30` profile, `devbox-connect-prod.sh
+14. ✅ 10GbE + prod wiring: eno1 static `10.10.10.2/30` profile, `devbox-connect-prod.sh
     all` + `install-unit`, `10gbe-link-watchdog.sh --install`. **Do NOT add any prod
     route to the eno2 profile** — that exact mistake once silently capped dev→prod at
-    1GbE (§6.3).
-15. Compose stack up; verify list §7 (including the from-prod checks).
+    1GbE (§6.3). *(Config verified; the peer itself was down at the time — the prod box
+    was off — so the end-to-end checks in §7 still owe a re-run.)*
+15. ✅ Compose stack up (12 containers, verify-dev 20/20). §7's from-prod checks pending
+    prod being powered on.
+16. ☐ **Do §4.1's `/var` rsync + fstab line LAST, then reboot** — it is the one step
+    that must not be interleaved with the installs above (§4.1).
 
 **D. Weeks later**
-16. Old 980: after the soak, EITHER clone **Windows onto it** (retiring the 2014-era
+17. Old 980: after the soak, EITHER clone **Windows onto it** (retiring the 2014-era
     SATA 860 EVO from OS duty — the recommended endgame; exact steps in **§8.1**:
     decrypt BitLocker → Magician clone → boot from 980 → reclaim the duplicated data
     partition → strip the 860 to data-only) OR wipe it as an Ubuntu scratch disk.
@@ -323,9 +341,25 @@ sudo umount /mnt/var /mnt/new
 On first boot, `findmnt /var /var/lib/docker` must show both, then
 `sudo rm -rf /var.preinstall` once you are satisfied.
 
-*If you skip this and reboot first*, it is recoverable — just do the same rsync from a
-live USB rather than from the running system. Do **not** attempt it in-place on a
-booted 26.04: `/var` is open by journald, snapd and dpkg.
+*If you skip this and reboot first* — which is what actually happened on 2026-08-07 —
+it is recoverable **without a live USB**, provided you get the ordering right. The two
+partitions are not equally awkward:
+
+- **`/var/lib/docker` (p4) is trivial and must be done FIRST**, before docker is ever
+  installed: `sudo mkdir -p /var/lib/docker`, add the fstab line, `sudo mount
+  /var/lib/docker`. Nothing holds the directory yet, so it just works — and every image
+  and build-cache layer then lands on p4 from the first pull instead of filling the
+  120G root.
+- **`/var` (p3) is the one that can't be swapped live** (journald/snapd/dpkg hold it
+  open), so it goes **LAST**: finish all installs and restores first, then
+  `rsync -aHAX -x /var/ /mnt/newvar/` (the `-x` is what stops it descending into the p4
+  mount), `mkdir -p /mnt/newvar/lib/docker`, add the fstab line, and reboot
+  **immediately** — the only drift in that window is a few log lines.
+
+Doing it this way needs no `var.preinstall` move: the original `/var` on root simply
+sits shadowed under the new mount. Reclaim it later if you care (`mount -o bind` the
+root device somewhere and delete), or leave it — it is a couple of GB on a 120G
+partition.
 
 **Then:** power off, reconnect the SATA disk, and set BIOS boot priority to the **new**
 ubuntu entry (the one on the 9100 PRO — there will be TWO "ubuntu" entries; they're
@@ -341,23 +375,57 @@ check is the whole ESP-decoupling goal of this migration.
 
 Read this before running anything below — three of the four are silent-failure shaped.
 
-- **`sudo` is now `sudo-rs`** (0.2.13) and **coreutils is now `uutils`** (0.8.0), both
-  [Rust reimplementations shipped as the 26.04 defaults](https://computingforgeeks.com/ubuntu-2604-rust-coreutils-guide/).
-  uutils passes ~88% of the GNU test suite and treats divergence as a bug — but 88% is
-  not 100%, and this migration's single riskiest command is a 192G recursive copy.
-  **Consequence: §6.1 uses `rsync -aHAX`, not `cp -a`** (rsync is not coreutils, so it
-  is unaffected either way). Both classics remain installable as alternative providers
-  if something misbehaves — the `coreutils` metapackage depends on exactly one of two.
-  Also smoke-test the STEP0 units you install in §6.3 (`10gbe-link-watchdog.sh
-  --install`, `devbox-connect-prod.sh install-unit`) rather than assuming their `sudo`
-  invocations are all in sudo-rs's supported set.
+- **`sudo` is now `sudo-rs`** (confirmed on the installed box: `sudo-rs 0.2.13-0ubuntu1`).
+  ⚠️ **But the coreutils half of this bullet was WRONG** — corrected 2026-08-07 on the
+  real install. `cp --version` reports **`cp (GNU coreutils) 9.7`**: the `rust-coreutils`
+  (0.8.0) and `coreutils-from-uutils` packages *are* installed, but **GNU still provides
+  `/usr/bin`**. So the [uutils-by-default claim](https://computingforgeeks.com/ubuntu-2604-rust-coreutils-guide/)
+  did not hold here. Verify on your own box (`cp --version`) rather than assuming either
+  way — the alternatives system can flip it.
+  Using `rsync -aHAX` throughout §6.1 was still the right call, but for a better reason
+  than the one originally given: see the read-error handling note in §8.1.
+  Do still smoke-test the STEP0 units you install in §6.3 — ⚠️ **`devbox-connect-prod.sh
+  route` really does fail under sudo-rs-era non-tty invocation**; details in §6.3.
 - **Docker's apt repo has a `resolute` suite** — verified 2026-08-07 against
   `download.docker.com/linux/ubuntu/dists/`. `get.docker.com` works unmodified.
 - **kubectl:** `pkgs.k8s.io` is distro-agnostic; no change.
-- **NVIDIA:** 26.04 ships kernel 7.0 and the 2080 Ti is Turing — supported, but this is
-  the combination most likely to need attention. Do not call §5.4 done until
-  `nvidia-smi` prints the card, and expect the MOK enrollment blue screen (Secure Boot
-  is on).
+- **NVIDIA:** 26.04 ships kernel 7.0 and the 2080 Ti is Turing — supported.
+  ✅ *Resolved 2026-08-07, and both fears were wrong:*
+  - **`ubuntu-drivers autoinstall` NO LONGER EXISTS** on 26.04 — the subcommand was
+    removed; it is now **`sudo ubuntu-drivers install`** (`autoinstall` exits non-zero
+    with `Error: No such command`). §5.4 is corrected below.
+  - **No MOK enrollment, no blue screen.** The recommended driver is
+    `nvidia-driver-595-open`, which 26.04 ships as a **prebuilt kernel module signed by
+    the Canonical Ltd. Kernel Module Signing key** (already enrolled in the shim db) —
+    **not** DKMS. `dkms` isn't even installed. `modinfo nvidia` shows
+    `signer: Canonical Ltd. Kernel Module Signing`. Secure Boot stays on and nothing
+    is asked of you.
+  - Driver lands at **595.84** — the same version the old box ran.
+  - `modprobe nvidia` fails with `No such device` until you reboot (nouveau still holds
+    the card); that is expected, not a fault. After the reboot `nvidia-smi` prints the
+    2080 Ti and `lspci -k` shows `Kernel driver in use: nvidia`.
+- ⚠️ **The `go` and `node` SNAPS ARE STRICTLY CONFINED AND PRODUCE NO OUTPUT when run
+  non-interactively** — the single nastiest 26.04 trap found during this migration.
+  `/snap/bin/go version` from a script or an SSH/agent shell exits **0 with empty
+  stdout** (`snap run go version` works; the shim doesn't). Anything that shells out to
+  `go`/`node` therefore sees success and no data. This silently breaks
+  IG-Trading-Microservices' `dockerup-dev.sh` pre-flight, which only tests
+  `command -v go` and would have handed the build a mute compiler.
+  **Consequence: do NOT use the `go`/`node` snaps.** §5.6 now installs Go into
+  `/usr/local/go` from go.dev (which is what the repo's own pre-flight FIX text tells
+  you anyway) and Node from **NodeSource** apt. The other snaps (IntelliJ, gradle,
+  openjdk, slack, …) are classic or GUI apps and are unaffected.
+- **npm 11 blocks package install scripts by default** (`npm warn allow-scripts`).
+  `npm install -g grpc-tools` warns that `node-pre-gyp install` did not run — harmless
+  here (the package ships the binaries), but if a global package ever comes up broken,
+  that warning is why: re-run with `--allow-scripts=<pkg>`.
+- **A `.venv` copied off the old disk is DEAD.** 24.04 was Python 3.12, 26.04 is
+  **3.14**, so `IG-Trading-Microservices/.venv` imports nothing. Delete and recreate it
+  (`python3 -m venv .venv && .venv/bin/pip install grpcio-tools==1.81.1` — the pin
+  builds fine on 3.14). Same applies to any other venv §6.1 brings across.
+- **os-prober is enabled by default** on 26.04 even with `GRUB_DISABLE_OS_PROBER`
+  commented out — `update-grub` runs it and just prints a warning. Setting it to
+  `false` explicitly (§5.1) is still worth doing so the intent is recorded.
 - **Ollama's install script** and the systemd units copied off the old disk are
   distro-agnostic; unit syntax is stable across this jump. No change to §6.2.
 
@@ -376,18 +444,40 @@ sudo mkdir -p /etc/systemd/system/docker.service.d
 printf '[Unit]\nRequiresMountsFor=/var/lib/docker\n' | sudo tee /etc/systemd/system/docker.service.d/require-docker-mount.conf
 ```
 
-**4. NVIDIA driver** (Secure Boot is ON — if the installer offers MOK enrollment,
-set the one-time password and complete the blue-screen enrollment on reboot):
-`sudo ubuntu-drivers autoinstall`, reboot, `nvidia-smi` shows the 2080 Ti.
+**4. NVIDIA driver** — `sudo ubuntu-drivers install` (**not** `autoinstall`, removed in
+26.04), reboot, `nvidia-smi` shows the 2080 Ti at 595.84. Secure Boot stays on and
+there is **no MOK prompt** — see §5.0 for why.
 
 **5. Docker:** `curl -fsSL https://get.docker.com | sudo sh && sudo usermod -aG docker vik`.
+⚠️ **Mount `/var/lib/docker` (p4) BEFORE this step**, or every image and build-cache
+layer lands on the 120G root and has to be moved later.
 
-**6. Toolchain** (from the survey of what the box actually runs): snaps
-`intellij-idea-ultimate --classic`, `intellij-idea-community --classic`, `go --classic`,
-`node --classic`, `openjdk`, `gradle --classic`, `slack`, `spotify`, `thunderbird`,
-`gimp`, `vlc`; apt `kubectl` (or copy the binary), plus whatever §6.1 brings over.
+**6. Toolchain** (from the survey of what the box actually runs):
+
+- **snaps** — `intellij-idea-ultimate --classic`, `intellij-idea-community --classic`,
+  `openjdk`, `gradle --classic`, `slack`, `spotify`, `thunderbird`, `gimp`, `vlc`.
+  ⚠️ **NOT `go` and NOT `node`** — see the confinement trap in §5.0.
+- **Go** → `/usr/local/go` from go.dev:
+  `V=$(curl -fsSL https://go.dev/VERSION?m=text|head -1); curl -fsSL -o /tmp/$V.tgz https://go.dev/dl/$V.linux-amd64.tar.gz && sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf /tmp/$V.tgz`
+- **Node** → NodeSource apt (`deb.nodesource.com/node_24.x nodistro main`).
+- **apt** — `kubectl` (pkgs.k8s.io), `protobuf-compiler`, `jq`, `python3-venv`,
+  `zram-tools`, `ethtool`, `nfs-common`.
+- **npm -g** — `grpc-tools` (provides `grpc_tools_node_protoc`; installs into
+  `~/.npm-global/bin` via the copied `.npmrc`, so that dir must be on PATH).
+- The `protoc-gen-go` / `-go-grpc` / `-grpc-gateway` / `-openapiv2` plugins come across
+  for free in §6.1's `~/go` copy — no `go install` needed.
+
 Do NOT install gh/sops/age — their absence on the dev box is a deliberate security
-property (sops-write-only from dev).
+property (sops-write-only from dev). The dev stack degrades gracefully without sops
+(it falls back to `*.example` templates), and in a §6.1 restore it never needs to:
+the real gitignored `.env` files come across with the repo copy.
+
+⚠️ **`~/go/bin/go` is a stale go1.19 binary from 2022** that the old `.profile` put
+*first* on PATH (`export PATH=$GOPATH/bin:$GOROOT/bin:$PATH` with
+`GOROOT=$HOME/go/go1.19`). Every `go.mod` in IG-Trading-Microservices requires
+**1.26.0**. Restoring that `.profile` verbatim therefore shadows the real compiler with
+one seven years too old. Drop the `GOROOT`/go1.19 export, put `/usr/local/go/bin` ahead
+of `$GOPATH/bin`, and rename `~/go/bin/go` out of the way.
 
 ---
 
@@ -417,14 +507,72 @@ $R $O/.local/opt ~/.local/                            # OpenRGB AppImage (cronta
 # off the old disk (or from the §2.4b bundle's text/vik-crontab.txt):
 sudo cat /mnt/old/var/spool/cron/crontabs/vik | crontab -
 ```
-Repos: prefer **fresh clones** into `~/IdeaProjects` (push happened in §2.1); copy any
-directory that had uncommitted work from `$O/IdeaProjects/` instead. Browser profiles
-(`$O/.mozilla`, `$O/.config/google-chrome`) if wanted.
+**The curated list above is a good first pass but is NOT sufficient — finish with a full
+sweep.** Working through it on 2026-08-07 and then diffing old-vs-new turned up ~40 more
+top-level entries that matter, several of them irreplaceable:
+
+- **`.config/sops/age/keys.txt`** — the dev-box age key. Easy to miss because §0 says
+  "sops deliberately not installed": the *binary* is absent by design, the **key is
+  not**, and without it `dev-env-sync.sh` can never materialise real secrets again.
+- **Wallets** — `.config/Exodus` (13M) and `MultiDoge` (9.2M). Nothing else on the box
+  is this unrecoverable.
+- **`yolo-api-key.txt`**, `signal-desktop-keyring.gpg`, `.git-credentials` (chmod 600 —
+  git over https has no key in `~/.ssh`, which holds only `authorized_keys` +
+  `known_hosts`).
+- **`.minikube`** (884M) — the local `minikube` kube context is inert without it.
+- `.android` (4.3G AVDs — distinct from the `android` SDK dir), `.thunderbird`,
+  `.mozilla`, `.config/Signal`, `.config/OpenRGB` (**the restored crontab drives it**),
+  `.local/share/Steam`, `virtualenv`/`virtualenvs`/`pipx`/`jupyter`, `.m2`, `.gradle`,
+  `.npmrc` (sets `prefix=~/.npm-global` — that bin dir must reach PATH), `.docker`,
+  `.jdks`, `.codex`, `.hunter`, `.IT-Finance`, `wd-backup`, `yolo-e2e-audit`.
+
+So rather than curate, take the lot and exclude the junk — one command, nothing missed:
+
+```bash
+sudo rsync -aHAX \
+  --exclude='java_error_in_idea*' --exclude='*.hprof' --exclude='replay_pid*.log' \
+  --exclude='.claude.json.backup.*' --exclude='.local/share/Trash' \
+  --exclude='/.profile' --exclude='/.bashrc' --exclude='/IdeaProjects/step0' \
+  /mnt/old/home/vik/ /home/vik/ && sudo chown -R vik:vik /home/vik
+```
+
+The `.profile`/`.bashrc` exclusions are the important ones — see the note at the end of
+this section. (`java_error_in_idea.hprof` alone is 3.1G of IntelliJ heap dump.)
+
+Outside `$HOME`, also take **`/usr/local/bin/helm`** and **`/usr/local/bin/minikube`**
+(the rest of that dir is 2022-era `docker-compose`/`node`/`kubectl` you now get from
+apt). `/mnt/old/root/.ssh` is empty and `/etc/samba/smb.conf` is stock — neither needs
+anything. `/opt` holds only installable apps (Chrome, Signal, Zoom, TeamViewer,
+NordVPN); their *data* is in `~/.config`, which the sweep above already took.
+
+**Repos: copy, don't re-clone.** The doc used to say "prefer fresh clones". In the real
+restore that was the wrong call and the whole of `$O/IdeaProjects/` (52G) was rsynced
+instead. Three reasons, all of which apply on any future run:
+- every repo was **0 ahead** but many had dirty working trees (58 files in one) — a
+  fresh clone silently discards all of it;
+- **`ollama-dev` has no git remote at all** and is load-bearing (the ollama unit's PATH
+  points into its `quant-trainer/.venv`);
+- five entries aren't repos (`container-registry`, `Crypto-Mining`, `qcguy-cms`,
+  `qcguy_CERTS`, `minikube-priv-cloud`, plus a pile of `.zip` archives).
+
+The gitignored `*.env` / `.env.development` files ride along with the copy, which is
+what lets the dev stack come up **without sops** (§5.6). Note the old checkout is
+`~/IdeaProjects/step0` (lowercase) while a fresh clone gives `STEP0` — exclude the old
+one and symlink, don't end up with both. Browser profiles (`$O/.mozilla`,
+`$O/.config/google-chrome`) if wanted.
+
+**`~/.profile` / `~/.bashrc` are NOT in the list above on purpose** — copying them
+verbatim re-imports the stale go1.19 GOROOT (§5.6). Re-add by hand only what still
+applies: `GOPATH`, `ANDROID_SDK_ROOT` + its `emulator`/`platform-tools` PATH entries,
+`~/.npm-global/bin`, and `/usr/local/go/bin` **ahead of** `$GOPATH/bin`.
 
 ### 6.2 Ollama — exactly as it was, then prove it from prod
 
 The unit's overrides are load-bearing (bind to `10.10.10.2`, wait for eno1, cap loaded
-models) and two models are **custom local builds** that `ollama pull` cannot recreate:
+models) and two models are **custom local builds** that `ollama pull` cannot recreate.
+`override.conf` carries **four** env vars, not the three listed in §0/§9 — the other two
+are `OLLAMA_NUM_PARALLEL=1` and `OLLAMA_KEEP_ALIVE=-1` (the latter is what keeps the
+warmed 7b resident in VRAM forever, so it is not cosmetic):
 
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh          # installs binary + base unit
@@ -457,11 +605,47 @@ kubectl --context prod-minikube get ns                 # the copied ~/.kube just
 the **eno2** profile. A stray /32 on eno2 (metric 100 < eno1's) once sent all dev→prod
 traffic over the 1GbE LAN silently — the "10GbE TX cap" incident. eno2 stays plain DHCP.
 
+**Where the old profile actually lives (2026-08-07).** `/etc/NetworkManager/system-connections/`
+on the old disk is **EMPTY** — do not conclude the config was lost. NM on this box uses
+the **netplan keyfile backend**, so every profile is a
+`/etc/netplan/90-NM-<uuid>.yaml`. The eno1 one (`name: "Wired connection 1"`) is the
+authoritative record and is worth reading rather than retyping the values from memory:
+
+```yaml
+addresses: ["10.10.10.2/30"]
+routes:  [{to: "172.16.238.2/32", via: "10.10.10.1"}]
+passthrough: {ipv6.method: "disabled"}
+```
+
+So the `nmcli con add` above should also set `ipv4.routes "172.16.238.2/32 10.10.10.1"`,
+`ipv4.never-default yes` and `ipv6.method disabled` — that single command then replaces
+both it *and* `devbox-connect-prod.sh route`.
+
+⚠️ **`devbox-connect-prod.sh route` calls plain `sudo` internally**, so it fails with
+`sudo: A terminal is required to authenticate` from any non-tty context (a script, an
+agent shell). `install-unit` and `10gbe-link-watchdog.sh --install` are fine because you
+invoke *those* under sudo yourself. Run `route` from a real terminal, or just fold its
+route into the `nmcli con add` as above and skip it.
+
 ### 6.4 Dev stack
 
-`cd ~/IdeaProjects/IG-Trading-Microservices && docker compose up -d` (first run
-rebuilds images — the 11G build cache is gone, expect a slow first build), same for any
-other compose-based app you actively develop.
+**The entry point is `./dockerup-dev.sh`, not `docker compose up -d`** — there is no
+plain `docker-compose.yml` in this repo; the script drives three compose files
+(`robin_stocks/docker-compose-dev.yml`, `docker-compose-dev.yml`,
+`docker-compose-dev-api-gateway.yml`), then seeds and runs `scripts/verify-dev.sh`.
+Its pre-flight collects *all* toolchain misses in one pass, so run it once and read the
+list. First run rebuilds everything — the 11G build cache is gone, expect a slow build.
+
+Gaps a fresh 26.04 box hits, in the order the pre-flight reports them (2026-08-07):
+`protoc` (apt `protobuf-compiler`), `grpc_tools_node_protoc` (`npm i -g grpc-tools`),
+python `grpcio-tools` (**recreate the venv** — the copied one is 3.12, §5.0), and a
+`go` that is really 1.26 (§5.6). `sops` is expected to be absent; the pre-flight warns
+and falls back, and the real env files came over with the repo copy.
+
+**Green looks like:** 12 containers and `[verify-dev] RESULT: 20 passed, 0 failed` —
+containers ×12, gateway `/healthz`, login→JWT + an authed call, the postgres ledger
+schema at 11 migrations, redis/mongo pings, robin_stocks gRPC on :8079, UI on :3000.
+(§0's "14 containers" counted two transient `run --rm` helpers.)
 
 ---
 
@@ -494,6 +678,13 @@ other compose-based app you actively develop.
 **First, look before wiping:** mount the 980's `ubuntu-backup` partition
 (`232.9G`, label `ubuntu-backup`) read-only and see what past-you stashed there.
 
+✅ *Looked, 2026-08-07 — 35G used of 229G, all of it from 2022:* `vik/` (29G, a Jan-2022
+home snapshot), `backup - IG-Trading-Microservices/` (6.2G, Jun 2022), `Coin Mining/`
+(142M), `Nvidia 3080ti config/` (8K). Nothing current, but nothing reproducible either,
+so it was copied to **`~/old-980-ubuntu-backup/`** on the new disk before the 980 was
+touched — 35G against 1.4T free is not a trade worth thinking about. Delete it whenever
+you've decided you don't want it; the point was to make the wipe reversible.
+
 Then pick the 980's future:
 
 - **Recommended — give Windows the NVMe it never had** (step-by-step in **§8.1**).
@@ -518,6 +709,63 @@ Then pick the 980's future:
 > If the rebuild then turns out to be missing something, all that survives is the
 > partial handoff bundle on prod (`/mnt/minikube-backups/migration-handoff-devbox/`) —
 > which has ssh/kube/ollama/models but **not** the 192G home.
+
+> ⚠️ **The 980 has failing media (measured 2026-08-07). Read this before committing.**
+> SMART says `PASSED` and wear is only **4%**, but that is not the number that matters:
+>
+> | | 980 (`nvme1`) | 9100 PRO (`nvme0`) |
+> |---|---|---|
+> | Media and Data Integrity Errors | **172** | 0 |
+> | Error log entries | **172**, all `Unrecovered Read Error` | 0 |
+> | Available Spare | **91%** | 100% |
+> | Percentage Used | 4% | 0% |
+> | Unsafe shutdowns / time above warning temp | 243 / 6347 min | 1 / 0 |
+>
+> This is **failing media, not wear-out** — it has already burned 9% of the spare block
+> pool, and it is observable rather than theoretical. Salvaging `ubuntu-backup` (`p4`)
+> hit hard EIO on four files near LBA ~1.47G; those were all junk (2021 IntelliJ logs, a
+> stub index, a Trash item).
+>
+> **The damage is NOT confined to `p4`.** An initial reading that it was got disproved by
+> the full-home sweep, which lost a Steam `.vpk` *and* a 705 MB family video
+> (`Desktop/Mama Phone London Trip Pics/`) — both on **`p1`, the root partition every
+> §6.1 restore is sourced from**. The video was recovered to **99.84%** with
+> `ddrescue -r5` (1077 kB bad over 11 areas; it still plays for its full 4m39s with brief
+> glitches) — `rsync` had simply discarded it, because rsync's behaviour on a read error
+> is to **fail the file and move on**, reporting only `exit 23` at the very end.
+>
+> **Therefore: never trust an rsync exit 0 off a suspect disk, and never wipe the source
+> until you have read every byte of it.** Two habits, both cheap:
+> ```bash
+> # 1. enumerate every unreadable file BEFORE destroying the source
+> sudo find /mnt/old -xdev -type f -size +0 -print0 \
+>   | sudo xargs -0 -n1 -P8 sh -c 'dd if="$0" of=/dev/null bs=1M status=none 2>/dev/null \
+>       || echo "UNREADABLE: $0"'
+> # 2. recover each one rsync gave up on
+> sudo ddrescue -r5 -b 4096 "$SRC" "$DST" "$DST.map"
+> ```
+> Check `smartctl -a` on the source disk at the *start* of any migration, not the end:
+> `Media and Data Integrity Errors` and a sub-100% `Available Spare` are the two fields
+> that predict this, and both were visible here all along.
+>
+> The consequence for this section is direct: §8.1's premise is "the 860 EVO is a
+> decade-old SATA drive, give Windows something better." A drive with 172 uncorrected
+> read errors and a shrinking spare pool is **not** better. If the goal is getting
+> Windows off SATA, the honest options are a partition carved from the 9100 PRO's ~1.5T
+> free tail, or a cheap healthy NVMe in one of the three remaining Gen4 slots.
+> *(Proceeded anyway on 2026-08-07 — an explicit, informed decision, recorded here so the
+> next reader doesn't mistake it for an oversight.)*
+
+⚠️ **The `Windows Boot Manager` NVRAM entry disappears when the SATA disk is unplugged.**
+After the fresh install with SATA out, `efibootmgr` lists exactly one OS entry —
+`Ubuntu` on the 9100 PRO's own ESP — because both `sda1`-based entries (old `ubuntu`
+*and* `Windows Boot Manager`) were pruned. On reconnecting the disk Windows will **not**
+be in the boot order; reach it from the BIOS boot menu, which enumerates
+`\EFI\Microsoft\Boot\bootmgfw.efi` directly, or recreate it with
+`efibootmgr -c -d /dev/sda -p 1 -L "Windows Boot Manager" -l '\EFI\Microsoft\Boot\bootmgfw.efi'`.
+This is cosmetic NVRAM state, **not** a damaged Windows install — don't start repairing
+things. (It also means step 9's "clean the dangling NVRAM entries" is already done for
+you.)
 
 **Prerequisites — all four, no exceptions:**
 1. The §7 soak is signed off. **Wiping the 980 deletes the Ubuntu rollback** — this is
@@ -590,13 +838,15 @@ skipped thought.
 
 | Fact | Value |
 |---|---|
-| Identity | host `vik`, user `vik`, TZ Europe/London, Ubuntu 24.04.4 → **26.04 LTS**, Secure Boot ON |
+| Identity | host `vik`, user `vik`, TZ Europe/London, Ubuntu 24.04.4 → **26.04 LTS** (kernel 7.0.0-29, Python 3.14), Secure Boot ON, **no passwordless sudo** |
+| Post-rebuild versions | NVIDIA **595.84** (`nvidia-driver-595-open`, prebuilt + Canonical-signed, no DKMS), Docker **29.7.2**, kubectl **1.34.10**, Go **1.26.5** (`/usr/local/go`), Node **24.19.0** (NodeSource), ollama **0.32.6** |
+| New disk layout | `nvme0n1` p1 ESP 1G → `/boot/efi` · p2 120G → `/` · p3 100G `ubuntu-var` → `/var` · p4 400G `docker` → `/var/lib/docker` · p5 1.5T `home` → `/home` · ~1.5T free tail |
 | Board / slots | ProArt Z890-CREATOR WIFI; M.2_1 = CPU **Gen5 x4** (→ 9100 PRO), 4× Gen4 (→ old 980) |
 | **New M.2 (2026-08-07)** | `nvme0n1` Samsung 9100 PRO 4TB, blank, PCI `0000:01:00.0` off CPU root port `00:01.0` = M.2_1; `current_link_speed` = `max_link_speed` = **32.0 GT/s ×4 (Gen5 ×4)**. 3726 GiB usable |
 | Old M.2 | Samsung 980 1TB (**now `nvme1n1`**, Gen3 ×4): Ubuntu `/` 465.8G (283G used), `ubuntu-backup` 232.9G unmounted, ~233G unallocated. Root UUID `46465bde-40e0-458b-a302-6d2e68604877`, `ubuntu-backup` UUID `f4e3825c-768f-4ea8-b776-5adb9c18e27a` |
 | Windows disk | 860 EVO 1TB SATA: shared ESP (100M) + C: 441.6G + WinRE ×2 + "Stuffs" 488.3G NTFS |
 | NICs | eno1 10GbE `bc:fc:e7:e7:4e:e5` = 10.10.10.2/30 static; eno2 LAN `bc:fc:e7:e7:4e:e4` = .161 DHCP |
-| Ollama | `OLLAMA_HOST=10.10.10.2:11434`, waits for eno1, MAX_LOADED_MODELS=2, + `ollama-warm.service`; models: qwen2.5:0.5b, qwen2.5:7b-instruct, dyingpaleblue (custom), predictonomy (custom) |
+| Ollama | `OLLAMA_HOST=10.10.10.2:11434`, waits for eno1, `MAX_LOADED_MODELS=2`, `NUM_PARALLEL=1`, `KEEP_ALIVE=-1`, + `ollama-warm.service`; models: qwen2.5:0.5b, qwen2.5:7b-instruct, dyingpaleblue (custom), predictonomy (custom). Unit `PATH` points into `~/IdeaProjects/ollama-dev/quant-trainer/.venv/bin`, and `ollama-warm.service` is a symlink to `~/IdeaProjects/ollama/dev/ollama-warm.service` — **both repos must exist before `systemctl enable`** |
 | Docker | compose dev stack (IG-Trading-Microservices, 14 containers), 19.6G images, 11G buildkit |
 | Prod touch-points | ollama endpoint, `prod-minikube` context, `~/bin/jenkins-deploy` + `~/.jenkins-deploy-urls.env`, watchdog + connect-prod units |
 | 9100 PRO 4TB | PCIe 5.0 x4, 14,800/13,400 MB/s, 4GB LPDDR4X DRAM, 2400 TBW, 5-yr ([datasheet](https://download.semiconductor.samsung.com/resources/data-sheet/Samsung_NVMe_SSD_9100_PRO_with_Heatsink_Datasheet_Rev.2.0.pdf), [Samsung announcement](https://news.samsung.com/us/samsung-announces-9100-pro-series-ssds-with-breakthrough-pcie-5-0-performance/)) |
