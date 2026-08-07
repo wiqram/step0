@@ -30,9 +30,9 @@ restore_repo_manifest() {
 /home/cloud/Ideaprojects/nginx https://github.com/wiqram/nginx.git master
 /home/cloud/Ideaprojects/qcguy-ghost https://github.com/wiqram/qcguy-ghost.git main
 /home/cloud/IdeaProjects/bestrentaladmin https://github.com/wiqram/bestrentaladmin.git main
-/home/cloud/IdeaProjects/dyingpaleblue https://github.com/wiqram/dyingpaleblue.git fix-migrate-postgres-readiness
+/home/cloud/IdeaProjects/dyingpaleblue https://github.com/wiqram/dyingpaleblue.git main
 /home/cloud/IdeaProjects/ollama https://github.com/wiqram/ollama.git Claude-agent-update
-/home/cloud/IdeaProjects/Predictonomy https://github.com/wiqram/Predictonomy.git master
+/home/cloud/IdeaProjects/Predictonomy https://github.com/wiqram/Predictonomy.git Claude-agent-updates
 /home/cloud/IdeaProjects/IG-Trading-Microservices https://github.com/wiqram/IG-Trading-Microservices.git Claude-agent-update
 /home/cloud/IdeaProjects/qcx https://github.com/wiqram/qcx.git main
 /home/cloud/IdeaProjects/radcliffe https://github.com/wiqram/radcliffe.git main
