@@ -598,8 +598,8 @@ curl -fsSL https://ollama.com/install.sh | sh          # installs binary + base 
 sudo systemctl stop ollama
 sudo rsync -aHAX /mnt/old/etc/systemd/system/ollama.service  /etc/systemd/system/   # full unit is custom too
 sudo rsync -aHAX /mnt/old/etc/systemd/system/ollama.service.d /etc/systemd/system/
-# ollama-warm.service is a SYMLINK into the ollama repo — clone wiqram/ollama first, then:
-sudo ln -sf /home/vik/IdeaProjects/ollama/dev/ollama-warm.service /etc/systemd/system/ollama-warm.service
+# ollama-warm.service — clone wiqram/ollama first, then COPY it (see the warning below):
+sudo cp /home/vik/IdeaProjects/ollama/dev/ollama-warm.service /etc/systemd/system/ollama-warm.service
 sudo rsync -a /mnt/old/usr/share/ollama/ /usr/share/ollama/    # ~4.8G model store, owner ollama:ollama
 sudo chown -R ollama:ollama /usr/share/ollama
 sudo systemctl daemon-reload && sudo systemctl enable --now ollama ollama-warm
@@ -607,6 +607,33 @@ OLLAMA_HOST=10.10.10.2:11434 ollama list                # expect qwen2.5 x2, dyi
 ```
 *(Do 6.3 first if eno1 has no address yet — the unit deliberately waits for it.)*
 From **prod**: `curl -s http://10.10.10.2:11434/api/tags | jq '.models[].name'`.
+
+⚠️ **`ollama-warm.service` must be a REAL FILE in `/etc/systemd/system`, never a symlink
+into `~/IdeaProjects` — this partition scheme broke the old arrangement.** On the 980,
+`/home` was part of `/`, so a symlink from `/etc/systemd/system` into the ollama checkout
+resolved fine at boot. On the 9100 PRO **`/home` is its own partition (p5)**, and systemd
+loads units *before* `local-fs.target` mounts it. The symlink therefore dangles and every
+boot logs:
+
+```
+ollama-warm.service: Failed to open /etc/systemd/system/ollama-warm.service: No such file or directory
+```
+
+`systemctl is-enabled` still cheerfully says **enabled**, so nothing looks wrong — the
+only symptom is that prod's first request after a dev-box reboot is slow, because no
+model was warmed into VRAM. Found on the first reboot after the rebuild (2026-08-07).
+
+The unit itself (`wiqram/ollama` `dev/ollama-warm.service`, commit `89ba968`) now also
+carries `After=ollama.service home.mount` + `RequiresMountsFor=/home/vik/IdeaProjects`,
+because its `ExecStart` script *does* live on `/home` and is only needed at run time.
+Behaviour still lives in `dev/warm-models.sh` — only the small, stable unit file is
+copied, so there is nothing meaningful to drift.
+
+**Generalise this:** any unit whose *file* lives under `/home` has the same defect.
+`ollama.service` itself is fine — it is a real file in `/etc` and merely *references*
+`/home` paths in `Environment=PATH` and `ExecStart`, which resolve at start time, not
+load time. Check with `systemctl is-active <unit>` after a reboot, not just
+`is-enabled` — the latter cannot tell you the unit file was unreadable.
 
 ### 6.3 10GbE + prod wiring
 
