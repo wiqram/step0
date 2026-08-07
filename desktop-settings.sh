@@ -70,6 +70,37 @@ org.gnome.settings-daemon.plugins.media-keys|terminal|['<Super>r', '<Primary><Al
 # binding (it is the GNOME default and other people's fingers expect it).
 org.gnome.shell.keybindings|show-screenshot-ui|['Print', '<Shift><Super>s']
 
+# Night light — warm the display 20:00 -> 06:00 at 2700K (GNOME's own default warmth).
+#
+# MANUAL schedule ON PURPOSE. The stock setting is schedule-automatic=true (sunset to
+# sunrise), which needs a location fix from geoclue — and org.gnome.system.location
+# enabled is FALSE on this box, with night-light-last-coordinates still the sentinel
+# (91.0, 181.0): latitude 91 and longitude 181 are both out of range, i.e. it has never
+# resolved a position. Enabling night light while leaving the schedule automatic gives you
+# a feature that reports itself as ON and never once turns the screen warm.
+# So: pin an explicit window. This box is a workstation that does not move, so a fixed
+# schedule loses nothing, and it keeps location services off.
+# To go back to sunset/sunrise: `gsettings set org.gnome.system.location enabled true`
+# and flip night-light-schedule-automatic here to true (from/to are then ignored).
+org.gnome.settings-daemon.plugins.color|night-light-enabled|true
+org.gnome.settings-daemon.plugins.color|night-light-schedule-automatic|false
+org.gnome.settings-daemon.plugins.color|night-light-schedule-from|20.0
+org.gnome.settings-daemon.plugins.color|night-light-schedule-to|6.0
+org.gnome.settings-daemon.plugins.color|night-light-temperature|uint32 2700
+
+# Dock auto-hide.  The Ubuntu Dock (ubuntu-dock@ubuntu.com) is a Dash-to-Dock fork and
+# reads the dash-to-dock schema, so that is the schema to write even though the extension
+# has its own name.
+#
+# `dock-fixed` is the ONLY key that matters here, and it reads backwards: true = pinned
+# open. `autohide` and `intellihide` were ALREADY true on this box and did nothing,
+# because dock-fixed pins the dock regardless — chasing those two is the usual wasted
+# hour. Setting dock-fixed=false is exactly what the "Auto-hide the Dock" switch in
+# Settings > Ubuntu Desktop does; the other keys then take effect as they always meant to.
+# With intellihide=ALL_WINDOWS (left as-is) the dock hides when a window would overlap it,
+# rather than hiding unconditionally. For unconditional hiding, set intellihide false.
+org.gnome.shell.extensions.dash-to-dock|dock-fixed|false
+
 # --- add further settings below; keep them grouped and commented like the above ---
 EOF
 

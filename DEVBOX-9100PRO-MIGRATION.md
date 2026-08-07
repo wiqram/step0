@@ -707,8 +707,14 @@ the writes silently vanish — the script refuses rather than no-op):
 ```
 
 Restores Super+E → Files, Super+R → terminal (Ctrl+Alt+T kept), Super+Shift+S → area
-screenshot. The values were conflict-checked against GNOME 50 defaults; if a future
-release claims one of those combos, `--status` reports the drift rather than fighting it.
+screenshot, night light 20:00–06:00 @ 2700K, and Ubuntu Dock auto-hide. The keybindings
+were conflict-checked against GNOME 50 defaults; if a future release claims one of those
+combos, `--status` reports the drift rather than fighting it.
+
+Note the night-light schedule is deliberately **manual**: the stock `schedule-automatic`
+resolves sunset/sunrise through geoclue, so on a box with location services off it stays
+enabled-but-never-active. A fresh install starts with location off, so leave the manual
+window unless you turn location services on.
 
 ---
 

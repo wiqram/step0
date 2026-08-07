@@ -724,8 +724,9 @@ it should just work.
       automatic backup lands on both disks.
 
 **The desk** (cosmetic, but it is the thing you notice first):
-- [ ] `./desktop-settings.sh` → GNOME keybindings back (Super+E Files, Super+R terminal,
-      Super+Shift+S area screenshot). Per-user dconf is in no repo and in no backup, so
+- [ ] `./desktop-settings.sh` → GNOME preferences back (Super+E Files, Super+R terminal,
+      Super+Shift+S area screenshot; night light 20:00–06:00; dock auto-hide).
+      Per-user dconf is in no repo and in no backup, so
       it does not come back on its own. Must be run from a terminal *inside* the
       graphical session — over SSH there is no D-Bus session bus and the writes vanish.
 
