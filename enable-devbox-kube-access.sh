@@ -37,6 +37,13 @@ DEV_IP="${DEV_IP:-10.10.10.2}"        # dev box, other end of the enp5s0 /30
 API_IP="${API_IP:-172.16.238.2}"      # minikube node / kube API on the 5million bridge
 API_PORT="${API_PORT:-8443}"          # kube API server port
 
+# 10GbE NIC facing the dev box. DERIVED from the route to $DEV_IP, never hardcoded: the name
+# drifts (enp4s0 -> enp5s0 when the GM9000 NVMe renumbered PCI on 2026-08-07). Used ONLY to
+# pin the raw/PREROUTING ACCEPT to the point-to-point link, so a host on the general LAN cannot
+# reach the API by spoofing $DEV_IP — worth having, as rp_filter here is loose (2), not strict.
+# If detection fails we omit -i rather than fail: the rule is still scoped by src+dst+dport.
+LINK_IFACE="${LINK_IFACE:-$(ip -o route get "$DEV_IP" 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -1)}"
+
 SELFDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STABLE_PATH="/usr/local/sbin/enable-devbox-kube-access.sh"   # where the systemd unit runs it from
 UNIT_PATH="/etc/systemd/system/devbox-kube-access.service"
@@ -62,6 +69,14 @@ emit_kubeconfig() {
 # enough here: we loop until the exact rule is gone before (re)inserting.
 del_rule() { while iptables -C DOCKER-USER "$@" 2>/dev/null; do iptables -D DOCKER-USER "$@"; done; }
 
+# Same idea for the raw/PREROUTING table — see raw_rule_args below for why this chain matters.
+if [ -n "$LINK_IFACE" ]; then
+  RAW_ARGS=(-i "$LINK_IFACE" -s "$DEV_IP" -d "$API_IP" -p tcp --dport "$API_PORT" -j ACCEPT)
+else
+  RAW_ARGS=(-s "$DEV_IP" -d "$API_IP" -p tcp --dport "$API_PORT" -j ACCEPT)
+fi
+del_raw()  { while iptables -t raw -C PREROUTING "${RAW_ARGS[@]}" 2>/dev/null; do iptables -t raw -D PREROUTING "${RAW_ARGS[@]}"; done; }
+
 apply_rules() {
   need_root
   # Inbound: dev box -> kube API
@@ -70,18 +85,38 @@ apply_rules() {
   # Return: kube API -> dev box (established/related only)
   del_rule -d "$DEV_IP" -s "$API_IP" -p tcp --sport "$API_PORT" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
   iptables -I DOCKER-USER -d "$DEV_IP" -s "$API_IP" -p tcp --sport "$API_PORT" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+  # ⚠️ DOCKER-USER ALONE IS NO LONGER ENOUGH (Docker >= 28; this box runs 29.7.2).
+  # Docker now ships "direct routing" protection: for every container IP on a user-defined
+  # bridge it installs a raw/PREROUTING rule
+  #     ip daddr <container-ip> iifname != "br-<id>" drop
+  # so container IPs are unreachable from outside the host by default. raw/PREROUTING runs at
+  # priority -300 — BEFORE conntrack and long before FORWARD — so the DOCKER-USER ACCEPTs above
+  # never even see the packet. Symptom (diagnosed 2026-08-07): the dev box's SYNs arrive on the
+  # 10GbE NIC and are visible in tcpdump, nothing reaches the bridge, DOCKER-USER's counters stay
+  # at 0, and kubectl just times out — while every part of the documented config looks correct.
+  # Confirm with: iptables -t raw -L PREROUTING -n -v  (the DROP's counter is the one climbing).
+  # This ACCEPT short-circuits raw traversal for exactly our one flow, so the drop never applies.
+  # Docker rewrites this table on restart, which is why the systemd unit re-applies it at boot.
+  # The durable alternative is recreating the network with
+  # `-o com.docker.network.bridge.trusted_host_interfaces=<iface>`, which start-scratch.sh should
+  # adopt — it cannot be set on a live network, so it waits for the next cold bootstrap.
+  del_raw
+  iptables -t raw -I PREROUTING 1 "${RAW_ARGS[@]}"
+
   # Belt-and-suspenders: keep ip_forward on across reboots (docker also sets it at runtime).
   if [ ! -f "$SYSCTL_DROPIN" ]; then
     echo "net.ipv4.ip_forward=1" > "$SYSCTL_DROPIN"
     sysctl -p "$SYSCTL_DROPIN" >/dev/null
   fi
-  echo "devbox-kube-access: rules applied ($DEV_IP -> $API_IP:$API_PORT)"
+  echo "devbox-kube-access: rules applied ($DEV_IP -> $API_IP:$API_PORT, incl. raw/PREROUTING)"
 }
 
 remove_rules() {
   need_root
   del_rule -s "$DEV_IP" -d "$API_IP" -p tcp --dport "$API_PORT" -j ACCEPT
   del_rule -d "$DEV_IP" -s "$API_IP" -p tcp --sport "$API_PORT" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  del_raw
   echo "devbox-kube-access: rules removed"
 }
 

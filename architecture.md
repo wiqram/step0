@@ -132,6 +132,23 @@ across this link — used from the CLI and from **IntelliJ Services → Kubernet
   the `br-<id>` name, which changes when `5million` is recreated). Persisted by the
   `devbox-kube-access.service` systemd unit (`After=docker.service`; `DOCKER-USER` is wiped on
   docker restart) and re-armed by `start-scratch.sh` / `restart-minikube.sh`.
+  ⚠️ **Since Docker 28 those two rules are NOT sufficient on their own** (this box runs 29.7.2).
+  Docker now ships **"direct routing" protection**: for every container IP on a user-defined
+  bridge it installs `ip daddr <container-ip> iifname != "br-<id>" drop` in **`raw`/PREROUTING**,
+  making container IPs unreachable from off-host by default. That chain runs at priority **−300**
+  — before conntrack, long before `FORWARD` — so the `DOCKER-USER` ACCEPTs never see the packet.
+  `enable-devbox-kube-access.sh` therefore also inserts a `raw`/PREROUTING ACCEPT for the single
+  dev→API flow, pinned to the 10GbE iface (derived from the route, never hardcoded) so a LAN host
+  can't reach the API by spoofing `10.10.10.2` — rp_filter here is loose (`2`), not strict.
+  **The symptom is deeply misleading** (diagnosed 2026-08-07): SYNs arrive on the 10GbE NIC and
+  are plainly visible in `tcpdump`, nothing reaches the bridge, `DOCKER-USER` counters sit at
+  **0**, and `kubectl` merely times out — while every documented rule, route and link check
+  passes. Note a `curl` to the API *from prod* also succeeds and proves nothing: that is
+  locally-generated traffic and never traverses the forward path. Go straight to
+  `iptables -t raw -L PREROUTING -n -v` and look for the DROP whose counter is climbing.
+  The durable fix is recreating the network with
+  `-o com.docker.network.bridge.trusted_host_interfaces=<iface>`; it cannot be set on a live
+  network, so it waits for a cold bootstrap — see `plan.md`.
 - **Dev box route** — a persistent NetworkManager route `172.16.238.2/32 via 10.10.10.1`
   on `eno1` (NM connection `"Wired connection 1"`) forces API traffic over the 10GbE link
   instead of the LAN gateway.

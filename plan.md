@@ -118,6 +118,35 @@ If the network ever gets (re)created by `restart-minikube.sh`, addressing may di
 the fixed `172.16.238.2/.10` the rest of the system assumes. Make both use
 `--subnet=172.16.0.0/16`.
 
+### 6a. Adopt `trusted_host_interfaces` on `5million` (retire the manual raw/PREROUTING rule)
+Docker ≥28 ("direct routing" protection; this box runs **29.7.2**) installs
+`ip daddr <container-ip> iifname != "br-<id>" drop` in **`raw`/PREROUTING** for every container
+IP on a user-defined bridge, so container IPs are unreachable from off-host by default. That
+chain runs at priority −300 — before conntrack and long before `FORWARD` — so the `DOCKER-USER`
+ACCEPTs that dev-box access has always relied on are bypassed entirely. This broke dev→prod
+`kubectl`/IntelliJ and was diagnosed 2026-08-07; see `architecture.md` §3 for the full symptom,
+which looks nothing like a firewall problem.
+
+Current mitigation: `enable-devbox-kube-access.sh` inserts a matching `raw`/PREROUTING ACCEPT
+for the one dev→API flow, re-applied at boot by `devbox-kube-access.service`. That works, but it
+fights Docker's own table on every restart.
+
+The supported fix is to create the network with Docker's escape hatch:
+```
+docker network create ... -o com.docker.network.bridge.trusted_host_interfaces=<10GbE iface>
+```
+**Cannot be set on a live network** — it needs `5million` recreated, which tears down minikube
+and nginx-proxy-manager with it, so this lands on the next cold bootstrap, not as a hot change.
+Verify the exact option name/format against the Docker 29 docs before committing it to
+`start-scratch.sh` (derive the iface from the route, don't hardcode — see §6b below on names).
+Keep the raw rule until this is proven, then drop it from the script.
+
+### 6b. Interface names are not stable identifiers
+`enp4s0`→`enp5s0` and `enp6s0`→`enp7s0` on 2026-08-07: installing the GM9000 NVMe pushed every
+PCI bus number up by one and the kernel renames interfaces after the bus. Nothing broke, because
+no code hardcodes a name — the firewall matches dest IP/port and the watchdog derives the iface
+from the `/30`. Preserve that property in anything new; treat `enpXsY` in docs as a label only.
+
 ### 7. Path-casing fragility (two `Ideaprojects` directories)
 `start-scratch.sh` mixes `$HOME/Ideaprojects/...` (lowercase) and
 `$HOME/IdeaProjects/splunk-hsbc-demo/...` (capital P). It only works because **both**
