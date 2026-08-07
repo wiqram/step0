@@ -3,7 +3,18 @@
 Runbook for replacing the dev box's M.2 (Samsung 980 1TB) with a **Samsung 9100 PRO
 4TB**, fresh-installing Ubuntu, and rewiring the dev↔prod integration. Companion to
 [`GM9000-MIGRATION.md`](./GM9000-MIGRATION.md) (the prod-box OS-disk swap). Written
-2026-08-06 from a live SSH survey of the box.
+2026-08-06 from a live SSH survey of the box; **retargeted 2026-08-07 to Ubuntu 26.04
+LTS** (was 24.04) after the 9100 PRO was physically fitted.
+
+**Status 2026-08-07 — hardware is IN.** The 9100 PRO is `nvme0n1`: blank (no partition
+table), in **M.2_1**, negotiating **32.0 GT/s ×4 = PCIe 5.0 ×4** (`current_link_speed`
+== `max_link_speed`, so it is not slot-limited). The 980 has already been relocated to
+a Gen4 slot as `nvme1n1` and is still the live `/`. §3 steps 1–3 are therefore **done**;
+the next real action is §2.4c (partition the new disk) then §3 step 4.
+
+⚠️ **Device names have flipped since the 2026-08-06 survey below.** The new disk took
+`nvme0n1`; the old 980 is now `nvme1n1`. §0's table still uses the pre-fit names —
+read it as history. Everywhere else in this doc, `nvme0n1` = the 9100 PRO.
 
 The dev box is `vik@10.10.10.2` (10GbE /30 to prod) / `vik@192.168.50.161` (LAN OOB).
 It matters to prod in three ways, all restored in §6: it serves **ollama to prod yolo**
@@ -18,7 +29,7 @@ helper, and it runs the **10GbE link watchdog** on its end of the /30.
 |---|---|
 | Board | **ASUS ProArt Z890-CREATOR WIFI** (LGA1851 / Core Ultra "Arrow Lake", 24 threads) — **5× M.2: M.2_1 is CPU-attached PCIe 5.0 x4**, the other four are PCIe 4.0 |
 | RAM / GPU | 64 GB; RTX 2080 Ti (driver 595.84) |
-| `nvme0n1` | **Samsung 980 1TB — the M.2 being replaced. It carries ONLY Ubuntu**: `p1` 465.8G ext4 `/` (283G used — no separate /home; 192G of it is `/home/vik`), `p3` 2M, `p4` 232.9G ext4 labelled `ubuntu-backup` (unmounted, not in fstab), ~233G unallocated |
+| `nvme0n1` *(now `nvme1n1`)* | **Samsung 980 1TB — the M.2 being replaced. It carries ONLY Ubuntu**: `p1` 465.8G ext4 `/` (283G used — no separate /home; 192G of it is `/home/vik`), `p3` 2M, `p4` 232.9G ext4 labelled `ubuntu-backup` (unmounted, not in fstab), ~233G unallocated |
 | `sda` | Samsung 860 EVO 1TB **SATA** — **Windows lives here, entirely**: `sda1` 100M **the shared ESP** (holds BOTH `\EFI\MICROSOFT` and `\EFI\ubuntu`, and is Ubuntu's `/boot/efi`), `sda3` 441.6G Windows C:, `sda4`/`sda6` WinRE, `sda5` 488.3G NTFS "Stuffs" data |
 | Boot | UEFI entries `ubuntu` (first) and `Windows Boot Manager` — **both pointing at sda1**, the SATA disk's ESP. **Secure Boot is ENABLED** (shim) |
 | Swap | 2G swapfile on `/`, no zram |
@@ -55,23 +66,28 @@ helper, and it runs the **10GbE link watchdog** on its end of the /30.
    already-planned one) (§2.3).
 4. ☐ Note prod impact window: dev ollama + the compose stack go dark during the
    migration; prod yolo's dev-ollama-backed features degrade until §6 completes (§2.4).
+4c. ☐ **Partition the blank 9100 PRO from the still-running 24.04 system**:
+   `sudo bash devbox-prep-9100pro.sh` (dry run) then `--commit` (§2.4c).
 
 **B. Swap day**
 5. Stop the compose stack cleanly; `sudo shutdown -h now` (§2.5).
-6. Remove the 980 from M.2_1 → set it aside. Fit the **9100 PRO into M.2_1**. Unplug
-   the SATA (Windows) disk's data cable (§3).
-7. BIOS: 9100 PRO detected at **PCIe 5.0 x4**; Secure Boot stays ON (§3).
-8. Install **Ubuntu 24.04.x Desktop**, manual partitioning per §4: ESP 1G · `/` 120G ·
-   `/var` 100G · `/var/lib/docker` 400G · `/home` 1.5T · ~1.8T free. User `vik`,
-   hostname `vik`, TZ Europe/London (§4).
-9. Power off. Reconnect SATA; fit the **980 into any Gen4 M.2 slot**. BIOS boot order:
-   the NEW ubuntu entry (on the 9100 PRO) first (§4).
+6. ✅ *(done 2026-08-07)* 9100 PRO in M.2_1, 980 moved to a Gen4 slot. Remaining:
+   **unplug the SATA (Windows) disk's data cable — that alone is sufficient** (§3).
+7. BIOS: 9100 PRO detected at **PCIe 5.0 x4** ✅ *(verified)*; Secure Boot stays ON (§3).
+8. Install **Ubuntu 26.04 LTS Desktop** ("Resolute Raccoon"). Advanced Partitioning:
+   **assign** the pre-made partitions — `p1`→`/boot/efi`, `p2`→`/`, `p5`→`/home`;
+   leave `p3`/`p4` unassigned. User `vik`, hostname `vik`, TZ Europe/London (§4).
+8b. **Before leaving the live session**, migrate `/var` onto `p3` and add the `p3`/`p4`
+   fstab lines (§4.1) — doing it here avoids moving `/var` out from under a running
+   journald/dpkg on first boot.
+9. Power off. Reconnect SATA. BIOS boot order: the NEW ubuntu entry (on the 9100 PRO)
+   first (§4). *(The 980 stays where it is — no second M.2 handling.)*
 10. First boot: updates; enable os-prober → `update-grub` picks up Windows (+ the old
     ubuntu as rollback) (§5.1).
 
 **C. Rebuild (~half a day, mostly §5–§6)**
 11. zram + docker-mount guard + NVIDIA driver (MOK prompt possible — Secure Boot is on)
-    + docker + snaps/toolchain (§5).
+    + docker + snaps/toolchain (§5). **Read §5.0 first — the 26.04 deltas.**
 12. Mount the old 980 read-only; copy identity + config + data per the §6.1 list.
 13. Ollama back exactly as it was: binary + the three systemd overrides +
     `ollama-warm.service` + the model store (two models are custom-built — copy, don't
@@ -108,6 +124,21 @@ none of years of config drift.
   reinstalling/cloning it now adds risk for zero benefit, and §8 gives it a better
   home later (the 980).
 
+**Install first; stage NOTHING on the new disk beforehand — chosen.** The tempting
+alternative is "partition the 9100 PRO now, copy everything across, install Ubuntu on
+top". It is the wrong shape, and not merely because the installer would format the
+staged files: **there is nothing to copy in advance.** Every byte of source data lives
+on the 980, which stays in the machine and is readable read-only *after* the install —
+which is exactly what §6.1 does. Staging first buys zero and adds a format risk.
+
+- *But the partition TABLE is worth creating in advance* — a table is not data.
+  `devbox-prep-9100pro.sh` (§2.4c) lays down the table below from the still-running
+  24.04 system, formats and labels each partition, and applies `tune2fs -m 1`. The
+  installer step then degrades from "type 1536 GiB into a GUI next to the disk holding
+  your only backup" to "pick the partition labelled `home`". It also pre-creates the
+  `/var` and `/var/lib/docker` partitions, which the desktop installer may refuse to
+  accept as mount points (§4.1).
+
 **Partition plan (all ext4), mirroring the prod philosophy at dev proportions:**
 
 | # | Size | Mount | Why |
@@ -116,8 +147,11 @@ none of years of config drift.
 | 2 | 120 GiB | `/` | OS + snaps. Root today is 283G only because home and docker live inside it; with those split out, ~40G of actual system gets 3× headroom. |
 | 3 | 100 GiB | `/var` | Logs/journald/snapd, isolated from docker churn. |
 | 4 | 400 GiB | `/var/lib/docker` | The compose dev stack (19.6G images + 11G buildkit today, 227 images accreted). Same lesson as prod: docker on its own filesystem can never fill the OS. |
-| 5 | 1.5 TiB | `/home` | The dev workhorse: 192G today (repos, IntelliJ, android SDK, go, caches) with room to stop thinking about it. |
-| — | ~1.8 TiB | *free tail* | Future: datasets, VMs, growing partition 5, whatever. |
+| 5 | 1536 GiB | `/home` | The dev workhorse: 192G today (repos, IntelliJ, android SDK, go, caches) with room to stop thinking about it. |
+| — | ~1.5 TiB | *free tail* | Future: datasets, VMs, growing partition 5, whatever. |
+
+*(Arithmetic, corrected 2026-08-07: the disk is 3726 GiB; 1+120+100+400+1536 = 2157 GiB
+allocated, leaving **1569 GiB ≈ 1.5 TiB** free — the doc previously said ~1.8T.)*
 
 - **Swap:** `zram-tools` (`ALGO=zstd`, `PERCENT=35` ≈ 22G on 64G RAM) like prod, replacing
   the token 2G swapfile. No hibernation — it's a trap on dual-boot machines anyway.
@@ -174,6 +208,21 @@ crontab, both MACs, the `dae3755` patch, the full ollama model store (~4.8G, inc
 the two custom models) and the remote-less `ollama-dev` repo (16G, venvs excluded).
 The old disk remains the primary safety net; this covers the 980 dying in-hand.
 
+**4c. Partition the blank 9100 PRO — from the still-running 24.04 system.** Per §1 this
+is the one thing that IS safe to do in advance. `devbox-prep-9100pro.sh` is dry-run by
+default and refuses to touch anything unless the target reports model
+`Samsung SSD 9100 PRO 4TB`, has **zero** partitions, has nothing mounted, and is not
+carrying the current `/`:
+
+```bash
+cd ~/IdeaProjects/step0
+sudo bash devbox-prep-9100pro.sh              # prints the plan, changes nothing
+sudo bash devbox-prep-9100pro.sh --commit     # then type ERASE at the prompt
+lsblk -o NAME,SIZE,FSTYPE,LABEL /dev/nvme0n1  # expect ESP/ubuntu-root/ubuntu-var/docker/home
+```
+If a partition table already exists the script aborts rather than eat it — that is
+deliberate; inspect and `sgdisk --zap-all` by hand if you really mean to start over.
+
 **5. Shut down cleanly:**
 ```bash
 cd ~/IdeaProjects/IG-Trading-Microservices && docker compose stop
@@ -186,33 +235,131 @@ old disk itself, kept intact in a Gen4 slot, is the backup.
 
 ## 3. Hardware + BIOS (~20 min)
 
-1. Remove the **980 from M.2_1** and set it aside (do NOT install it yet — with it and
-   the SATA disk absent, the installer can only put the ESP on the 9100 PRO).
-2. Unplug the **SATA data cable** of the 860 EVO (Windows).
-3. Fit the **9100 PRO into M.2_1** (the CPU Gen5 slot) with a heatsink per §1.
-4. BIOS: confirm the drive links at **PCIe 5.0 x4**; leave **Secure Boot ON** (the
-   current Ubuntu already boots via shim; the fresh one will too); leave VMD/RAID
-   settings as they are unless NVMe detection misbehaves.
+1. ~~Remove the **980 from M.2_1**~~ — **superseded 2026-08-07: leave the 980 in.**
+   The original reasoning was "with it and the SATA disk absent, the installer can only
+   put the ESP on the 9100 PRO". That is over-strong: **the 980 has no ESP** (it boots
+   via `sda1` on the Windows disk), so unplugging SATA alone already guarantees the
+   9100 PRO's ESP is the only one in the machine. Leaving the 980 fitted saves a
+   case-open cycle before §6.1's 192G copy and makes it a GRUB rollback entry from
+   first boot. The residual risk — a mis-click formatting it in the installer — is
+   what §2.4c's pre-made, *labelled* partitions defend against: in the installer you
+   only ever select partitions on `nvme0n1`, by label, never create one.
+2. **Unplug the SATA data cable** of the 860 EVO (Windows). ← the one mandatory step.
+   26.04's installer will happily [reuse an existing ESP](https://ubuntuhandbook.org/index.php/2026/04/how-to-install-ubuntu-26-04-desktop-edition-step-by-step/)
+   when it finds one, which is the exact coupling this migration removes.
+3. ✅ *(done)* 9100 PRO fitted in **M.2_1** (the CPU Gen5 slot) with a heatsink per §1;
+   980 relocated to a Gen4 slot.
+4. BIOS: confirm the drive links at **PCIe 5.0 x4** — ✅ verified from Linux
+   (`cat /sys/bus/pci/devices/0000:01:00.0/current_link_speed` → `32.0 GT/s PCIe`,
+   width 4, and `max_*` identical). Leave **Secure Boot ON** (the current Ubuntu
+   already boots via shim; the fresh one will too); leave VMD/RAID settings as they
+   are unless NVMe detection misbehaves.
 
 ---
 
 ## 4. Ubuntu install (~45 min)
 
-**Ubuntu 24.04.x LTS Desktop** (matches the box today and every script that touches
-it). "Something else" manual partitioning per the §1 table on the only visible disk.
+**Ubuntu 26.04 LTS Desktop** ("Resolute Raccoon", released 2026-04-23) — a deliberate
+change from the 24.04 this doc originally targeted: the box is being rebuilt from
+scratch anyway, so it may as well land on the current LTS with its full 5-year (10 with
+Pro) window rather than start two years into 24.04's. See §5.0 for what 26.04 changes.
+
+> *Point-release note:* only `ubuntu-26.04-desktop-amd64.iso` is on releases.ubuntu.com
+> as of 2026-08-07 — **26.04.1 is not out yet** (24.04.1 landed ~4 months after .0, so
+> expect late August). If there is no schedule pressure, .1 is the conventional choice.
+> On this hardware .0 is unlikely to bite; it is a judgement call, not a blocker.
+
 Username **`vik`**, hostname **`vik`** (prod tooling — `verify-recovery.sh`, ssh
 configs, the /30 — assumes this identity), timezone **Europe/London**.
 
-After first boot + `sudo apt update && sudo apt full-upgrade -y`: power off, reconnect
-the SATA disk, fit the **980 into any Gen4 M.2 slot**, and set BIOS boot priority to
-the **new** ubuntu entry (the one on the 9100 PRO — there will be TWO "ubuntu" entries;
-they're distinguishable by disk in the BIOS boot menu). Verify after boot:
-`lsblk` shows all three disks; `findmnt /boot/efi` shows the 9100 PRO's partition 1,
-NOT `sda1`.
+**Partitioning: choose "Manual" / Advanced Partitioning and ASSIGN, never create.**
+§2.4c already laid the table down. On `nvme0n1` (the only NVMe with an ESP, and the
+only disk that should be visible besides the 980):
+
+| Partition | Label | Do this |
+|---|---|---|
+| `nvme0n1p1` | `ESP` | mount `/boot/efi`, **format** (it is ours, not Windows') |
+| `nvme0n1p2` | `ubuntu-root` | mount `/`, format ext4 |
+| `nvme0n1p3` | `ubuntu-var` | **leave unassigned** — handled in §4.1 |
+| `nvme0n1p4` | `docker` | **leave unassigned** — handled in §4.1 |
+| `nvme0n1p5` | `home` | mount `/home`, format ext4 |
+
+`p3`/`p4` are left out because the desktop installer's Advanced Partitioning tool
+[offers a mount-point control that may not accept arbitrary paths](https://ubuntu.fan/en/docs/guide/installation/manual-partition)
+like `/var/lib/docker`. Rather than discover that mid-install, do them in §4.1 — it is
+two fstab lines and one rsync.
+
+⚠️ **Do not touch `nvme1n1` (the 980) at any point in the installer.** It is the entire
+backup and the source for §6.1.
+
+### 4.1 `/var` and `/var/lib/docker` — before you reboot out of the live session
+
+Do this **in the installer's live session immediately after the install finishes**, not
+on first boot: `/var` is in use by journald/dpkg the moment the real system is running,
+and moving it out from under them is needless faff. From the live USB:
+
+```bash
+# Identify the 9100 PRO first — device names are not guaranteed across boots, and the
+# installer REFORMATTED p2, so `ubuntu-root` is gone as a label (p3/p4 keep theirs,
+# they were left untouched). PARTLABEL survives regardless — use it to confirm.
+lsblk -o NAME,SIZE,FSTYPE,LABEL,PARTLABEL /dev/nvme0n1
+NEW=/dev/nvme0n1                                    # adjust if the above says otherwise
+
+sudo mkdir -p /mnt/new /mnt/var
+sudo mount ${NEW}p2 /mnt/new                        # the freshly installed root
+sudo mount ${NEW}p3 /mnt/var                        # label `ubuntu-var`, still intact
+sudo rsync -aHAX /mnt/new/var/ /mnt/var/            # trailing slashes matter
+sudo mv /mnt/new/var /mnt/new/var.preinstall && sudo mkdir -m 755 /mnt/new/var
+sudo mkdir -p /mnt/var/lib/docker                   # mountpoint for p4, empty for now
+
+# fstab (UUIDs, not device names — device names are not the contract)
+V=$(sudo blkid -s UUID -o value ${NEW}p3)
+D=$(sudo blkid -s UUID -o value ${NEW}p4)
+printf 'UUID=%s /var            ext4 defaults 0 2\n' "$V" | sudo tee -a /mnt/new/etc/fstab
+printf 'UUID=%s /var/lib/docker ext4 defaults 0 2\n' "$D" | sudo tee -a /mnt/new/etc/fstab
+tail -3 /mnt/new/etc/fstab                          # eyeball before unmounting
+sudo umount /mnt/var /mnt/new
+```
+On first boot, `findmnt /var /var/lib/docker` must show both, then
+`sudo rm -rf /var.preinstall` once you are satisfied.
+
+*If you skip this and reboot first*, it is recoverable — just do the same rsync from a
+live USB rather than from the running system. Do **not** attempt it in-place on a
+booted 26.04: `/var` is open by journald, snapd and dpkg.
+
+**Then:** power off, reconnect the SATA disk, and set BIOS boot priority to the **new**
+ubuntu entry (the one on the 9100 PRO — there will be TWO "ubuntu" entries; they're
+distinguishable by disk in the BIOS boot menu). Verify after boot: `lsblk` shows all
+three disks; **`findmnt /boot/efi` shows `/dev/nvme0n1p1`, NOT `sda1`** — that single
+check is the whole ESP-decoupling goal of this migration.
 
 ---
 
 ## 5. Base system (~1 h)
+
+### 5.0 What 26.04 changes vs the 24.04 this section was written for
+
+Read this before running anything below — three of the four are silent-failure shaped.
+
+- **`sudo` is now `sudo-rs`** (0.2.13) and **coreutils is now `uutils`** (0.8.0), both
+  [Rust reimplementations shipped as the 26.04 defaults](https://computingforgeeks.com/ubuntu-2604-rust-coreutils-guide/).
+  uutils passes ~88% of the GNU test suite and treats divergence as a bug — but 88% is
+  not 100%, and this migration's single riskiest command is a 192G recursive copy.
+  **Consequence: §6.1 uses `rsync -aHAX`, not `cp -a`** (rsync is not coreutils, so it
+  is unaffected either way). Both classics remain installable as alternative providers
+  if something misbehaves — the `coreutils` metapackage depends on exactly one of two.
+  Also smoke-test the STEP0 units you install in §6.3 (`10gbe-link-watchdog.sh
+  --install`, `devbox-connect-prod.sh install-unit`) rather than assuming their `sudo`
+  invocations are all in sudo-rs's supported set.
+- **Docker's apt repo has a `resolute` suite** — verified 2026-08-07 against
+  `download.docker.com/linux/ubuntu/dists/`. `get.docker.com` works unmodified.
+- **kubectl:** `pkgs.k8s.io` is distro-agnostic; no change.
+- **NVIDIA:** 26.04 ships kernel 7.0 and the 2080 Ti is Turing — supported, but this is
+  the combination most likely to need attention. Do not call §5.4 done until
+  `nvidia-smi` prints the card, and expect the MOK enrollment blue screen (Secure Boot
+  is on).
+- **Ollama's install script** and the systemd units copied off the old disk are
+  distro-agnostic; unit syntax is stable across this jump. No change to §6.2.
 
 **1. GRUB menu with Windows (+ rollback Ubuntu):**
 ```bash
@@ -248,18 +395,24 @@ property (sops-write-only from dev).
 
 ### 6.1 Copy from the old disk (mount read-only)
 
+**Use `rsync -aHAX`, not `cp -a`** — on 26.04 `cp` is uutils, not GNU (§5.0), and this
+is the one bulk recursive copy in the whole migration. rsync is not part of coreutils.
+The UUID below is device-name-proof (the old root is `nvme1n1p1` since the new disk
+took `nvme0n1`) — verified still correct 2026-08-07.
+
 ```bash
 sudo mkdir -p /mnt/old && sudo mount -o ro /dev/disk/by-uuid/46465bde-40e0-458b-a302-6d2e68604877 /mnt/old
 O=/mnt/old/home/vik
-cp -a $O/.ssh ~/ && chmod 700 ~/.ssh
-cp -a $O/.gitconfig $O/.kube ~/                       # .kube carries BOTH contexts incl prod-minikube
-cp -a $O/.jenkins-deploy-urls.env ~/ && chmod 600 ~/.jenkins-deploy-urls.env
-mkdir -p ~/bin && cp -a $O/bin/jenkins-deploy ~/bin/
-cp -a $O/.config/JetBrains $O/.local/share/JetBrains ~/.config/ ~/.local/share/ 2>/dev/null
-cp -a $O/android $O/go ~/ 2>/dev/null                 # SDKs — cheaper to copy than re-download
-cp -a $O/Documents $O/Desktop $O/Downloads ~/ 2>/dev/null
-cp -a $O/10gbe-link-watchdog.sh ~/                    # or take it fresh from STEP0
-cp -a $O/.local/opt ~/.local/ 2>/dev/null             # OpenRGB AppImage (crontab uses it)
+R="rsync -aHAX"
+$R $O/.ssh ~/ && chmod 700 ~/.ssh
+$R $O/.gitconfig $O/.kube ~/                          # .kube carries BOTH contexts incl prod-minikube
+$R $O/.jenkins-deploy-urls.env ~/ && chmod 600 ~/.jenkins-deploy-urls.env
+mkdir -p ~/bin && $R $O/bin/jenkins-deploy ~/bin/
+$R $O/.config/JetBrains ~/.config/ ; $R $O/.local/share/JetBrains ~/.local/share/
+$R $O/android $O/go ~/                                # SDKs — cheaper to copy than re-download
+$R $O/Documents $O/Desktop $O/Downloads ~/
+$R $O/10gbe-link-watchdog.sh ~/                       # or take it fresh from STEP0
+$R $O/.local/opt ~/.local/                            # OpenRGB AppImage (crontab uses it)
 # vik's crontab is a single @reboot OpenRGB lights-off line — restore it straight
 # off the old disk (or from the §2.4b bundle's text/vik-crontab.txt):
 sudo cat /mnt/old/var/spool/cron/crontabs/vik | crontab -
@@ -276,8 +429,8 @@ models) and two models are **custom local builds** that `ollama pull` cannot rec
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh          # installs binary + base unit
 sudo systemctl stop ollama
-sudo cp -a /mnt/old/etc/systemd/system/ollama.service /etc/systemd/system/     # full unit is custom too
-sudo cp -a /mnt/old/etc/systemd/system/ollama.service.d /etc/systemd/system/
+sudo rsync -aHAX /mnt/old/etc/systemd/system/ollama.service  /etc/systemd/system/   # full unit is custom too
+sudo rsync -aHAX /mnt/old/etc/systemd/system/ollama.service.d /etc/systemd/system/
 # ollama-warm.service is a SYMLINK into the ollama repo — clone wiqram/ollama first, then:
 sudo ln -sf /home/vik/IdeaProjects/ollama/dev/ollama-warm.service /etc/systemd/system/ollama-warm.service
 sudo rsync -a /mnt/old/usr/share/ollama/ /usr/share/ollama/    # ~4.8G model store, owner ollama:ollama
@@ -314,10 +467,15 @@ other compose-based app you actively develop.
 
 ## 7. Verification
 
-- [ ] `findmnt /boot/efi` → the 9100 PRO partition (decoupled ESP); GRUB menu offers
-      Windows; **Windows actually boots** via that entry and via the BIOS menu.
+- [ ] `findmnt /boot/efi` → **`/dev/nvme0n1p1`**, not `sda1` (the decoupled ESP — the
+      headline goal); GRUB menu offers Windows; **Windows actually boots** via that
+      entry and via the BIOS menu.
+- [ ] `findmnt /var /var/lib/docker` → both on `nvme0n1p3`/`p4` (§4.1 took), and
+      `/var.preinstall` removed.
 - [ ] `sudo nvme list` / `lspci -vv` shows the 9100 PRO at Gen5 x4 (`LnkSta: 32GT/s x4`);
       a quick `dd if=/dev/zero of=~/t bs=1M count=8192 oflag=direct` writes multi-GB/s.
+- [ ] 26.04 sanity: `lsb_release -a` → 26.04; `sudo --version` (sudo-rs) and
+      `cp --version` (uutils) noted, and nothing in §5–§6 misbehaved because of them.
 - [ ] `nvidia-smi` OK under Secure Boot (MOK enrolled).
 - [ ] Compose stack: 14 containers up, UI reachable.
 - [ ] Ollama from prod: `curl http://10.10.10.2:11434/api/tags` lists all four models.
@@ -351,6 +509,15 @@ Then pick the 980's future:
 - **Laziest** — shelve it untouched as the frozen pre-migration Ubuntu.
 
 ### 8.1 Moving Windows onto the 980 — step by step
+
+> **This section runs AFTER the two-week soak, not before it.** Stated explicitly
+> because "retire the old SSD that houses Windows" is the natural thing to want to do
+> on the same day — and it is the one reordering that can lose data. The 980 is doing
+> *two* jobs until the soak ends: it is the rollback boot **and** the source for
+> everything §6.1 has not copied yet. Cloning Windows onto it destroys both at once.
+> If the rebuild then turns out to be missing something, all that survives is the
+> partial handoff bundle on prod (`/mnt/minikube-backups/migration-handoff-devbox/`) —
+> which has ssh/kube/ollama/models but **not** the 192G home.
 
 **Prerequisites — all four, no exceptions:**
 1. The §7 soak is signed off. **Wiping the 980 deletes the Ubuntu rollback** — this is
@@ -419,13 +586,14 @@ skipped thought.
 
 ---
 
-## 9. Appendix — facts card (surveyed 2026-08-06)
+## 9. Appendix — facts card (surveyed 2026-08-06, re-verified 2026-08-07)
 
 | Fact | Value |
 |---|---|
-| Identity | host `vik`, user `vik`, TZ Europe/London, Ubuntu 24.04.4, Secure Boot ON |
-| Board / slots | ProArt Z890-CREATOR WIFI; M.2_1 = CPU **Gen5 x4** (→ 9100 PRO), 4× Gen4 free (→ old 980) |
-| Old M.2 | Samsung 980 1TB: Ubuntu `/` 465.8G (283G used), `ubuntu-backup` 232.9G unmounted, ~233G unallocated. Root UUID `46465bde-40e0-458b-a302-6d2e68604877` |
+| Identity | host `vik`, user `vik`, TZ Europe/London, Ubuntu 24.04.4 → **26.04 LTS**, Secure Boot ON |
+| Board / slots | ProArt Z890-CREATOR WIFI; M.2_1 = CPU **Gen5 x4** (→ 9100 PRO), 4× Gen4 (→ old 980) |
+| **New M.2 (2026-08-07)** | `nvme0n1` Samsung 9100 PRO 4TB, blank, PCI `0000:01:00.0` off CPU root port `00:01.0` = M.2_1; `current_link_speed` = `max_link_speed` = **32.0 GT/s ×4 (Gen5 ×4)**. 3726 GiB usable |
+| Old M.2 | Samsung 980 1TB (**now `nvme1n1`**, Gen3 ×4): Ubuntu `/` 465.8G (283G used), `ubuntu-backup` 232.9G unmounted, ~233G unallocated. Root UUID `46465bde-40e0-458b-a302-6d2e68604877`, `ubuntu-backup` UUID `f4e3825c-768f-4ea8-b776-5adb9c18e27a` |
 | Windows disk | 860 EVO 1TB SATA: shared ESP (100M) + C: 441.6G + WinRE ×2 + "Stuffs" 488.3G NTFS |
 | NICs | eno1 10GbE `bc:fc:e7:e7:4e:e5` = 10.10.10.2/30 static; eno2 LAN `bc:fc:e7:e7:4e:e4` = .161 DHCP |
 | Ollama | `OLLAMA_HOST=10.10.10.2:11434`, waits for eno1, MAX_LOADED_MODELS=2, + `ollama-warm.service`; models: qwen2.5:0.5b, qwen2.5:7b-instruct, dyingpaleblue (custom), predictonomy (custom) |
@@ -433,3 +601,5 @@ skipped thought.
 | Prod touch-points | ollama endpoint, `prod-minikube` context, `~/bin/jenkins-deploy` + `~/.jenkins-deploy-urls.env`, watchdog + connect-prod units |
 | 9100 PRO 4TB | PCIe 5.0 x4, 14,800/13,400 MB/s, 4GB LPDDR4X DRAM, 2400 TBW, 5-yr ([datasheet](https://download.semiconductor.samsung.com/resources/data-sheet/Samsung_NVMe_SSD_9100_PRO_with_Heatsink_Datasheet_Rev.2.0.pdf), [Samsung announcement](https://news.samsung.com/us/samsung-announces-9100-pro-series-ssds-with-breakthrough-pcie-5-0-performance/)) |
 | Board source | [ASUS ProArt Z890-CREATOR WIFI](https://www.asus.com/us/motherboards-components/motherboards/proart/proart-z890-creator-wifi/) ([review confirming 1× Gen5 + 4× Gen4 M.2](https://www.tweaktown.com/reviews/11230/asus-proart-z890-creator-wifi-motherboard/index.html)) |
+| Ubuntu 26.04 | "Resolute Raccoon", released 2026-04-23 ([release notes](https://documentation.ubuntu.com/release-notes/26.04/), [Canonical announcement](https://canonical.com/blog/canonical-releases-ubuntu-26-04-lts-resolute-raccoon)). Defaults: sudo-rs 0.2.13, uutils coreutils 0.8.0 ([guide](https://computingforgeeks.com/ubuntu-2604-rust-coreutils-guide/)). 26.04.1 not yet released as of 2026-08-07 |
+| Helper script | [`devbox-prep-9100pro.sh`](./devbox-prep-9100pro.sh) — lays down the §1 partition table on the blank 9100 PRO (§2.4c). Dry-run by default |
