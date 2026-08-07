@@ -547,7 +547,20 @@ phase6_cluster() {
   # minikube (single-disk mounts), durable registry, monitoring, vault (unseals from the
   # restored keys+storage), jenkins, and the vault->jenkins cred sync.
   if [ "$DRY_RUN" = 1 ]; then
+    echo "  DRYRUN> helm repo update"
     echo "  DRYRUN> SKIP_APP_BUILDS=1 $SCRIPT_DIR/start-scratch.sh"; mark_phase 6; return
+  fi
+  # helm's repo LIST (~/.config/helm/repositories.yaml) and its index CACHE
+  # (~/.cache/helm/repository/*-index.yaml) are separate, and only the list survives a
+  # restore that brings a home directory back. `helm repo add` is skip-if-present — it
+  # prints "already exists with the same configuration, skipping" and does NOT fetch an
+  # index — so every downstream `helm install` then dies with
+  #   Error: no cached repo found. (try 'helm repo update')
+  # after the namespaces/PVs have already been created, i.e. half-deployed. Hit for real
+  # on 2026-08-07 at the vault install. `helm repo update` is idempotent and cheap; on a
+  # genuinely bare box it is a no-op because there are no repos configured yet.
+  if command -v helm >/dev/null 2>&1; then
+    run "helm repo update 2>&1 | tail -2 || true"
   fi
   SKIP_APP_BUILDS=1 "$SCRIPT_DIR/start-scratch.sh" || die "start-scratch.sh (platform bring-up) failed — inspect and re-run --from-phase 6"
   mark_phase 6
