@@ -23,7 +23,10 @@ serving all four models on `10.10.10.2:11434`, and the dev compose stack green
   `prod-minikube` context and `verify-recovery.sh`'s dev probes are all **unverified
   end-to-end**. The dev-side config is correct and the watchdog is doing its job
   (bouncing a dead peer on schedule) — but "configured" is not "proven".
-- **§8.1.** SATA still unplugged; see the health warning now at the top of that section.
+- ~~**§8.1.**~~ ✅ **DONE 2026-08-07.** Windows cloned to the 980 and booted from it, the
+  860 stripped to `Stuffs` only, duplicate GUIDs cleared, GRUB/NVRAM clean. See §8.2 for
+  the as-built layout and the four things the runbook got wrong. `/var` → p3 also landed
+  on the same reboot, so the only genuinely open item left is §7's from-prod checks.
 
 ⚠️ **Device names flipped when the new disk went in.** The 9100 PRO took `nvme0n1`; the
 old 980 is `nvme1n1`. §0's table still uses the pre-fit names — read it as history.
@@ -847,6 +850,31 @@ you.)
 4. Fast Startup still OFF (§2.2) and Windows fully shut down before any disk surgery —
    a hibernated NTFS clone is a corrupted clone.
 
+> ✅ **DONE 2026-08-07 — but via a Path 3 that is better than Path 1 here, and is what a
+> future reader should reach for first.** Samsung Magician is **not** preinstalled on
+> Windows; discovering that mid-migration is what prompted the rethink. It turned out to
+> be unnecessary: **both disks are byte-identical in size** (860 EVO and 980 are both
+> `1000204886016` bytes), so a whole-disk raw clone from the *running Linux* is exact —
+> GPT, ESP, MSR, C:, both WinRE partitions and Stuffs, with every partition GUID the
+> Windows BCD references preserved. No download, no USB, no reboot to start it:
+>
+> ```bash
+> sudo ntfsfix -n /dev/sda3      # MUST be clean: a hibernated NTFS clone is a corrupt clone
+> sudo ddrescue -f -b 4096 /dev/sda /dev/nvmeXn1 /root/clone-860-to-980.map
+> ```
+> Result: **100.00% rescued, 0 read errors, 0 bad areas, 1000 GB in 1h 3m** (265 MB/s
+> average). ⚠️ Estimate from the *target's* write speed, not the source's read speed —
+> the 980 is DRAM-less and its sustained write rate collapses once the SLC cache fills,
+> so a "539 MB/s source ⇒ 31 min" estimate came out at 63 min in reality.
+>
+> ⚠️ **Resolve every device BY MODEL at runtime, never by name.** `nvme0n1` and `nvme1n1`
+> swapped between the 9100 PRO and the 980 on *three separate boots* during this work,
+> including once between the clone finishing and the cleanup starting. A hardcoded name
+> would eventually mean cloning over the live system disk. The scripts used here derive
+> `SRC`/`DST`/`LIVE` from `smartctl -i` model strings and refuse to run unless the target
+> is neither the live disk nor the source, `/` is not on the target, and nothing on either
+> disk is mounted.
+
 **Clone (Path 1 — Samsung Magician, recommended):**
 
 5. Boot Windows, install/open **Samsung Magician → Data Migration**. Source = the
@@ -888,6 +916,55 @@ you.)
 10. Optional: re-enable BitLocker (`manage-bde -on C:`) and **save the new recovery
     key**. Windows activation is unaffected throughout — the motherboard (what the
     digital license is tied to) never changed.
+
+### 8.2 As-built end state (2026-08-07)
+
+```
+nvme?n1  9100 PRO 4TB   ESP · / · /var · /var/lib/docker · /home          ← Linux
+nvme?n1  980 1TB        ESP · MSR · C: 441.6G · WinRE · Recovery          ← Windows
+                        + 488.3 GiB unallocated (room to grow C: later)
+sda      860 EVO 1TB    "Stuffs" 488.3G (289G used)  ← data only
+                        + 443.2 GiB unallocated
+```
+
+Steps 8/9 were run as one guarded script: delete the **duplicated** Stuffs from the 980
+*first* (closing the duplicate-UUID window as early as possible), then `sgdisk -d` the
+860's partitions 1,2,3,4,6 keeping **5**. Both GPTs were backed up first to
+`/root/gpt-backups/{980,860}-before.gpt`. Verified afterwards: **no duplicate UUID or
+PARTUUID anywhere**, GRUB shows exactly `Ubuntu` + `Windows Boot Manager`, and NVRAM
+holds only `Boot0000 Ubuntu` (9100 PRO ESP) + `Boot0004 Windows Boot Manager` (980 ESP).
+
+Two things step 9 does not mention that actually bit:
+
+- **The clone copies `\EFI\ubuntu` onto the new disk's ESP.** `sda1` was the *shared* ESP
+  (§0), holding `\EFI\MICROSOFT` **and** `\EFI\ubuntu`, so the 980's cloned ESP contains a
+  GRUB shim pointing at the Ubuntu install the clone just overwrote — it boots to a rescue
+  prompt and os-prober will happily offer it. Delete it: mount the 980's ESP and
+  `rm -rf EFI/ubuntu`, then `update-grub`.
+- **Don't `update-grub` while both disks still carry Windows.** os-prober finds two
+  identical Windows Boot Managers and writes ambiguous entries. Strip the old disk first,
+  then regenerate once.
+
+**Choosing what happens to Stuffs is the real decision in §8.1**, and the runbook rather
+buries it. The clone leaves *two* copies (488G each) and the 980 cannot hold both C: and
+Stuffs plus any headroom — 441.6 + 488.3 ≈ 931.5 GiB *is* the whole disk. So either the
+860 stays as a data disk (chosen here, freeing 488G on the 980 to grow C: later) **or** it
+is fully retired and C: is stuck at its current size. Worth knowing before starting:
+**C: was already 94% full** (414G of 442G), and the clone faithfully preserves that.
+
+Linux mounts the surviving Stuffs read-only via `/etc/fstab`:
+```
+UUID=<sda5> /mnt/stuffs ntfs3 ro,nofail,uid=1000,gid=1000,umask=022,x-systemd.device-timeout=10 0 0
+```
+`ro` because it is Windows-owned data; `nofail` so pulling the disk never blocks boot.
+
+**Footnote on drive health, recorded because it inverts §8.1's premise.** The section
+assumes the 860 EVO is the tired drive. Measured, it is the healthier of the two: **0
+reallocated sectors, 93% wear remaining after 53,135 power-on hours**, against the 980's
+**172 uncorrected read errors and 91% Available Spare**. The migration proceeded as an
+explicit, informed choice. The upside is that the *source* read perfectly, so the clone is
+faithful; the downside is that Windows now lives on the drive with the failing media, and
+that Windows install should not become the only copy of anything.
 
 **Fallback (Path 2)** if Magician refuses the clone: boot a Clonezilla USB and do a
 disk-to-disk clone (860 EVO → 980, both 931.5G so sizes match), then continue from
