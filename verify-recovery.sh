@@ -43,6 +43,19 @@ if [ "$(id -u)" = "0" ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]
   fi
 fi
 
+# ...but the HOME rebind above does NOT reach ssh. OpenSSH resolves ~/.ssh from getpwuid(), not
+# from $HOME, so under sudo it reads /root/.ssh and the dev-box probe fails `Permission denied
+# (publickey)` even though the invoking user has a perfectly good key — reported as "dev down or
+# no key", which is doubly misleading. Since the raw/PREROUTING check in §3 needs root and this
+# one must not have it, one invocation has to do both: run ssh as the invoking user.
+_vr_ssh() {
+  if [ "$(id -u)" = "0" ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+    sudo -n -u "$SUDO_USER" ssh "$@"
+  else
+    ssh "$@"
+  fi
+}
+
 # ---- expected values (override via env for a different topology) ----
 EXP_NODE_IP="${EXP_NODE_IP:-172.16.238.2}"        # minikube node: API/NodePorts/registry
 EXP_NPM_IP="${EXP_NPM_IP:-172.16.238.10}"         # nginx-proxy-manager on the 5million net
@@ -192,7 +205,7 @@ if [ -n "$self10" ]; then
   # ask it (best-effort, read-only) how it routes back to us. Its src IP must be on the /30
   # (10.10.10.x); a LAN src means dev->prod is silently on the 1GbE.
   if have ssh; then
-    peer_rt="$(ssh -n -o BatchMode=yes -o ConnectTimeout=4 -o StrictHostKeyChecking=no \
+    peer_rt="$(_vr_ssh -n -o BatchMode=yes -o ConnectTimeout=4 -o StrictHostKeyChecking=no \
                    -o UserKnownHostsFile=/dev/null "$DEV_OOB_SSH" "ip route get $EXP_10G_SELF" 2>/dev/null | head -1)"
     if [ -z "$peer_rt" ]; then
       warn "could not check dev-box egress to us (ssh $DEV_OOB_SSH failed — dev down or no key). By hand: ssh $DEV_OOB_SSH ip route get $EXP_10G_SELF (src must be 10.10.10.x)"
