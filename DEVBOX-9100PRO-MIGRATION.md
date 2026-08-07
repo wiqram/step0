@@ -693,6 +693,23 @@ containers ×12, gateway `/healthz`, login→JWT + an authed call, the postgres 
 schema at 11 migrations, redis/mongo pings, robin_stocks gRPC on :8079, UI on :3000.
 (§0's "14 containers" counted two transient `run --rm` helpers.)
 
+### 6.5 Desktop shortcuts
+
+GNOME keybindings live in per-user dconf (`~/.config/dconf/user`) — a binary blob that
+is in no git repo and in no backup, so a fresh install comes up with every shortcut
+forgotten. STEP0's `desktop-settings.sh` is the declarative record; run it from a
+terminal **inside the graphical session** (over SSH there is no D-Bus session bus and
+the writes silently vanish — the script refuses rather than no-op):
+
+```bash
+./desktop-settings.sh --status    # current vs desired, exit 1 if drifted
+./desktop-settings.sh             # apply; idempotent, effective immediately
+```
+
+Restores Super+E → Files, Super+R → terminal (Ctrl+Alt+T kept), Super+Shift+S → area
+screenshot. The values were conflict-checked against GNOME 50 defaults; if a future
+release claims one of those combos, `--status` reports the drift rather than fighting it.
+
 ---
 
 ## 7. Verification

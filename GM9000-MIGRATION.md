@@ -723,6 +723,12 @@ it should just work.
 - [ ] 48-hour soak: no unexpected ntfy alerts; `kubectl get po -A` stable; Monday's
       automatic backup lands on both disks.
 
+**The desk** (cosmetic, but it is the thing you notice first):
+- [ ] `./desktop-settings.sh` → GNOME keybindings back (Super+E Files, Super+R terminal,
+      Super+Shift+S area screenshot). Per-user dconf is in no repo and in no backup, so
+      it does not come back on its own. Must be run from a terminal *inside* the
+      graphical session — over SSH there is no D-Bus session bus and the writes vanish.
+
 Only after the soak passes, consider §8/§9.
 
 ---
