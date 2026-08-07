@@ -386,6 +386,58 @@ check_mount_source Kachra           /mnt/kachra
 # silently works — just 31x slower, on the HDD, with no error anywhere.
 check_mount_source minikube-data    /mnt/minikube-mnt
 
+# --- Datastore ownership on the shared volume ------------------------------------------
+# Why. The weekly archive is written by ROOT's crontab, so it carries the real per-container
+# UIDs. But tar and cp only RESTORE ownership when they run as root. On 2026-08-07 phase 4
+# ran them as 'cloud' and flattened the whole volume to 1000:1000. Nothing errored. The
+# cluster came up, monitoring deployed, and then vault-0 sat in a readiness loop on
+#   open /vault/data/core/_migration: permission denied
+# because core/ was 1000:1000 mode 700 while vault runs as a non-root UID. Every
+# containerised datastore has this exposure: loki=10001, the postgres set=70/999,
+# mysql/mongo=999. The failure lands AFTER the platform is half-built, which is the worst
+# time to find it. These two checks turn that into a FAIL line before anything is deployed.
+#
+# We deliberately do NOT assert exact UIDs: they legitimately differ per image generation
+# (this box has postgres data owned by 70 in three instances and 999 in a fourth). The
+# invariant that actually holds is "not owned by cloud" — no datastore container runs as
+# the login user, so uid 1000 on this data is always the restore bug, never a valid state.
+MNT_VOL="${MNT_VOL:-/mnt/minikube-mnt}"
+_stat_owner() { sudo -n stat -c '%u' "$1" 2>/dev/null; }
+_stat_mode()  { sudo -n stat -c '%a' "$1" 2>/dev/null; }
+
+if [ -d "$MNT_VOL" ]; then
+  _owner_checked=0
+  for _d in vault-data/core yolo-loki qcguy-mysql yolo-quantstore trading-microservices \
+            dyingpaleblue-postgres/pgdata predictonomy-postgres/pgdata \
+            yolo-postgres/pgdata prop-investech-postgres/pgdata; do
+    [ -e "$MNT_VOL/$_d" ] || continue
+    _u="$(_stat_owner "$MNT_VOL/$_d")"
+    if [ -z "$_u" ]; then continue; fi          # unreadable without sudo -n; summarised below
+    _owner_checked=$((_owner_checked+1))
+    if [ "$_u" = "1000" ]; then
+      fail "$_d is owned by uid 1000 (cloud) — the restore ran tar/cp without root, so every non-root datastore container has lost access to its own data. Re-extract with: sudo tar -xpzf <archive> && sudo cp -a"
+    else
+      pass "$_d owned by uid $_u (not the login user)"
+    fi
+  done
+  [ "$_owner_checked" = 0 ] && info "datastore ownership not checked (needs passwordless sudo; re-run with sudo)"
+
+  # PostgreSQL REFUSES to start unless its data directory is 0700 or 0750:
+  #   FATAL: data directory has invalid permissions / Permissions should be u=rwx (0700)...
+  # So this cannot be "normalised" to a friendlier mode — loosening it IS the fatal error.
+  for _pg in dyingpaleblue-postgres predictonomy-postgres yolo-postgres prop-investech-postgres; do
+    [ -e "$MNT_VOL/$_pg/pgdata" ] || continue
+    _m="$(_stat_mode "$MNT_VOL/$_pg/pgdata")"
+    [ -z "$_m" ] && continue
+    case "$_m" in
+      700|750) pass "$_pg/pgdata mode $_m (postgres requires 0700 or 0750)" ;;
+      *)       fail "$_pg/pgdata mode is $_m — postgres refuses to start unless it is 0700 or 0750 ('data directory has invalid permissions')" ;;
+    esac
+  done
+else
+  warn "$MNT_VOL does not exist — the shared cluster volume is missing"
+fi
+
 # Root headroom. Everything above exists to keep this number healthy.
 _rootuse="$(df -h --output=pcent / 2>/dev/null | tail -1 | tr -d ' %')"
 if [ -n "$_rootuse" ]; then
