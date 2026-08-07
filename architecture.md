@@ -156,10 +156,18 @@ across this link — used from the CLI and from **IntelliJ Services → Kubernet
   its cluster/user/context renamed to **`prod-minikube`** so it coexists with the dev box's
   own local `minikube` context. The API cert already carries `IP Address:172.16.238.2` in its
   SANs, so TLS validates unchanged.
-  ⚠️ **Re-emit it after every `minikube delete` — the CA is regenerated and the old kubeconfig
+  ⚠️ **Re-emit it whenever `~/.minikube` is recreated — the CA changes and the old kubeconfig
   dies silently.** Because the certs are *embedded*, the dev box's copy is a point-in-time
-  snapshot: a cluster rebuild rotates the CA and invalidates both the `certificate-authority-data`
-  and the client cert, but the file still looks perfectly valid. Symptom is `x509: certificate
+  snapshot: when the CA changes, both the `certificate-authority-data` and the client cert become
+  invalid while the file still looks perfectly valid.
+  **Precisely when does the CA change?** Not on a plain `minikube delete` — the CA lives in
+  `~/.minikube/ca.crt`, *outside* the cluster, and minikube reuses it. Verified 2026-08-07: a full
+  cold `start-scratch.sh` rebuild left the fingerprint untouched and the dev box kept working
+  straight through. It changes when **`~/.minikube` itself is recreated** — a fresh OS install
+  (this is what produced the Jan-2023 → Aug-2026 jump during the GM9000 disk migration),
+  `minikube delete --purge`, or wiping the directory by hand. Re-emitting is idempotent and cheap,
+  so doing it on every rebuild is fine — just don't *diagnose* from the assumption that a rebuild
+  rotated the CA. Compare fingerprints instead. Symptom is `x509: certificate
   signed by unknown authority` or a bare `Unauthorized`, which reads like a firewall/route fault
   and sends you auditing `DOCKER-USER` and the link — both of which will be fine. Diagnose by
   comparing fingerprints, not by re-checking the network:

@@ -83,3 +83,14 @@
 # 00:30 still lands before the Monday 05:00 root backup.
 CRON_TZ=Europe/London
 30 */6 * * * /home/cloud/Ideaprojects/STEP0/reduce-node-docker-cache.sh >> /home/cloud/Ideaprojects/STEP0/logs/reduce-node-docker-cache.log 2>&1
+
+# Registry blob prune — weekly, Sunday 04:00. Until 2026-08-07 prune-registry.sh existed
+# but was scheduled NOWHERE, so nothing ever reclaimed per-build image tags: by 2026-08-06
+# that was 8 services x 302 `bNNNN` tags and a 37GB blob store. It was unschedulable
+# because a garbage-collect racing an in-flight push can corrupt the store, and "run with
+# Jenkins idle" was enforced only by printing a reminder to a human.
+# The script now CHECKS the Jenkins queue itself and exits 0 without touching anything if a
+# build is running, queued, or Jenkins is unreachable — so a missed week is a non-event and
+# this is safe to automate. Sunday 04:00 is simply the quietest slot; the guard is what
+# makes it correct, not the timing.
+0 4 * * 0 /home/cloud/Ideaprojects/STEP0/prune-registry.sh --apply >> /home/cloud/Ideaprojects/STEP0/logs/prune-registry.log 2>&1

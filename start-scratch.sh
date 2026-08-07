@@ -200,11 +200,13 @@ minikube addons enable nvidia-gpu-device-plugin
 # re-apply ours. Best-effort (needs root); the installed devbox-kube-access.service re-applies on
 # boot and, since it is PartOf=docker.service, on a docker restart too.
 sudo -n "$HOME/Ideaprojects/STEP0/enable-devbox-kube-access.sh" || echo "devbox-kube-access: skipped (run 'sudo ./enable-devbox-kube-access.sh --install' once)"
-# A cold rebuild REGENERATES the cluster CA, which instantly invalidates any previously emitted
-# kubeconfig — including the dev box's copy, which keeps looking valid and fails as
-# `x509: certificate signed by unknown authority`. Re-emit here so the file on prod always matches
-# the cluster that is actually running and is ready to copy across. No root needed, and it only
-# writes a file in $HOME. The dev box still has to pull/merge it — see architecture.md §3.
+# Keep prod's emitted kubeconfig matching the cluster that is actually running, so it is always
+# ready to copy to the dev box. Note a cold rebuild does NOT normally change the CA — it lives in
+# ~/.minikube/ca.crt, outside the cluster, and minikube reuses it (verified 2026-08-07: fingerprint
+# unchanged across a full run, dev box never lost access). It DOES change when ~/.minikube is
+# recreated — a fresh OS install, or minikube-delete-and-upgrade.sh, which rm -r's it. Re-emitting
+# unconditionally is idempotent and costs nothing, and covers that case without needing to guess.
+# No root needed; only writes a file in $HOME. The dev box still pulls/merges it — architecture.md §3.
 "$HOME/Ideaprojects/STEP0/enable-devbox-kube-access.sh" --emit-kubeconfig \
   || echo "devbox-kube-access: kubeconfig re-emit skipped (re-run --emit-kubeconfig by hand)"
 ###########x`######grafana-prometheus###########################

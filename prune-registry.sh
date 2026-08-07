@@ -74,7 +74,47 @@ digest_for() {  # $1=repo $2=tag -> prints sha256:... (empty on failure)
     | awk 'tolower($1)=="docker-content-digest:"{print $2}' | tr -d '\r'
 }
 
-[ "$APPLY" = 1 ] && log "APPLY mode — manifests WILL be deleted. Check the Jenkins queue is idle." \
+# --- Jenkins-idle guard --------------------------------------------------------------
+# The header says "run with Jenkins idle" because a garbage-collect racing an in-flight
+# push can corrupt the blob store: GC decides a blob is unreferenced, deletes it, and the
+# manifest that was about to reference it then points at nothing. Until 2026-08-07 that
+# was enforced only by PRINTING a reminder to a human, which is why this script could not
+# be scheduled — and so it never ran, and the registry grew unbounded (302 build tags per
+# service by 2026-08-06).
+#
+# Now it CHECKS. If Jenkins reports a running build or a non-empty queue, we skip this
+# run entirely and exit 0: a deferred prune is a non-event (the next run picks it up),
+# whereas a corrupted registry means every image has to be rebuilt. Unreachable Jenkins or
+# a missing credential is treated the same way — refuse rather than guess.
+# Set PRUNE_FORCE=1 to override when you know the queue is idle.
+jenkins_is_busy() {
+  local cred host busy queued
+  cred="$(grep -E '^JENKINS_CRED=' "$(dirname "$0")/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'"'')"
+  host="${JENKINS_HOST:-jenkins.traderyolo.com}"
+  [ -n "$cred" ] || { log "no JENKINS_CRED — cannot confirm Jenkins is idle"; return 0; }
+  busy="$(curl -skg --max-time 10 -u "$cred" \
+      "https://$host/api/json?tree=jobs[lastBuild[building]]" 2>/dev/null \
+      | grep -o '"building":true' | wc -l)"
+  queued="$(curl -skg --max-time 10 -u "$cred" "https://$host/queue/api/json?tree=items[id]" 2>/dev/null \
+      | grep -o '"id"' | wc -l)"
+  [ -z "$busy" ] && { log "could not reach Jenkins — cannot confirm it is idle"; return 0; }
+  if [ "$busy" -gt 0 ] || [ "$queued" -gt 0 ]; then
+    log "Jenkins is busy ($busy building, $queued queued)"
+    return 0
+  fi
+  return 1
+}
+
+if [ "$APPLY" = 1 ] && [ "${PRUNE_FORCE:-0}" != "1" ]; then
+  if jenkins_is_busy; then
+    log "SKIPPING this run — a GC racing an in-flight push can corrupt the blob store."
+    log "  The next scheduled run will retry. Override with PRUNE_FORCE=1 if you know it is idle."
+    exit 0
+  fi
+  log "Jenkins idle — safe to prune."
+fi
+
+[ "$APPLY" = 1 ] && log "APPLY mode — manifests WILL be deleted." \
                  || log "dry-run (pass --apply to delete). keep=$KEEP_BUILDS build tags per repo."
 
 repos=$(curl -sf --max-time 10 "$REG_URL/v2/_catalog?n=1000" | jq -r '.repositories[]') \

@@ -761,8 +761,18 @@ the config lives anywhere but `~/.kube/config` it must be named in
 Settings → Build, Execution, Deployment → Kubernetes. Verify from a terminal first —
 `kubectl --context prod-minikube get ns` — so you are not debugging the IDE and the certs at once.
 
-Re-run the re-emit **after any `minikube delete`**, not just during this migration — the
-same trap catches `minikube-delete-and-upgrade.sh` and a from-scratch `start-scratch.sh`.
+**This migration is exactly the case that needs it**, because a fresh Ubuntu install gives the
+box a new `~/.minikube` and therefore a new CA. Note the trigger is `~/.minikube` being recreated
+— **not** a cluster rebuild: a plain `minikube delete` (or a full cold `start-scratch.sh`) reuses
+`~/.minikube/ca.crt`, so the CA is unchanged and an existing kubeconfig keeps working. Verified
+2026-08-07 through a cold rebuild. Concretely, on this box:
+
+| Action | `~/.minikube` | CA | Re-emit needed? |
+|---|---|---|---|
+| `start-scratch.sh` (cold rebuild) | kept | unchanged | no (harmless if you do) |
+| plain `minikube delete` | kept | unchanged | no |
+| **`minikube-delete-and-upgrade.sh`** | **`rm -r ${HOME}/.minikube`** (line 6) | **new** | **yes** |
+| fresh OS install / this migration | new | **new** | **yes** |
 The emitted credential is `system:masters` (full cluster-admin, valid 3 years), so treat the
 file as a secret: it lands mode `0600` and should stay that way.
 ⚠️ **The one bug not to reintroduce:** never add a prod-API or `10.10.10.x` route to
@@ -878,7 +888,8 @@ or just re-run the apply, which is idempotent.
 - [ ] `nvidia-smi` OK under Secure Boot (MOK enrolled).
 - [ ] Compose stack: 14 containers up, UI reachable.
 - [ ] Ollama from prod: `curl http://10.10.10.2:11434/api/tags` lists all four models.
-- [ ] **Kubeconfig re-emitted from prod after the last `minikube delete`** (§6.3) — verify by
+- [ ] **Kubeconfig re-emitted from prod** (§6.3 — mandatory here: a fresh install means a new
+      `~/.minikube` and therefore a new CA) — verify by
       fingerprint, not by "it looks like a kubeconfig": its `certificate-authority-data` must
       match prod's live `~/.minikube/ca.crt`. A stale one fails as `Unauthorized` and sends you
       hunting the firewall.

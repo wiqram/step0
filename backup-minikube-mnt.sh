@@ -203,6 +203,33 @@ for f in "$dest/$hostname"-*.tgz; do
     fi
 done
 
+# Pass 3: AGE CAP. Passes 1-2 keep one archive per month FOREVER, which is not a
+# retention policy — it is unbounded growth with a slow slope. At ~40GB per archive
+# (and rising: 21GB in Jun 2026 -> 43GB in Aug) that is ~480GB/year accumulating.
+# Measured 2026-08-07: the 916GB backup HDD would fill in roughly 12-15 months and the
+# 5.5TB NAS in about a decade — and a full backup disk means the weekly job silently
+# stops producing backups, which is discovered exactly when you need one.
+#
+# So: monthly archives are also dropped once they exceed MAX_ARCHIVE_AGE_MONTHS. The
+# current + previous month are untouched by this (Pass 1 skips them), so the newest
+# backups are never at risk. Set to 0 to disable the cap and restore the old behaviour.
+MAX_ARCHIVE_AGE_MONTHS="${MAX_ARCHIVE_AGE_MONTHS:-6}"
+if [ "$MAX_ARCHIVE_AGE_MONTHS" -gt 0 ] 2>/dev/null; then
+    cutoff_ym=$(date -d "$(date +%Y-%m-01) -${MAX_ARCHIVE_AGE_MONTHS} month" +%y%m)
+    echo "  age cap: dropping monthly archives older than ${MAX_ARCHIVE_AGE_MONTHS} months (before $cutoff_ym)"
+    for f in "$dest/$hostname"-*.tgz; do
+        [ -e "$f" ] || continue
+        base=$(basename "$f")
+        [[ "$base" =~ ^${hostname}-([0-9]{2})-([0-9]{2})-([0-9]{2})\.tgz$ ]] || continue
+        mm="${BASH_REMATCH[1]}"; yy="${BASH_REMATCH[3]}"
+        ym="$yy$mm"
+        if [ "$ym" -lt "$cutoff_ym" ]; then
+            echo "  deleting (age cap) $f"
+            rm -f "$f"
+        fi
+    done
+fi
+
 # Long listing of files in $dest to check file sizes.
 ls -lh $dest
 
@@ -293,6 +320,29 @@ else
             rm -f "$f"
         fi
     done
+
+    # Pass 3: the SAME age cap as local. The NAS is 5.5TB so it has far more runway
+    # than the 916GB local disk, but "one per month forever" is still unbounded — at
+    # ~40GB/archive it reaches ~2.8TB in five years and fills the share in about ten.
+    # A deeper history off-site than on-site would be defensible, in which case set
+    # MAX_ARCHIVE_AGE_MONTHS_WD higher than MAX_ARCHIVE_AGE_MONTHS; it defaults to the
+    # same value so there is one number to reason about.
+    MAX_ARCHIVE_AGE_MONTHS_WD="${MAX_ARCHIVE_AGE_MONTHS_WD:-$MAX_ARCHIVE_AGE_MONTHS}"
+    if [ "$MAX_ARCHIVE_AGE_MONTHS_WD" -gt 0 ] 2>/dev/null; then
+        wd_cutoff_ym=$(date -d "$(date +%Y-%m-01) -${MAX_ARCHIVE_AGE_MONTHS_WD} month" +%y%m)
+        echo "  age cap: dropping monthly archives older than ${MAX_ARCHIVE_AGE_MONTHS_WD} months (before $wd_cutoff_ym)"
+        for f in "$WD_DEST/$hostname"-*.tgz; do
+            [ -e "$f" ] || continue
+            base=$(basename "$f")
+            [[ "$base" =~ ^${hostname}-([0-9]{2})-([0-9]{2})-([0-9]{2})\.tgz$ ]] || continue
+            mm="${BASH_REMATCH[1]}"; yy="${BASH_REMATCH[3]}"
+            ym="$yy$mm"
+            if [ "$ym" -lt "$wd_cutoff_ym" ]; then
+                echo "  deleting (age cap) $f"
+                rm -f "$f"
+            fi
+        done
+    fi
 
     unset wd_latest_day wd_latest_file
 fi

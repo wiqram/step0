@@ -73,7 +73,8 @@ do_kubeconfig() {
 
   # ⚠️ ORDER MATTERS: on conflicting keys the FIRST file in KUBECONFIG wins, so $src must come
   # first for a RE-emitted kubeconfig to actually replace the old one. This was reversed until
-  # 2026-08-07, which made re-emitting a silent no-op: after a `minikube delete` regenerates the
+  # 2026-08-07, which made re-emitting a silent no-op: when something recreates ~/.minikube (a
+  # fresh OS install or minikube-delete-and-upgrade.sh — NOT a plain rebuild) and so regenerates the
   # CA, the stale (now invalid) certificate-authority-data in ~/.kube/config survived the merge
   # and kubectl/IntelliJ kept failing `x509: certificate signed by unknown authority` — while the
   # command reported "merged" and `get-contexts` listed prod-minikube, so it looked done.
