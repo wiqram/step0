@@ -145,4 +145,4 @@ cronjob alone points the vault sidecar at a non-existent `kv/yolo/reconcile`):
 ## Pointers
 - yolo memory: `reconcile-sweep-auth.md` (the durability TODO), `registry-ephemeral-wipe.md`
   (re-push recovery), `project-boundaries-rule.md` (this STEP0/Vault/yolo split).
-- STEP0 `plan.md` **R8** = the permanent registry-persistence fix that prevents recurrence.
+- STEP0 `docs/plan.md` **R8** = the permanent registry-persistence fix that prevents recurrence.

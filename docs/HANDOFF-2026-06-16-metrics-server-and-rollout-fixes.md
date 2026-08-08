@@ -74,6 +74,6 @@ Three independent fixes, all live and committed:
   on per-pod `container_*` cAdvisor metrics may be similarly affected.
 
 ## Pointers
-- STEP0 `architecture.md` → "Resource metrics — metrics-server" (full rationale + verify).
+- STEP0 `docs/architecture.md` → "Resource metrics — metrics-server" (full rationale + verify).
 - STEP0 `CLAUDE.md` → conventions bullet on metrics-server (the guardrail).
 - Bootstrap: `start-scratch.sh` step 3 (addons) / `restart-minikube.sh` enable the addon.
