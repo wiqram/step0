@@ -4,6 +4,17 @@ Guidance for Claude Code when working in this repository. See `README.md` for th
 human-facing front door, `docs/architecture.md` for the full system design (incl. **§10 "deploy
 a new app" scaffolding**), and `docs/plan.md` for the improvement backlog.
 
+> **Where the documentation lives (moved 2026-08-08).** Every long-form document is in
+> **`docs/`** — `architecture.md`, `plan.md`, `RESTART-RECOVERY.md`, `GM9000-MIGRATION.md`,
+> `DEVBOX-9100PRO-MIGRATION.md`, `UBUNTU-UPGRADE.md`, `base-architecture-scaffold.md`,
+> `VAULT-SECRETS.md`, the two `HANDOFF-2026-06-16-*.md`, plus the `docs/superpowers/`
+> plans+specs. `docs/README.md` indexes them.
+> Only **`CLAUDE.md`** and **`README.md`** stay at the repo root, and they must: Claude Code
+> loads project instructions from the root `CLAUDE.md`, and GitHub renders the root `README`
+> as the landing page. Don't "tidy" either into `docs/` — it silently breaks both.
+> If you are following an older note, a commit message or a memory that says
+> `STEP0/architecture.md` or `STEP0/plan.md`, the file is not missing — it is under `docs/`.
+
 > **Creating a NEW website/app to deploy here? → read [`docs/base-architecture-scaffold.md`](./docs/base-architecture-scaffold.md) FIRST.**
 > It's the copy-paste contract for what files a new project needs (Dockerfile/.production,
 > docker-compose dev+prod, Jenkinsfile, namespace.yaml, deployment.yaml with Vault injector

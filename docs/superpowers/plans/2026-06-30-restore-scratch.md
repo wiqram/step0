@@ -877,8 +877,8 @@ git add restore-scratch.sh && git commit -m "feat(restore): phase 9 — verifica
 ## Task 11: Docs cross-reference + final self-check
 
 **Files:**
-- Modify: `/home/cloud/Ideaprojects/STEP0/RESTART-RECOVERY.md`
-- Modify: `/home/cloud/Ideaprojects/STEP0/architecture.md`
+- Modify: `/home/cloud/Ideaprojects/STEP0/docs/RESTART-RECOVERY.md`
+- Modify: `/home/cloud/Ideaprojects/STEP0/docs/architecture.md`
 - Modify: `/home/cloud/Ideaprojects/STEP0/CLAUDE.md` (Key files table)
 
 - [ ] **Step 1: Add a "Total-loss / bare-metal" row to docs/RESTART-RECOVERY.md**
