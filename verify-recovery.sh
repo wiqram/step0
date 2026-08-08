@@ -268,7 +268,15 @@ if have systemctl; then
     *)      warn "$LOKI_GUARD_SVC = ${st:-not-installed} — Loki NodePort $EXP_LOKI_PORT is unrestricted. Install: sudo ./loki-nodeport-guard.sh --install" ;;
   esac
   if have iptables && [ "$(id -u)" -eq 0 ]; then
-    if iptables -S DOCKER-USER 2>/dev/null | grep -q -- "-d $EXP_NODE_IP/32 .*--dport $EXP_LOKI_PORT -j DROP"; then
+    # ⚠️ `.*` BEFORE `-j DROP` as well as after the address, and this is not defensive
+    # padding — the first version of this check FAILed on a host where the rule was present
+    # and working (caught 2026-08-08, the first sudo run). The guard inserts the rule with
+    # `-m comment`, so iptables renders it as
+    #   -d 172.16.238.2/32 -p tcp -m tcp --dport 30310 -m comment --comment "..." -j DROP
+    # and a pattern anchoring `-j DROP` directly to `--dport` cannot match it. A survey that
+    # cries wolf about an open port is worse than no survey: the next real one gets ignored.
+    # Match the address, the port and the target, and stay agnostic about the modules between.
+    if iptables -S DOCKER-USER 2>/dev/null | grep -qE -- "-d $EXP_NODE_IP/32 .*--dport $EXP_LOKI_PORT .*-j DROP"; then
       pass "DOCKER-USER DROP present for Loki $EXP_NODE_IP:$EXP_LOKI_PORT (host-only)"
     else
       fail "NO DOCKER-USER DROP for Loki $EXP_NODE_IP:$EXP_LOKI_PORT — unauthenticated LogQL over 30 days of pipeline logs is reachable from the bridge network. Fix: sudo ./loki-nodeport-guard.sh --install"
