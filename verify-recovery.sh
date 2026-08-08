@@ -289,7 +289,23 @@ else warn "kubectl not installed — skipping Vault/pod checks"; fi
 if [ -f /etc/cron.d/wd-backup ]; then pass "/etc/cron.d/wd-backup present (nightly WD My Cloud rsync, 02:00)"
 else warn "/etc/cron.d/wd-backup MISSING — re-arm: sudo ~/wd-backup/install-on-prod.sh"; fi
 
-if crontab -l 2>/dev/null | grep -q vault-auto-unseal; then pass "cloud crontab installed (vault-auto-unseal + agents)"
+# ⚠️ Always read the CLOUD user's crontab explicitly — never a bare `crontab -l`.
+# The header above tells you to re-run this script under sudo to get the datastore
+# ownership checks. Under sudo a bare `crontab -l` reads ROOT's crontab, which holds
+# only the weekly DR backup — so all three cloud-crontab checks below reported
+# "not installed", "watchdog NOT present" and "DRIFTED" on a host where the cloud
+# crontab was in fact installed and byte-identical to cron/cloud-crontab (found
+# 2026-08-08). That is not a cosmetic false positive: the drift WARN tells you to
+# reconcile with `crontab -l > cron/cloud-crontab`, and running THAT under sudo would
+# overwrite the canonical crontab with root's single line — destroying every schedule
+# this file exists to reproduce, during a disaster recovery, on the operator's own
+# initiative. Hence this helper.
+cloud_crontab() {
+  if [ "$(id -u)" -eq 0 ]; then crontab -u "${SUDO_USER:-cloud}" -l 2>/dev/null
+  else crontab -l 2>/dev/null; fi
+}
+
+if cloud_crontab | grep -q vault-auto-unseal; then pass "cloud crontab installed (vault-auto-unseal + agents)"
 else warn "cloud crontab not installed — run ./install-cron.sh"; fi
 
 # Root crontab holds the weekly DR backup; only readable as root.
@@ -302,7 +318,7 @@ else info "root crontab check skipped (needs sudo) — re-run with: sudo ./verif
 # from a healthy system, so a restore that silently dropped it is exactly the thing a
 # post-restore survey should catch. Checked separately from the crontab line above
 # because an OLD cloud-crontab installs cleanly and still lacks the watcher.
-if crontab -l 2>/dev/null | grep -q alerting-pipeline-watch; then pass "alerting-pipeline watchdog cron present (ntfy yolo-private-cloud-resource-crunch)"
+if cloud_crontab | grep -q alerting-pipeline-watch; then pass "alerting-pipeline watchdog cron present (ntfy yolo-private-cloud-resource-crunch)"
 else warn "alerting-pipeline watchdog NOT in the cloud crontab — re-run ./install-cron.sh"; fi
 
 # Canonical-vs-live crontab drift. install-cron.sh installs cron/cloud-crontab VERBATIM,
@@ -313,12 +329,12 @@ else warn "alerting-pipeline watchdog NOT in the cloud crontab — re-run ./inst
 # after it had been deliberately paused — install-cron.sh would have resurrected it.
 # Compares SCHEDULE LINES only: comments drifting apart is untidy, not dangerous.
 if [ -r "$VR_SELFDIR/cron/cloud-crontab" ]; then
-  if diff -q <(crontab -l 2>/dev/null | grep -vE '^\s*#|^\s*$') \
+  if diff -q <(cloud_crontab | grep -vE '^\s*#|^\s*$') \
              <(grep -vE '^\s*#|^\s*$' "$VR_SELFDIR/cron/cloud-crontab") >/dev/null 2>&1
   then
     pass "cloud crontab matches cron/cloud-crontab (install-cron.sh is safe to re-run)"
   else
-    warn "cloud crontab has DRIFTED from cron/cloud-crontab — a restore would revert the live schedule. Reconcile with: crontab -l > cron/cloud-crontab (then commit), or re-run ./install-cron.sh to adopt the committed one"
+    warn "cloud crontab has DRIFTED from cron/cloud-crontab — a restore would revert the live schedule. Reconcile with: crontab -u cloud -l > cron/cloud-crontab (then commit), or re-run ./install-cron.sh to adopt the committed one. Note the -u cloud: a bare 'crontab -l' under sudo reads ROOT's crontab and would overwrite the canonical file with root's single backup line"
   fi
 else
   warn "cron/cloud-crontab is missing from the repo — install-cron.sh has nothing to install"

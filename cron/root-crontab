@@ -1,0 +1,38 @@
+# cron/root-crontab — the canonical ROOT crontab. `install-cron.sh` installs THIS file
+# verbatim (`sudo crontab -u root cron/root-crontab`), the same way cron/cloud-crontab is
+# installed for the cloud user. Edit here and run ./install-cron.sh; do NOT `sudo crontab -e`.
+#
+# WHY ROOT AND NOT THE CLOUD USER. Exactly one job belongs here, and it is here for one
+# reason: backup-minikube-mnt.sh must read files the cloud user cannot. It tars the
+# per-container datastore dirs under /mnt/minikube-mnt — owned by vault (100), postgres
+# (70/999), mysql/mongo (999), loki (10001), several of them 0700 — plus the 0600 SMB
+# credential files in ~/wd-backup. Run as `cloud`, tar would skip or fail on those and the
+# archive would be quietly incomplete. Running as root is also what makes the archive a
+# valid restore source at all: tar only records/restores the true numeric owners when it
+# runs as root, which is why restore-scratch.sh extracts with `sudo tar --numeric-owner -xpzf`.
+# Nothing else should be added here. If a new job does not need root, it goes in
+# cron/cloud-crontab.
+#
+# ADDED TO VERSION CONTROL 2026-08-08. Until then this line existed ONLY in the live root
+# crontab and, duplicated as a string literal, inside restore-scratch.sh phase 8 — so there
+# was no canonical copy to diff the live schedule against, and the two could drift apart
+# with nothing to notice. The job it schedules produces the weekly private-cloud-*.tgz to
+# the WD Cloud NAS, which is the platform's ONLY off-disk insurance: the nightly DB
+# snapshots live on /mnt/minikube-mnt (nvme0n1p6), the same partition as the live stores,
+# so a disk failure takes both. verify-recovery.sh now diffs the live root crontab against
+# this file the same way it does for cloud-crontab.
+#
+# NOTE ON `crontab -u root <file>`: installing REPLACES root's entire crontab. That is the
+# intent — this file is the whole of it — but it also means anything added by hand with
+# `sudo crontab -e` and never written back here is destroyed on the next install-cron.sh
+# or DR restore. That is the drift verify-recovery.sh reports.
+
+# Weekly disaster-recovery backup — Mondays 05:00 LOCAL (Europe/London).
+# Compresses /mnt/minikube-mnt (every app DB, Jenkins, Vault, Grafana) + nginx + STEP0 +
+# qcguy + the ~/wd-backup toolkit into a dated private-cloud-<date>.tgz in
+# /mnt/minikube-backups, prunes for space, then copies OFF-SITE to the WD Cloud NAS
+# (192.168.50.169:/nfs/private-cloud, mounted /mnt/wdcloud) and prunes there too.
+# Pushes a summary to ntfy `yolo-private-cloud-backup`. See docs/architecture.md §7.
+# 05:00 sits after the 00:30 reduce-node-docker-cache run (cloud crontab) so the archive is
+# taken against a pruned /var, and well after the 02:00 WD My Cloud tenant job.
+0 5 * * 1 /bin/bash /home/cloud/Ideaprojects/STEP0/backup-minikube-mnt.sh >> /var/log/minikube-backup.log 2>&1
