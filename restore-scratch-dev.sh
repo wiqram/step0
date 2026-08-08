@@ -35,10 +35,11 @@ IG_URL="https://github.com/wiqram/IG-Trading-Microservices.git"
 IG_BRANCH="Claude-agent-update"
 STEP0_REPO="$IDEA/step0"
 MARKER="$HOME/.yolo-dev-restore-phase"
-GO_VERSION="1.19.13"          # parity with the services' golang:1.19 images
+GO_VERSION="1.26.5"           # parity with the services' golang:1.26 images (go.mod: go 1.26.0)
+PROTOC_VERSION="35.1"         # UPLIFT-PROTOC-GRPC 2026-08-08 — IG repo build.sh ASSERTS this exact version
 SOPS_VERSION="3.9.4"
 AGE_VERSION="1.2.1"
-NODE_MAJOR="20"               # LTS; UI/userService images run node 18+
+NODE_MAJOR="22"               # CI-NODE22: everything Node runs 22 (distroless nodejs22 runtime parity)
 
 DRY_RUN=0; FROM_PHASE=""
 while [ $# -gt 0 ]; do
@@ -97,7 +98,7 @@ phase1_toolchain() {
   log "phase 1: toolchain (apt, go, protoc plugins, node, sops, age)"
 
   run "sudo apt-get update -qq"
-  run "sudo apt-get install -y docker.io docker-compose-v2 git jq curl protobuf-compiler \
+  run "sudo apt-get install -y docker.io docker-compose-v2 git jq curl unzip \
        build-essential python3-venv python3-dev libxml2-dev libxslt1-dev openssl"
 
   # docker group (effective after re-login; phase 5 falls back to `sg docker`)
@@ -114,20 +115,26 @@ phase1_toolchain() {
   ensure_line 'export PATH="$PATH:/usr/local/go/bin:$HOME/go/bin:$HOME/.local/bin"' "$HOME/.profile"
   export PATH="$PATH:/usr/local/go/bin:$HOME/go/bin:$HOME/.local/bin"
 
-  # protoc plugins — PINNED; drift regenerates different codegen (see
-  # IG repo docs: build.sh is only idempotent with exactly these)
-  run "go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.28.1"
-  run "go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.3.0"
-  run "go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-grpc-gateway@v2.11.3 2>/dev/null || \
-       go install github.com/grpc-ecosystem/grpc-gateway/v2/cmd/protoc-gen-grpc-gateway@v2.11.3"
-  run "go install github.com/grpc-ecosystem/grpc-gateway/v2/cmd/protoc-gen-openapiv2@v2.11.3"
+  # protoc + plugins — PINNED; drift regenerates different codegen. The IG repo's
+  # build.sh now ASSERTS these exact versions and refuses to run otherwise
+  # (UPLIFT-PROTOC-GRPC, 2026-08-08) — apt's protobuf-compiler is years old, so
+  # protoc comes from the official release zip, symlinked into ~/go/bin.
+  if ! protoc --version 2>/dev/null | grep -q "libprotoc ${PROTOC_VERSION}"; then
+    run "curl -sfL -o /tmp/protoc.zip https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+    run "rm -rf $HOME/.local/protoc-${PROTOC_VERSION} && unzip -qo /tmp/protoc.zip -d $HOME/.local/protoc-${PROTOC_VERSION} && rm -f /tmp/protoc.zip"
+    run "mkdir -p $HOME/go/bin && ln -sf $HOME/.local/protoc-${PROTOC_VERSION}/bin/protoc $HOME/go/bin/protoc"
+  fi
+  run "go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11"
+  run "go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2"
+  run "go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-grpc-gateway@v2.30.0"
+  run "go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2@v2.30.0"
 
   # Node (NodeSource LTS) + node protoc plugin
   if ! command -v node >/dev/null 2>&1; then
     run "curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | sudo -E bash -"
     run "sudo apt-get install -y nodejs"
   fi
-  command -v grpc_tools_node_protoc >/dev/null 2>&1 || run "sudo npm install -g grpc-tools"
+  command -v grpc_tools_node_protoc >/dev/null 2>&1 || run "sudo npm install -g grpc-tools@1.13.1"
 
   # sops + age (static binaries; no sudo needed)
   mkdir -p "$HOME/.local/bin"
