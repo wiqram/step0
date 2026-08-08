@@ -27,7 +27,12 @@
 # Fix: schedule in local time, chosen so BOTH offsets are safe. Local 05:23 = 04:23 UTC in
 # BST, 05:23 UTC in GMT — after the ~03:58 UTC refresh completion either way, so DST cannot
 # drift it back into the window. Same for 13:23 / 21:23. Still 3/day = 21/week.
-23 5,13,21 * * * /home/cloud/IdeaProjects/Predictonomy/ops/agent/run-cycle.sh >> /home/cloud/IdeaProjects/Predictonomy/ops/agent/logs/cron.log 2>&1
+# PAUSED 2026-08-08 by operator request — "stop any autonomous agents that are
+# working in background on regular intervals". The Predictonomy Improvement Agent no
+# longer runs on a schedule. Same treatment as the YOLO agent below, and for the same
+# reason: no unattended agent should be committing to a repo without a human watching.
+# To resume: uncomment the line below and run ./install-cron.sh.
+# 23 5,13,21 * * * /home/cloud/IdeaProjects/Predictonomy/ops/agent/run-cycle.sh >> /home/cloud/IdeaProjects/Predictonomy/ops/agent/logs/cron.log 2>&1
 
 # Predictonomy postgres-backup health check (ops/agent/check-backup.sh). LOCAL time.
 # 2026-07-28 (cycle 0319): was `CRON_TZ=UTC` + `15 1` intending 01:15 UTC, 15m after the
@@ -60,7 +65,10 @@
 # install-cron.sh in this repo, so this crontab is the only source.
 # 17 */12 * * * /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/run-cycle.sh >> /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/logs/cron.log 2>&1
 # dyingpaleblue Improvement Agent - one scoped cycle every 3h (see ops/agent/README.md)
-41 */3 * * * /home/cloud/IdeaProjects/dyingpaleblue/ops/agent/run-cycle.sh >> /home/cloud/IdeaProjects/dyingpaleblue/ops/agent/logs/cron.log 2>&1
+# PAUSED 2026-08-08 by operator request — see the Predictonomy note above. The
+# dyingpaleblue Improvement Agent no longer runs on a schedule.
+# To resume: uncomment the line below and run ./install-cron.sh.
+# 41 */3 * * * /home/cloud/IdeaProjects/dyingpaleblue/ops/agent/run-cycle.sh >> /home/cloud/IdeaProjects/dyingpaleblue/ops/agent/logs/cron.log 2>&1
 
 # Alerting-pipeline watch — push to ntfy `yolo-private-cloud-resource-crunch` when the
 # ALERTING PIPELINE itself is broken (Prometheus down, Alertmanager down, Watchdog alert
