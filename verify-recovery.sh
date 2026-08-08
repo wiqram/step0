@@ -601,15 +601,41 @@ if [ -d "$SNAP_ROOT" ]; then
     # Newest dump by mtime, whatever the timestamped dirs are called. Match BOTH formats:
     # mongodump writes *.archive.gz, pg_dump writes *.dump/*.sql — matching only the mongo
     # one reports a healthy postgres tree as a FAIL (it did, on the first run of this check).
-    _pat=( -name '*.archive.gz' -o -name '*.dump' -o -name '*.sql' -o -name '*.sql.gz' )
-    _a="$(sudo -n find "$_d" \( "${_pat[@]}" \) -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1)"
-    [ -z "$_a" ] && _a="$(find "$_d" \( "${_pat[@]}" \) -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1)"
+    # ...and *.tar.gz, because not every snapshot target is a DATABASE. `shadow` is the
+    # AI-expert decision corpus: a directory of .json/.jsonl files with no mongod in front
+    # of it, so a tarball IS its correct and only dump format — there is no mongodump to
+    # take. Omitting it made this check FAIL on a tree whose backup was demonstrably good
+    # (valid archive, 7 files, written that morning by an active CronJob), and that false
+    # FAIL was then mis-filed in docs/plan.md as "a Mongo with no recoverable backup" and
+    # nearly acted on as a retired database to delete. Same class of bug as the postgres one
+    # above: an allowlist of dump extensions silently indicts every format not on it.
+    _pat=( -name '*.archive.gz' -o -name '*.dump' -o -name '*.sql' -o -name '*.sql.gz' -o -name '*.tar.gz' )
+    # Judge the newest snapshot RUN, not the newest FILE — two steps, deliberately.
+    # One run writes several artefacts milliseconds apart: shadow writes the 476K
+    # shadow-ai.tar.gz and then, 4ms LATER, a 110-byte hotpath-shadow.tar.gz (an empty
+    # source dir, faithfully archived). "Newest file" therefore lands on the empty one and
+    # reports a perfectly good backup as "an empty dump restores nothing". Sorting
+    # mtime-then-size does NOT save you either — the mtimes genuinely differ, so size never
+    # breaks the tie. Step 1 picks the newest run; step 2 takes the LARGEST artefact in it,
+    # which is the one that says whether the run actually captured anything.
+    _fmt='%T@ %s %p\n'
+    _vr_dumps() {   # newest-first listing of dump artefacts under $1, root-readable if possible
+      local _o
+      _o="$(sudo -n find "$1" \( "${_pat[@]}" \) -printf "$_fmt" 2>/dev/null)"
+      [ -z "$_o" ] && _o="$(find "$1" \( "${_pat[@]}" \) -printf "$_fmt" 2>/dev/null)"
+      printf '%s\n' "$_o"
+    }
+    _a="$(_vr_dumps "$_d" | sort -k1,1rn | head -1)"
     if [ -z "$_a" ]; then
-      fail "$_db: no dump file (*.archive.gz/*.dump/*.sql) under $_d — for Mongo the raw datastore dirs in the weekly tar are NOT a valid restore source, so this database may have no recoverable backup"
+      fail "$_db: no dump file (*.archive.gz/*.dump/*.sql/*.tar.gz) under $_d — for Mongo the raw datastore dirs in the weekly tar are NOT a valid restore source, so this database may have no recoverable backup"
       continue
     fi
-    _age=$(( ( $(date +%s) - ${_a%%.*} ) / 86400 ))
-    _sz=$(stat -c %s "${_a#* }" 2>/dev/null || sudo -n stat -c %s "${_a#* }" 2>/dev/null)
+    _snapdir="$(dirname "$(printf '%s\n' "$_a" | awk '{print $3}')")"
+    _b="$(_vr_dumps "$_snapdir" | sort -k2,2rn | head -1)"      # largest artefact in that run
+    _mtime="$(printf '%s\n' "$_b" | awk '{print $1}')"
+    _sz="$(printf '%s\n'  "$_b" | awk '{print $2}')"
+    _path="$(printf '%s\n' "$_b" | awk '{print $3}')"
+    _age=$(( ( $(date +%s) - ${_mtime%%.*} ) / 86400 ))
     # Is anything still scheduled to refresh this tree? Empty SNAP_JOBS means we could not
     # ask (no kubectl / cluster down / yolo not deployed) — then fall back to checking
     # everything, because silently skipping a live database is the worse failure.
@@ -618,13 +644,13 @@ if [ -d "$SNAP_ROOT" ]; then
       _live=0
     fi
     if [ "${_sz:-0}" -lt 1024 ]; then
-      fail "$_db: newest snapshot $(basename "${_a#* }") is ${_sz:-0} bytes — an empty dump restores nothing"
+      fail "$_db: newest snapshot $(basename "$_path") is ${_sz:-0} bytes — an empty dump restores nothing"
     elif [ "$_live" = 0 ]; then
       info "$_db: no db-snapshot-$_db CronJob targets this tree — retired database, ${_age}d old snapshot kept for history (not a failure)"
     elif [ "$_age" -gt "$SNAP_MAX_AGE_DAYS" ]; then
-      warn "$_db: newest DB snapshot is ${_age}d old ($(basename "$(dirname "${_a#* }")")) — the db-snapshot CronJob may be failing; this is the only restorable copy"
+      warn "$_db: newest DB snapshot is ${_age}d old ($(basename "$(dirname "$_path")")) — the db-snapshot CronJob may be failing; this is the only restorable copy"
     else
-      pass "$_db: DB snapshot ${_age}d old, $(( _sz / 1024 ))KB ($(basename "$(dirname "${_a#* }")"))"
+      pass "$_db: DB snapshot ${_age}d old, $(( _sz / 1024 ))KB ($(basename "$(dirname "$_path")"))"
     fi
   done
   # The reverse gap: a CronJob exists but has produced no tree at all — a database with NO
