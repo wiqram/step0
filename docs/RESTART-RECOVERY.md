@@ -91,8 +91,13 @@ curl -s -o /dev/null -w '%{http_code}\n' https://predictonomy.com   # 200
     `./alerting-pipeline-watch.sh --status` prints every probe on demand.
   - Both are deliberately silent when the cluster is DOWN as a whole: that case is
     `cluster-autostart.sh`'s `NTFY_URL` alert above.
-- **Schedule:** host crontab (`crontab -l`) — `@reboot` + watchdog for each. Idempotent
-  (flock-guarded, re-enforce drift). The crontab is host state, not in any repo.
+- **Schedule:** the host crontabs — `@reboot` + watchdog for each. Idempotent (flock-guarded,
+  re-enforce drift). **Both crontabs ARE in this repo** (`cron/cloud-crontab` and, since
+  2026-08-08, `cron/root-crontab`), installed verbatim by `./install-cron.sh`. Edit the
+  committed file and re-run it; never `crontab -e` / `sudo crontab -e`, or the fix is lost at
+  the next DR restore. `./install-cron.sh --status` diffs live vs canonical for both.
+  Read the cloud crontab as `crontab -u cloud -l` — under `sudo`, a bare `crontab -l` shows
+  **root's**, which holds only the weekly backup line.
 - **Docker restart policy:** `docker update --restart=unless-stopped minikube` (re-apply after any
   `minikube delete`+recreate — the watchdog does this automatically).
 - **Vault unseal key:** `~/.vault/cluster-keys.json` (0600, host only — never in cluster/git).
@@ -126,16 +131,35 @@ curl -s -o /dev/null -w '%{http_code}\n' https://predictonomy.com   # 200
   host, then `./trigger-app-builds.sh`. Resumable (`--from-phase N`), inspectable (`--dry-run`). Registry
   blobs (`Kachra`) and ollama models are **not** in the backup — rebuilt via Jenkins / re-pulled. Full design:
   `docs/superpowers/specs/2026-06-30-restore-scratch-design.md`.
-- **Re-arm the automation:** `docker update --restart=unless-stopped minikube`, then re-add the
-  `@reboot` + watchdog cron lines pointing at the STEP0 scripts:
-  ```cron
-  @reboot            ~/Ideaprojects/STEP0/vault-auto-unseal.sh  >> ~/Ideaprojects/STEP0/logs/vault-auto-unseal.log 2>&1
-  */5 * * * *        ~/Ideaprojects/STEP0/vault-auto-unseal.sh  >> ~/Ideaprojects/STEP0/logs/vault-auto-unseal.log 2>&1
-  @reboot sleep 30 && ~/Ideaprojects/STEP0/cluster-autostart.sh >> ~/Ideaprojects/STEP0/logs/cluster-autostart.log 2>&1
-  */10 * * * *       ~/Ideaprojects/STEP0/cluster-autostart.sh  >> ~/Ideaprojects/STEP0/logs/cluster-autostart.log 2>&1
+- **Re-arm the automation:** `docker update --restart=unless-stopped minikube`, then reinstall
+  **both** crontabs from the committed sources — do not retype the lines:
+  ```bash
+  cd ~/Ideaprojects/STEP0
+  ./install-cron.sh            # cloud (unseal/autostart/cache/watchdog/agents) + root (weekly DR backup)
+  ./install-cron.sh --status   # confirm both match the canonical files
   ```
+  ⚠️ **Do not stop after the cloud crontab.** The root one is a single line and is easy to skip
+  because nothing appears broken without it — the cluster is healthy, every app is up, and the
+  only symptom is that no weekly archive reaches the WD NAS. Since the nightly DB snapshots live
+  on `/mnt/minikube-mnt` (`nvme0n1p6`), the *same* partition as the live stores, that archive is
+  the platform's only protection against losing the disk. Verify with
+  `sudo crontab -u root -l` or `sudo ./verify-recovery.sh` (it FAILs when the job is missing).
+
   Start the unseal loop immediately without waiting for a reboot:
   `setsid ~/Ideaprojects/STEP0/vault-auto-unseal.sh >> ~/Ideaprojects/STEP0/logs/vault-auto-unseal.log 2>&1 </dev/null &`.
+
+- **⚠️ Restoring `/mnt` also rewinds the DB snapshot tree.** `minikube-mnt/yolo-db-snapshots/`
+  — the logical dumps that are the *only* valid Mongo restore source — lives inside the mount a
+  restore overwrites, and inside the weekly archive. So a restore replays the snapshots as they
+  stood on backup day. On 2026-08-07 the rebuild-and-restore left all five stores at their 08-03
+  state with the 08-04/05/06 dumps gone, at the moment they were most wanted.
+  `restore-scratch.sh` phase 4 now side-copies any existing tree to
+  `/mnt/minikube-backups/pre-restore-db-snapshots-<stamp>` (the *other* disk) before merging the
+  archive, and never deletes it automatically. **If you are restoring by hand, do that copy
+  first** — and check that directory before concluding a dump is gone:
+  ```bash
+  sudo cp -a /mnt/minikube-mnt/yolo-db-snapshots /mnt/minikube-backups/pre-restore-db-snapshots-$(date +%m-%d-%y-%H%M)
+  ```
 
 ## Ownership
 

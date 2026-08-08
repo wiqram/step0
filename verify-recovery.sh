@@ -78,6 +78,8 @@ EXP_10G_PEER="${EXP_10G_PEER:-10.10.10.2}"         # dev box across the /30
 EXP_10G_DRIVER="${EXP_10G_DRIVER:-atlantic}"       # Aquantia/Marvell 10GBASE-T
 WATCHDOG_SVC="${WATCHDOG_SVC:-10gbe-link-watchdog.service}"
 KUBEACCESS_SVC="${KUBEACCESS_SVC:-devbox-kube-access.service}"
+LOKI_GUARD_SVC="${LOKI_GUARD_SVC:-yolo-loki-nodeport-guard.service}"  # SEC-LOKI-NODEPORT
+EXP_LOKI_PORT="${EXP_LOKI_PORT:-30310}"            # Loki NodePort — must be host-only
 DEV_OOB_SSH="${DEV_OOB_SSH:-vik@192.168.50.161}"   # dev box over the LAN (OOB) — to verify its egress back to us
 
 EXP_HOSTNAME="${EXP_HOSTNAME:-private-cloud}"
@@ -251,6 +253,29 @@ if have systemctl; then
   else
     info "raw/PREROUTING check skipped (needs root) — by hand: sudo iptables -t raw -L PREROUTING -n -v"
   fi
+
+  # SEC-LOKI-NODEPORT. The mirror image of the two rules above: those exist to let ONE host
+  # through Docker's forward path, this one exists to keep everyone else out of it. Loki's
+  # NodePort 30310 answers LogQL with no credential at all and holds 30 days of the
+  # signal->trade pipeline's logs, including follower emails; the port can't be removed
+  # because the host-side agent loop pushes OTLP to it from outside the cluster.
+  # Check the UNIT and the RULE separately — Docker rebuilds DOCKER-USER on every daemon
+  # restart, so an enabled unit that has not fired since is a port standing wide open with
+  # a green light next to it, which is precisely the failure this whole section exists for.
+  st="$(systemctl is-active "$LOKI_GUARD_SVC" 2>/dev/null)"
+  case "$st" in
+    active) pass "$LOKI_GUARD_SVC = active (SEC-LOKI-NODEPORT)" ;;
+    *)      warn "$LOKI_GUARD_SVC = ${st:-not-installed} — Loki NodePort $EXP_LOKI_PORT is unrestricted. Install: sudo ./loki-nodeport-guard.sh --install" ;;
+  esac
+  if have iptables && [ "$(id -u)" -eq 0 ]; then
+    if iptables -S DOCKER-USER 2>/dev/null | grep -q -- "-d $EXP_NODE_IP/32 .*--dport $EXP_LOKI_PORT -j DROP"; then
+      pass "DOCKER-USER DROP present for Loki $EXP_NODE_IP:$EXP_LOKI_PORT (host-only)"
+    else
+      fail "NO DOCKER-USER DROP for Loki $EXP_NODE_IP:$EXP_LOKI_PORT — unauthenticated LogQL over 30 days of pipeline logs is reachable from the bridge network. Fix: sudo ./loki-nodeport-guard.sh --install"
+    fi
+  else
+    info "Loki NodePort rule check skipped (needs root) — by hand: sudo ./loki-nodeport-guard.sh --status"
+  fi
 fi
 
 # ============================== 4. HOST + DNS + SERVICES + CRON ==============================
@@ -308,11 +333,34 @@ cloud_crontab() {
 if cloud_crontab | grep -q vault-auto-unseal; then pass "cloud crontab installed (vault-auto-unseal + agents)"
 else warn "cloud crontab not installed — run ./install-cron.sh"; fi
 
-# Root crontab holds the weekly DR backup; only readable as root.
-if sudo -n true 2>/dev/null; then
-  if sudo crontab -u root -l 2>/dev/null | grep -q backup-minikube-mnt; then pass "root weekly DR backup cron present (backup-minikube-mnt.sh)"
-  else warn "root weekly DR backup cron MISSING — reinstall (see restore-scratch.sh phase 8)"; fi
-else info "root crontab check skipped (needs sudo) — re-run with: sudo ./verify-recovery.sh, or check: sudo crontab -u root -l"; fi
+# Root crontab holds the weekly DR backup; only readable as root. Since 2026-08-08 it has a
+# canonical committed copy (cron/root-crontab), so check the same two things as for the cloud
+# crontab: the job is scheduled AND the live schedule matches what a restore would reproduce.
+# This one matters more than its single line suggests — it is the only job that puts data on a
+# different disk. The nightly DB snapshots live on /mnt/minikube-mnt (nvme0n1p6), the same
+# partition as the live stores, so a disk failure takes the stores and their snapshots together
+# and this weekly archive is what is left.
+if [ "$(id -u)" -eq 0 ] || sudo -n true 2>/dev/null; then
+  root_crontab="$(sudo crontab -u root -l 2>/dev/null)"
+  if printf '%s\n' "$root_crontab" | grep -q backup-minikube-mnt; then
+    pass "root weekly DR backup cron present (backup-minikube-mnt.sh)"
+  else
+    fail "root weekly DR backup cron MISSING — the ONLY off-disk backup is not scheduled. Re-arm: sudo ./install-cron.sh --root"
+  fi
+  if [ -r "$VR_SELFDIR/cron/root-crontab" ]; then
+    if diff -q <(printf '%s\n' "$root_crontab" | grep -vE '^\s*#|^\s*$') \
+               <(grep -vE '^\s*#|^\s*$' "$VR_SELFDIR/cron/root-crontab") >/dev/null 2>&1
+    then
+      pass "root crontab matches cron/root-crontab (install-cron.sh --root is safe to re-run)"
+    else
+      warn "root crontab has DRIFTED from cron/root-crontab — a restore would revert the live schedule. Inspect with: sudo ./install-cron.sh --status, then either write back (sudo crontab -u root -l > cron/root-crontab, commit) or adopt the committed one (sudo ./install-cron.sh --root)"
+    fi
+  else
+    warn "cron/root-crontab is missing from the repo — install-cron.sh --root has nothing to install"
+  fi
+else
+  info "root crontab checks skipped (needs sudo) — re-run with: sudo ./verify-recovery.sh, or check: sudo ./install-cron.sh --status"
+fi
 
 # Push notifications (docs/architecture.md §7a). A dead alert channel is indistinguishable
 # from a healthy system, so a restore that silently dropped it is exactly the thing a

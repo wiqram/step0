@@ -664,6 +664,20 @@ The live entry is the **single** line in `root`'s crontab (`sudo crontab -l -u r
 — run output (including the prune) is appended to **`/var/log/minikube-backup.log`**, so
 check there to confirm a run or debug a failure.
 
+> **That line is declarative — edit `cron/root-crontab`, not the live crontab.** Since
+> 2026-08-08 root's crontab has the same treatment as the cloud user's: a committed canonical
+> file installed verbatim by `./install-cron.sh` (`--root` for root alone, `--status` to diff
+> both live crontabs against both files), and reinstalled from that file by `restore-scratch.sh`
+> phase 8. Before then it existed only on the host and, duplicated, as a string literal inside
+> `restore-scratch.sh` — nothing to diff against, two copies free to drift, and a rebuild
+> reproducing the platform's only off-disk backup from memory. It is worth the ceremony for a
+> one-line crontab precisely *because* it is one line: everything else here has a second copy
+> somewhere, and this job is what creates the second copy. `verify-recovery.sh` now **FAILs**
+> when the job is absent and WARNs when the live crontab has drifted from the file.
+> ⚠️ `crontab -u root <file>` replaces root's crontab **wholesale** — that is intended (the file
+> is the whole of it), but a line added by hand and never written back is destroyed on the next
+> install or DR restore.
+
 > **Must run as `root`.** The live mount contains root-owned data dirs
 > (`predictonomy-postgres/pgdata`, the `trading-microservices` MongoDB WiredTiger files,
 > the durable registry). A non-root run would *silently skip* those (tar only warns,

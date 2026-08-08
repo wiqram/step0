@@ -607,6 +607,34 @@ phase4_extract() {
   done
   [ -n "$vol_src" ] || die "no minikube-mnt found in the archive (looked for /mnt/minikube-mnt and the pre-2026-08-07 /mnt/minikube-backups/minikube-mnt)"
   log "shared volume source in archive: $vol_src"
+
+  # SIDE-COPY THE DB SNAPSHOT TREE BEFORE MERGING THE ARCHIVE OVER IT.
+  # yolo-db-snapshots/ (the db-snapshot CronJob's logical dumps — the ONLY valid Mongo
+  # restore source, see CLAUDE.md "Never copy a running database") lives INSIDE the mount
+  # this restore is about to overwrite, and inside the weekly archive. So a restore replays
+  # the snapshot tree as it stood on backup day, and any snapshot taken since is at best
+  # untouched and at worst shadowed by an older file of the same name — at exactly the moment
+  # those newer dumps are most wanted. On 2026-08-07 the rebuild-and-restore left every store
+  # at its 08-03 state with the 08-04/05/06 dumps gone.
+  # `cp -a src/. dest/` MERGES rather than wipes, so newer differently-named dumps do survive
+  # today — but that is an undocumented property of one line, it does not survive an operator
+  # who clears the mount first, and it does not stop a same-named overwrite. Cheap insurance:
+  # stash whatever is on disk now, on the OTHER disk (sda1 staging), before touching anything.
+  # Nothing is ever deleted from here automatically — it is a lifeboat, not a cache.
+  if sudo test -d /mnt/minikube-mnt/yolo-db-snapshots && \
+     [ -n "$(sudo ls -A /mnt/minikube-mnt/yolo-db-snapshots 2>/dev/null)" ]; then
+    _snap_side="/mnt/minikube-backups/pre-restore-db-snapshots-$(date +%m-%d-%y-%H%M)"
+    log "existing DB snapshot tree found — side-copying to $_snap_side BEFORE the archive merge"
+    run "sudo mkdir -p '$_snap_side'"
+    if sudo cp -a /mnt/minikube-mnt/yolo-db-snapshots/. "$_snap_side/" 2>/dev/null; then
+      log "DB snapshots preserved at $_snap_side ($(sudo du -sh "$_snap_side" 2>/dev/null | cut -f1)) — NOT auto-deleted; remove by hand once you are satisfied with the restore"
+    else
+      log "WARN: could not side-copy /mnt/minikube-mnt/yolo-db-snapshots — post-backup dumps may be shadowed by the archive's older copies. Check $_snap_side before proceeding."
+    fi
+  else
+    log "no existing DB snapshot tree on the mount (expected on a bare-metal restore) — nothing to preserve"
+  fi
+
   run "sudo cp -a '$vol_src/.' /mnt/minikube-mnt/"
 
   # 4c. SOPS age key: minikube-mnt/keys-sops-IMPORTANT.txt -> ~/.config/sops/age/keys.txt
@@ -790,23 +818,29 @@ phase8_automation() {
   # Keep the cluster across host reboots.
   run "docker update --restart=unless-stopped minikube || true"
 
-  # Reinstall the cloud crontab from the canonical source of truth (cron/cloud-crontab):
-  # STEP0 automation (vault-auto-unseal, cluster-autostart, reduce-node-docker-cache) + the
-  # per-project autonomous agents (predictonomy/yolo/dyingpaleblue). The host crontab is a
-  # restore-scratch (host-setup) concern — start-scratch.sh (platform bring-up) does NOT touch it.
-  # Agents stay DISARMED until AGENT_PERMISSION_MODE is set in each app's .env.
+  # Reinstall BOTH host crontabs from their canonical sources of truth:
+  #   cron/cloud-crontab — STEP0 automation (vault-auto-unseal, cluster-autostart,
+  #     reduce-node-docker-cache, alerting-pipeline-watch, prune-registry) + the per-project
+  #     autonomous agents (predictonomy/yolo/dyingpaleblue).
+  #   cron/root-crontab  — the weekly DR backup (root because backup-minikube-mnt.sh reads
+  #     0700 datastore dirs / 0600 SMB creds, and tar only records true numeric owners as root).
+  # The host crontabs are a restore-scratch (host-setup) concern — start-scratch.sh (platform
+  # bring-up) does NOT touch them. Agents stay DISARMED until AGENT_PERMISSION_MODE is set.
+  #
+  # ⚠️ Until 2026-08-08 the root line was a STRING LITERAL right here, piped to
+  # `sudo crontab -u root -`, and existed in no committed file. That meant the job producing
+  # the platform's only off-disk insurance was reproduced from a copy that nothing diffed
+  # against anything — the live crontab and this literal could drift apart silently, and
+  # verify-recovery.sh could only check that *a* backup line existed, not that it was the
+  # right one. Do not reintroduce it here: edit cron/root-crontab.
   if [ "$DRY_RUN" = 1 ]; then
-    echo "  DRYRUN> $SCRIPT_DIR/install-cron.sh (canonical cloud crontab)"
+    echo "  DRYRUN> $SCRIPT_DIR/install-cron.sh --cloud  (canonical cron/cloud-crontab)"
+    echo "  DRYRUN> sudo $SCRIPT_DIR/install-cron.sh --root  (canonical cron/root-crontab: weekly DR backup)"
   else
-    "$SCRIPT_DIR/install-cron.sh" && log "cloud crontab installed (canonical)" || log "WARN: cloud crontab install failed"
-  fi
-
-  # Reinstall the SINGLE root backup cron line (needs root to read 0600 keys file).
-  if [ "$DRY_RUN" = 1 ]; then
-    echo "  DRYRUN> sudo crontab -u root - (weekly backup-minikube-mnt.sh Mon 05:00)"
-  else
-    echo '0 5 * * 1 /bin/bash /home/cloud/Ideaprojects/STEP0/backup-minikube-mnt.sh >> /var/log/minikube-backup.log 2>&1' \
-      | sudo crontab -u root - && log "root backup cron installed" || log "WARN: root cron install failed"
+    "$SCRIPT_DIR/install-cron.sh" --cloud && log "cloud crontab installed (canonical)" || log "WARN: cloud crontab install failed"
+    sudo "$SCRIPT_DIR/install-cron.sh" --root \
+      && log "root crontab installed (canonical — weekly DR backup)" \
+      || log "WARN: root crontab install failed — the WEEKLY DR BACKUP IS NOT SCHEDULED. Re-arm: sudo $SCRIPT_DIR/install-cron.sh --root"
   fi
 
   # Re-arm the nightly WD My Cloud rsync backup (8TB .68 -> 16TB .251). Its toolkit
@@ -865,16 +899,23 @@ phase8_automation() {
   fi
 
   # (b) Boot-time systemd units (source cloned with STEP0; installers were never run):
-  #     the 10GbE link watchdog and the dev-box kube-access firewall re-applier. The latter
-  #     MUST be the unit (not start-scratch's one-shot rule apply) because DOCKER-USER is
-  #     wiped on every dockerd restart, so only the boot unit keeps dev-box API access alive.
+  #     the 10GbE link watchdog, the dev-box kube-access firewall re-applier, and the Loki
+  #     NodePort guard. All three MUST be units rather than one-shot rule applies, for the
+  #     same reason: DOCKER-USER is wiped on every dockerd restart, so only a unit that is
+  #     PartOf/After docker.service keeps the rule alive past the next daemon restart.
+  #     For the guard that cuts both ways — without it, Loki's unauthenticated 30310 (30 days
+  #     of pipeline logs incl. follower emails) is reachable from the whole bridge network
+  #     after any Docker restart, with nothing to say so. See loki-nodeport-guard.sh.
   if [ "$DRY_RUN" = 1 ]; then
-    echo "  DRYRUN> sudo $SCRIPT_DIR/10gbe-link-watchdog.sh --install ; sudo $SCRIPT_DIR/enable-devbox-kube-access.sh --install"
+    echo "  DRYRUN> sudo $SCRIPT_DIR/10gbe-link-watchdog.sh --install ; sudo $SCRIPT_DIR/enable-devbox-kube-access.sh --install ; sudo $SCRIPT_DIR/loki-nodeport-guard.sh --install"
   else
     sudo "$SCRIPT_DIR/10gbe-link-watchdog.sh" --install >/dev/null 2>&1 \
       && log "10gbe-link-watchdog.service installed" || log "WARN: 10gbe-link-watchdog --install failed (re-run by hand)."
     sudo "$SCRIPT_DIR/enable-devbox-kube-access.sh" --install >/dev/null 2>&1 \
       && log "devbox-kube-access.service installed" || log "WARN: enable-devbox-kube-access --install failed (re-run by hand)."
+    sudo "$SCRIPT_DIR/loki-nodeport-guard.sh" --install >/dev/null 2>&1 \
+      && log "yolo-loki-nodeport-guard.service installed (SEC-LOKI-NODEPORT)" \
+      || log "WARN: loki-nodeport-guard --install failed — Loki NodePort 30310 is UNRESTRICTED. Re-run: sudo $SCRIPT_DIR/loki-nodeport-guard.sh --install"
   fi
 
   # (c) Persist the WD Cloud NFS off-site mount in fstab (phase 2 only mounted it transiently
