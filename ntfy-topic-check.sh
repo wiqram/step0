@@ -147,5 +147,5 @@ done
 
 echo
 if [ "$RC" -eq 0 ]; then echo "ntfy channel check: OK"
-else echo "ntfy channel check: VIOLATIONS (see x above) — see architecture.md 'Push notifications'" >&2; fi
+else echo "ntfy channel check: VIOLATIONS (see x above) — see docs/architecture.md 'Push notifications'" >&2; fi
 exit "$RC"

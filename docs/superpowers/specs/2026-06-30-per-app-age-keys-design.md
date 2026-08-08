@@ -98,7 +98,7 @@ Per app:
   ~/.vault/age-keys` (belt-and-suspenders) and a phase-9 handoff line noting per-app keys
   re-seed from the offline mirror. No structural change — the design rides existing restore legs.
 - **Spec/docs** — `docs/.../2026-06-30-restore-scratch-design.md` §7 gains an age-keys note;
-  **`base-architecture-scaffold.md`** vault/ section updated: two-recipient `.sops.yaml`, the
+  **`docs/base-architecture-scaffold.md`** vault/ section updated: two-recipient `.sops.yaml`, the
   `gen-app-age-key.sh` onboarding step, and the `kv/data/age-keys/<app>` policy line.
 
 ## 6. Implementation sequence (pilot → roll out → cut over)
@@ -145,5 +145,5 @@ Per app:
    `jenkins-policy.hcl.tmpl` line, `start-vault.sh` seed call, `setup-jenkins-credentials.sh`
    cutover, README.
 2. 7 app repos: two-recipient `.sops.yaml` + re-encrypted `*.secret.sops.env`.
-3. STEP0: `restore-scratch.sh` note + `base-architecture-scaffold.md` + restore spec §7 update.
+3. STEP0: `restore-scratch.sh` note + `docs/base-architecture-scaffold.md` + restore spec §7 update.
 4. This design doc.

@@ -12,7 +12,7 @@
 #       minutes. This watchdog cuts that outage to seconds by re-training the link on demand.
 #       NOTE: the kube-access CONFIG (dev static route, prod DOCKER-USER firewall unit,
 #       prod-minikube kubeconfig) is correct and already survives reboots — the *link* is the
-#       flaky part. See architecture.md §3 and enable-devbox-kube-access.sh / devbox-connect-prod.sh.
+#       flaky part. See docs/architecture.md §3 and enable-devbox-kube-access.sh / devbox-connect-prod.sh.
 #
 # SYMMETRIC: the SAME script runs on prod (enp5s0, 10.10.10.1) and the dev box (eno1, 10.10.10.2).
 #       (prod was enp4s0 until the 2026-08-07 GM9000 NVMe install renumbered PCI; the auto-detect

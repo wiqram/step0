@@ -113,7 +113,7 @@ fi
 # gs://$GCS_BUCKET and prunes with the month rule + a 90-day age floor (Coldline
 # has a 90-day minimum-storage duration; earlier deletes incur a fee). One-time
 # setup (bucket + step0-backup service-account key) is in this file's git history
-# and architecture.md §7.
+# and docs/architecture.md §7.
 # ============================================================================
 ```
 
@@ -267,10 +267,10 @@ phase 1 tooling. gcloud install kept for the commented GCS fallback."
 
 ---
 
-### Task 3: Update `architecture.md` §7
+### Task 3: Update `docs/architecture.md` §7
 
 **Files:**
-- Modify: `architecture.md` — §7 "Off-site copy" (heading + body ~438-466) and the
+- Modify: `docs/architecture.md` — §7 "Off-site copy" (heading + body ~438-466) and the
   components-table row (~530)
 
 - [ ] **Step 1: Rewrite the §7 off-site subsection**
@@ -292,7 +292,7 @@ wording with the WD-over-NFS description (month-retention prune, no floor).
 - [ ] **Step 3: Commit**
 
 ```bash
-git add architecture.md
+git add docs/architecture.md
 git commit -m "docs: architecture §7 off-site copy is WD Cloud (NFS), not GCS Coldline"
 ```
 
@@ -381,7 +381,7 @@ and `ls .../private-cloud-*.tgz | pick_latest_archive` lines — no `gcloud auth
 ## Implementation notes / deviations from plan (2026-07-05, as-built)
 
 The plan above was written from the design; live verification changed three concrete details.
-The scripts + `architecture.md` §7 reflect the **as-built** state below:
+The scripts + `docs/architecture.md` §7 reflect the **as-built** state below:
 
 - **Export path:** confirmed via `showmount` as **`/nfs/private-cloud`** (device-side
   `/mnt/HD/HD_a2/private-cloud`). The `__CONFIRM_WITH_showmount…__` placeholder is gone.

@@ -11,7 +11,7 @@
 # The key is sent only in the HTTP request BODY (via stdin, never argv), so it can't leak via
 # `ps`. Talks to Vault over the NodePort; resolves the minikube IP each pass so it adapts.
 #
-# RUN: started by cron (@reboot + */5 watchdog, see RESTART-RECOVERY.md). flock keeps a single
+# RUN: started by cron (@reboot + */5 watchdog, see docs/RESTART-RECOVERY.md). flock keeps a single
 # instance. Logs ONLY on seal/unseal events (so the log stays tiny). Run by hand to start now:
 #   setsid ~/Ideaprojects/STEP0/vault-auto-unseal.sh >> ~/Ideaprojects/STEP0/logs/vault-auto-unseal.log 2>&1 </dev/null &
 set -uo pipefail

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# prep-9100pro.sh — lay down the DEVBOX-9100PRO-MIGRATION.md §1 partition table on the
+# prep-9100pro.sh — lay down the docs/DEVBOX-9100PRO-MIGRATION.md §1 partition table on the
 # blank Samsung 9100 PRO 4TB, BEFORE the Ubuntu 26.04 install.
 #
 # Why do this now instead of in the installer: a partition table is not data, so it is

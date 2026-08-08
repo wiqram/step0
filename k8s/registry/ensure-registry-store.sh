@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ensure-registry-store.sh — make the `Kachra` registry blob store visible inside the minikube node.
-# R8 (plan.md): persist the registry off /var so a cluster stop no longer wipes every image.
+# R8 (docs/plan.md): persist the registry off /var so a cluster stop no longer wipes every image.
 #
 # MECHANISM (see k8s/registry/README.md for the full reasoning):
 #   minikube's docker driver binds ONE host dir into the node: /mnt/minikube-mnt → /mnt.
@@ -17,7 +17,7 @@ set -euo pipefail
 # Addressed by LABEL via /etc/fstab, never by device node. `Kachra` lived on the 1TB WD10EZEX
 # HDD (sda2) until 2026-08-07, when it moved to its own NVMe partition (nvme0n1p7) by swapping
 # the labels — so nothing here changed. Do not re-introduce a device name in this comment or
-# the code; the label is the contract (GM9000-MIGRATION.md §1.2).
+# the code; the label is the contract (docs/GM9000-MIGRATION.md §1.2).
 SRC="/mnt/kachra/container-registry-images"                  # label `Kachra` — durable, off /var
 DST="/mnt/minikube-mnt/container-registry-images"            # inside the dir minikube binds to /mnt
 FSTAB_LINE="$SRC $DST none bind 0 0"

@@ -3,7 +3,7 @@
 **Date:** 2026-08-04
 **Status:** approved (design), implementation in progress
 **Touches:** `ntfy-lib.sh`, `ntfy-topic-check.sh`, `resource-crunch-watch.sh` → `alerting-pipeline-watch.sh`,
-`install-cron.sh`, `verify-recovery.sh`, `CLAUDE.md`, `RESTART-RECOVERY.md`, `tests/`,
+`install-cron.sh`, `verify-recovery.sh`, `CLAUDE.md`, `docs/RESTART-RECOVERY.md`, `tests/`,
 kube-prometheus `manifests/alertmanager-secret.yaml`, `manifests/platform-hardware-prometheusRule.yaml`,
 `manifests/grafana-datasources.yaml`
 

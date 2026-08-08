@@ -13,7 +13,7 @@
 # (key JENKINS_CRED), NOT hardcoded here — same pattern cluster-autostart.sh uses for
 # NTFY_URL. .env is captured by backup-minikube-mnt.sh (STEP0 is tarred whole) and
 # restored by restore-scratch.sh, so a from-scratch restore has it ready. Rotating the
-# token value itself is tracked in plan.md P0 #1.
+# token value itself is tracked in docs/plan.md P0 #1.
 #
 # Requires: jenkins.traderyolo.com reachable (NPM + DNS up).
 # NOTE: best-effort, NOT set -e — a single unreachable job must not abort the rest.

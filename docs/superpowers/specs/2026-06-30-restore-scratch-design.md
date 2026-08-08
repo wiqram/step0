@@ -158,7 +158,7 @@ curl -sI https://<app-domain>                     # 200 once DNS + app deploy co
 
 ## 9. Out of scope
 - Multi-disk / RAID reconstruction (single-disk chosen).
-- Re-securing/rotating the inline secrets still in the repo (tracked separately in `plan.md` P0).
+- Re-securing/rotating the inline secrets still in the repo (tracked separately in `docs/plan.md` P0).
 - Splunk (already not deployed by `start-scratch.sh`).
 - Automatic DNS repointing (operator-controlled, external).
 
@@ -166,5 +166,5 @@ curl -sI https://<app-domain>                     # 200 once DNS + app deploy co
 1. `trigger-app-builds.sh` (extracted from `start-scratch.sh`).
 2. `start-scratch.sh` edit — `SKIP_APP_BUILDS` guard around the extracted call.
 3. `restore-scratch.sh` (phases 0–9, resumable, non-`set -e`).
-4. `RESTART-RECOVERY.md` / `architecture.md` cross-references to the cold DR path.
+4. `docs/RESTART-RECOVERY.md` / `docs/architecture.md` cross-references to the cold DR path.
 5. This design doc.

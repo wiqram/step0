@@ -77,7 +77,7 @@ fi
 # INSIDE minikube-mnt (ensure-registry-store.sh, R8), so from 2026-06 the tar below
 # had been silently swallowing it — 34G of the 41G 2026-08-03 archive (~83%), and
 # docker blobs are already gzipped so they inflate the tgz ~1:1 — while
-# architecture.md §7 documented the blobs as NOT in the archive (single-disk restore:
+# docs/architecture.md §7 documented the blobs as NOT in the archive (single-disk restore:
 # Jenkins re-pushes every image). The --exclude on the tar line restores that
 # contract; what a bare-metal restore actually needs is the LIST of what to rebuild,
 # which this snapshot captures (every repo + its tags). Best-effort on purpose: with
@@ -92,7 +92,7 @@ if command -v jq >/dev/null 2>&1 \
    && [ -n "$repos_json" ]; then
     {
         echo "# registry catalog snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ) — $REG_URL"
-        echo "# format: <repo> <tags-json>. Blobs are NOT in this archive; Jenkins rebuilds them (architecture.md §7)."
+        echo "# format: <repo> <tags-json>. Blobs are NOT in this archive; Jenkins rebuilds them (docs/architecture.md §7)."
         echo "$repos_json" | jq -r '.repositories[]' | while read -r repo; do
             echo "$repo $(curl -sf --max-time 10 "$REG_URL/v2/$repo/tags/list" | jq -c '.tags' 2>/dev/null)"
         done
@@ -127,7 +127,7 @@ echo
 # container-registry-images is likewise excluded (2026-08-06): it is the kachra blob
 # store bind-mounted inside minikube-mnt — 34G of the 41G 2026-08-03 archive — and the
 # restore contract has always been "registry starts empty; Jenkins re-pushes"
-# (architecture.md §7). registry-catalog.txt (refreshed above) records what to rebuild.
+# (docs/architecture.md §7). registry-catalog.txt (refreshed above) records what to rebuild.
 # tar's exit code was previously discarded; the weekly push reports it, so a truncated
 # or partial archive (rc=2 on a read error, rc=1 on files changing mid-read) now
 # surfaces on the phone instead of only in the cron log.
@@ -353,7 +353,7 @@ fi
 # gs://$GCS_BUCKET and prunes with the month rule + a 90-day age floor (Coldline
 # has a 90-day minimum-storage duration; earlier deletes incur a fee). One-time
 # setup (bucket + step0-backup service-account key) is in this file's git history
-# and architecture.md §7.
+# and docs/architecture.md §7.
 # ============================================================================
 # GCS_BUCKET="private_cloud_backup"                     # GCP project: igtrader-296013
 # GCS_KEY="/home/cloud/.gcp/step0-backup-key.json"      # service-account key (0600, root-readable)

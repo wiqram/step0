@@ -1,4 +1,4 @@
-# vault-data-pv — durable, pre-created PV for Vault's file backend (plan.md P1
+# vault-data-pv — durable, pre-created PV for Vault's file backend (docs/plan.md P1
 # root-cause fix, migrated 2026-07-20). Replaces the Helm-era DYNAMIC hostPath
 # under the VM's /tmp (reclaim Delete) that a minikube rebuild silently destroyed
 # — the 2026-07-14 loss of all runtime-written KV (follower broker secrets,

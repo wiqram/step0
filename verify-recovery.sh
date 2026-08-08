@@ -238,7 +238,7 @@ if have systemctl; then
   # active, both DOCKER-USER rules were present and correct, the link was up — and dev->prod was
   # still 100% dead, because Docker >=28 drops off-host traffic to container IPs in a DIFFERENT
   # table (raw/PREROUTING, priority -300, before conntrack and long before FORWARD). So also
-  # assert the raw ACCEPT that defeats that drop actually exists. See architecture.md §3.
+  # assert the raw ACCEPT that defeats that drop actually exists. See docs/architecture.md §3.
   if have iptables && [ "$(id -u)" -eq 0 ]; then
     if iptables -t raw -C PREROUTING -s "$EXP_10G_PEER" -d "$EXP_NODE_IP" -p tcp --dport "$EXP_API_PORT" -j ACCEPT 2>/dev/null \
     || iptables -t raw -S PREROUTING 2>/dev/null | grep -q -- "-s $EXP_10G_PEER/32 -d $EXP_NODE_IP/32 .*--dport $EXP_API_PORT -j ACCEPT"; then
@@ -298,7 +298,7 @@ if sudo -n true 2>/dev/null; then
   else warn "root weekly DR backup cron MISSING — reinstall (see restore-scratch.sh phase 8)"; fi
 else info "root crontab check skipped (needs sudo) — re-run with: sudo ./verify-recovery.sh, or check: sudo crontab -u root -l"; fi
 
-# Push notifications (architecture.md §7a). A dead alert channel is indistinguishable
+# Push notifications (docs/architecture.md §7a). A dead alert channel is indistinguishable
 # from a healthy system, so a restore that silently dropped it is exactly the thing a
 # post-restore survey should catch. Checked separately from the crontab line above
 # because an OLD cloud-crontab installs cleanly and still lacks the watcher.
@@ -352,7 +352,7 @@ if have kubectl; then
     warn "monitoring/grafana-admin MISSING — Grafana is on admin/admin; run ./sync-grafana-admin.sh"
   fi
 
-  # ---- Alertmanager is actually WIRED to a notifier (architecture.md §7b) ----------
+  # ---- Alertmanager is actually WIRED to a notifier (docs/architecture.md §7b) ----------
   # THE reason this check exists: upstream kube-prometheus ships Default/Watchdog/Critical/
   # null as BARE NAMES with no configuration, and in that state every one of its ~138
   # alerting rules evaluates, fires, reaches Alertmanager and is silently DISCARDED. That
@@ -389,7 +389,7 @@ if have kubectl; then
 fi
 
 # ============================== 5. HOST STORAGE LAYOUT ==============================
-section "5. Host storage layout (GM9000-MIGRATION.md §1.2 — partitions are chosen in the INSTALLER)"
+section "5. Host storage layout (docs/GM9000-MIGRATION.md §1.2 — partitions are chosen in the INSTALLER)"
 
 # Why this section exists. On 2026-08-07, after the fresh 26.04 install, all three NVMe
 # partitions were present with the correct labels AND the correct sizes — while /etc/fstab

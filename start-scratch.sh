@@ -52,7 +52,7 @@ Check: minikube status / kubectl get po -A / ./verify-recovery.sh" \
   ${SS_ERR_CMD:-unknown command}
 
 set -e means the cluster is HALF-BUILT - it is not safe to assume anything past that
-line ran. Re-run after fixing; see RESTART-RECOVERY.md before reaching for a delete." \
+line ran. Re-run after fixing; see docs/RESTART-RECOVERY.md before reaching for a delete." \
       "urgent" "rotating_light,cloud"
   fi
 }
@@ -83,12 +83,12 @@ if kubectl version; then
   #    minikube delete
 else
   echo "Minikube NOT running - Creating one now"
-  # R8 (plan.md): establish the sdb2 registry-blob bind BEFORE the node is created, so the docker
+  # R8 (docs/plan.md): establish the sdb2 registry-blob bind BEFORE the node is created, so the docker
   # rbind captures it at container-creation time (durable registry store; see k8s/registry/README.md).
   "$(dirname "$SCRIPT_PATH")/k8s/registry/ensure-registry-store.sh"
   #minikube start --cpus 4 --memory 16384 --nodes 2 #--driver=none--driver=docker --alsologtostderr -v=4
   #---------------------------------------------------------------------------------------------------------
-  # Resource-efficient start (see plan.md "Cluster resource efficiency" section). Key changes vs the old line:
+  # Resource-efficient start (see docs/plan.md "Cluster resource efficiency" section). Key changes vs the old line:
   #   --cpus 16            : CPU is compressible (throttles, never OOM-kills) so we give burst headroom while
   #                          still leaving ~8 threads for the host (IntelliJ + Chrome). Mem is the hard limit, not CPU.
   #   --memory 65536       : 64G envelope on the 96G DDR5 host (2x32G + 2x16G; was 32768/32G on the old 48G host).
@@ -103,7 +103,7 @@ else
   #                          won't grant. (Was memory=2Gi, which left Allocatable ~89Gi -> 25Gi of silent over-commit;
   #                          only the eviction-hard backstop saved it, and only by thrashing at the very edge.)
   #                          CPU stays over-advertised (24 cap vs 16 cgroup) on purpose: CPU is compressible (throttles,
-  #                          never OOM-kills), so the burst headroom is free. zram swap stays on as a cheap net (plan.md).
+  #                          never OOM-kills), so the burst headroom is free. zram swap stays on as a cheap net (docs/plan.md).
   # ---- Host-adaptive sizing (2026-08-07) --------------------------------------------------
   # --memory and system-reserved USED TO BE hardcoded for the 96G host (65536 / 31Gi). That
   # is fatal on a box with less RAM: `minikube start --memory 65536` on a 32G host refuses to
@@ -206,7 +206,7 @@ sudo -n "$HOME/Ideaprojects/STEP0/enable-devbox-kube-access.sh" || echo "devbox-
 # unchanged across a full run, dev box never lost access). It DOES change when ~/.minikube is
 # recreated — a fresh OS install, or minikube-delete-and-upgrade.sh, which rm -r's it. Re-emitting
 # unconditionally is idempotent and costs nothing, and covers that case without needing to guess.
-# No root needed; only writes a file in $HOME. The dev box still pulls/merges it — architecture.md §3.
+# No root needed; only writes a file in $HOME. The dev box still pulls/merges it — docs/architecture.md §3.
 "$HOME/Ideaprojects/STEP0/enable-devbox-kube-access.sh" --emit-kubeconfig \
   || echo "devbox-kube-access: kubeconfig re-emit skipped (re-run --emit-kubeconfig by hand)"
 ###########x`######grafana-prometheus###########################

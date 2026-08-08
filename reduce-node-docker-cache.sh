@@ -6,7 +6,7 @@
 #
 ####################################
 #
-# WHY THIS EXISTS (plan.md R7):
+# WHY THIS EXISTS (docs/plan.md R7):
 #   Jenkins builds every app image INSIDE minikube's embedded docker daemon, whose
 #   data-root is the `minikube` docker volume at
 #   /var/lib/docker/volumes/minikube/_data — i.e. on /var (sda7). Each build adds

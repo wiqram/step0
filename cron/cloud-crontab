@@ -74,7 +74,7 @@
 */5 * * * * /home/cloud/Ideaprojects/STEP0/alerting-pipeline-watch.sh >> /home/cloud/Ideaprojects/STEP0/logs/alerting-pipeline-watch.cron.log 2>&1
 
 # Docker build-cache cap (node AND host) + orphaned build-cache volume reclaim — bound
-# /var against Jenkins build churn (plan.md R7). EVERY 6 HOURS, was daily 04:30.
+# /var against Jenkins build churn (docs/plan.md R7). EVERY 6 HOURS, was daily 04:30.
 # Why the change (2026-08-04): a cap bounds the FLOOR after a prune, not the PEAK.
 # Peak = cap + what accumulates between runs, and that accumulation is ~10GB/day of
 # cold buildkit tail — which is how /var hit 90% and the kubelet declared

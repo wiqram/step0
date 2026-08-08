@@ -7,7 +7,7 @@
 # keybindings live in per-user dconf (~/.config/dconf/user) — a binary blob that is in no
 # git repo, is NOT swept by the weekly DR archive (backup-minikube-mnt.sh takes /mnt +
 # nginx + STEP0 + qcguy + ~/wd-backup, not ~/.config), and is destroyed by a boot-disk
-# swap. So after GM9000-MIGRATION.md or DEVBOX-9100PRO-MIGRATION.md you come back to a
+# swap. So after docs/GM9000-MIGRATION.md or docs/DEVBOX-9100PRO-MIGRATION.md you come back to a
 # working cluster and a keyboard that has forgotten every shortcut you built muscle
 # memory for. This script is the declarative record, so re-arming it is one command.
 #

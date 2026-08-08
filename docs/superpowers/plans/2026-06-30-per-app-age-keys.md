@@ -35,7 +35,7 @@
 | `<app>/vault/.sops.yaml` (modify ×7) | app repos | Add per-app recipient (now 2) |
 | `<app>/vault/*.secret.sops.env` (modify ×7) | app repos | `sops updatekeys` re-encrypt to both |
 | `restore-scratch.sh` (modify) | STEP0 | `mkdir ~/.vault/age-keys` (phase 3) + handoff note |
-| `base-architecture-scaffold.md`, restore spec §7 (modify) | STEP0 | Document per-app + master model |
+| `docs/base-architecture-scaffold.md`, restore spec §7 (modify) | STEP0 | Document per-app + master model |
 
 ---
 
@@ -483,7 +483,7 @@ git push origin "$(git branch --show-current)"
 
 ## Task 12: Reflect in STEP0 (restore + docs)
 
-**Files:** Modify `restore-scratch.sh`, `base-architecture-scaffold.md`, `docs/superpowers/specs/2026-06-30-restore-scratch-design.md` (STEP0)
+**Files:** Modify `restore-scratch.sh`, `docs/base-architecture-scaffold.md`, `docs/superpowers/specs/2026-06-30-restore-scratch-design.md` (STEP0)
 
 - [ ] **Step 1: `restore-scratch.sh` phase 3 — pre-create the mirror dir**
 In `restore-scratch.sh`, in `phase3_dirs()`, after the existing `mkdir` lines add:
@@ -500,7 +500,7 @@ In the phase-9 `DONE` banner, after the Jenkins-credential note, add a line:
   recovery anchor — keep it backed up off-box.
 ```
 
-- [ ] **Step 3: Update `base-architecture-scaffold.md` §3.5 (vault/) for the new model**
+- [ ] **Step 3: Update `docs/base-architecture-scaffold.md` §3.5 (vault/) for the new model**
 Replace the single-recipient `.sops.yaml` example with the two-recipient form and add the onboarding step:
 ```markdown
 # vault/.sops.yaml — TWO recipients: this app's own key + the master recovery key
@@ -521,7 +521,7 @@ And in the §4 platform-registration table, add a row before the NodePort row:
 cd /home/cloud/Ideaprojects/STEP0
 bash -n restore-scratch.sh && echo OK
 ./restore-scratch.sh --dry-run --from-phase 0 2>&1 | grep -cE 'PHASE [0-9]'   # expect 10
-git add restore-scratch.sh base-architecture-scaffold.md docs/superpowers/specs/2026-06-30-restore-scratch-design.md
+git add restore-scratch.sh docs/base-architecture-scaffold.md docs/superpowers/specs/2026-06-30-restore-scratch-design.md
 git commit -m "docs+restore: reflect per-app age keys (mirror re-seed, scaffold, restore note)"
 git push origin master
 ```

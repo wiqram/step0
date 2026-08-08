@@ -19,10 +19,10 @@
 #  - file-backend tar of a RUNNING Vault is crash-consistent (same tier as the
 #    hot Mongo/pg file copies this cloud already relies on; a restore replays to
 #    the snapshot moment). Acceptable at this scale; the real fix (durable PV
-#    with Retain under the shared mount) is tracked in plan.md.
+#    with Retain under the shared mount) is tracked in docs/plan.md.
 #  - Retention: keep the newest 14 dailies here (the weekly archive + WD carry
-#    the long tail per the month-retention convention in architecture.md §7).
-#  - Restore: RESTART-RECOVERY.md "Vault data lost" entry — scale vault to 0,
+#    the long tail per the month-retention convention in docs/architecture.md §7).
+#  - Restore: docs/RESTART-RECOVERY.md "Vault data lost" entry — scale vault to 0,
 #    untar the newest vault-data-*.tgz back into the node path, scale up, unseal.
 apiVersion: batch/v1
 kind: CronJob

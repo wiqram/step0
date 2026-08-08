@@ -5,7 +5,7 @@ Runbook for upgrading this host from **Ubuntu 24.04.4 LTS (Noble)** to **Ubuntu 
 planned the week of 2026-08-10.
 
 Companion documents: [`GM9000-MIGRATION.md`](./GM9000-MIGRATION.md) (the disk swap this box
-just went through) and [`nginx/CLAUDE.md`](../nginx/CLAUDE.md) (the NPM stack).
+just went through) and [`nginx/CLAUDE.md`](../../nginx/CLAUDE.md) (the NPM stack).
 
 > **Do not run `do-release-upgrade` as your first action.** It will produce a system whose
 > container stack does not start. Read §0, then do §2 **days before** §4.

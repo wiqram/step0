@@ -4,7 +4,7 @@
 # RUN THIS ON THE DEV BOX (vik@10.10.10.2), not on the prod host. It is the from-scratch
 # counterpart to STEP0's enable-devbox-kube-access.sh (which runs on prod). Together they give
 # the dev box `kubectl` + IntelliJ Services access to the prod Kubernetes API (172.16.238.2:8443).
-# API-only — no registry/NodePort. See architecture.md §3 "Dev box <-> prod cluster over 10GbE".
+# API-only — no registry/NodePort. See docs/architecture.md §3 "Dev box <-> prod cluster over 10GbE".
 #
 # It does two idempotent things:
 #   1. route     — persistent NetworkManager route API_IP/32 via the 10GbE gateway, so API

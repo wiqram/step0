@@ -8,7 +8,7 @@
 # Goes to https://jenkins.traderyolo.com through NPM like any public client (prod runs
 # no sshd; the 10GbE link is kube-API-only). Credential comes from the seeded
 # ~/.jenkins-deploy-urls.env (JENKINS_CRED=user:api-token, chmod 600) — see
-# architecture.md §3 "Triggering Jenkins deploys from the dev box" for the re-seed line.
+# docs/architecture.md §3 "Triggering Jenkins deploys from the dev box" for the re-seed line.
 #
 # App → job/endpoint/build-token mapping mirrors STEP0/jenkins-jobs.manifest; keep the
 # two in sync when adding an app.

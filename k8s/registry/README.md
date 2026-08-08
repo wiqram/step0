@@ -1,8 +1,8 @@
-# Durable container registry (plan.md R8)
+# Durable container registry (docs/plan.md R8)
 
 Replaces minikube's ephemeral `registry` addon with a **self-managed registry whose blobs live on
 sdb2 (`/mnt/kachra`)**, so a `minikube stop`/crash no longer wipes every pushed image (the
-2026-06-16 outage, twice — see `RESTART-RECOVERY.md` N-0006 #2).
+2026-06-16 outage, twice — see `docs/RESTART-RECOVERY.md` N-0006 #2).
 
 ## Why the addon couldn't just be patched
 The addon Deployment is `addonmanager.kubernetes.io/mode: Reconcile`: a `kubectl patch` to add a
@@ -42,7 +42,7 @@ kubectl apply -f k8s/registry/             # PV, PVC, registry, proxy
 Then re-push images from the node's docker cache (same as outage recovery):
 ```bash
 minikube ssh -- 'docker push container-registry.traderyolo.com/jenkins-inbound-agent-vik:cloud'
-# ...then each app image; see RESTART-RECOVERY.md triage row 3 / HANDOFF §2
+# ...then each app image; see docs/RESTART-RECOVERY.md triage row 3 / HANDOFF §2
 ```
 
 ## Acceptance test (the one that proves R8)

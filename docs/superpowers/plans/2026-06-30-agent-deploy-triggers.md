@@ -252,7 +252,7 @@ Expected: still lists `AGENT_PERMISSION_MODE` and `NTFY_URL` plus the new `JENKI
 
 ## Task 5: restore wiring + docs
 
-**Files:** Modify `/home/cloud/Ideaprojects/STEP0/restore-scratch.sh`; brief note in `base-architecture-scaffold.md`
+**Files:** Modify `/home/cloud/Ideaprojects/STEP0/restore-scratch.sh`; brief note in `docs/base-architecture-scaffold.md`
 
 - [ ] **Step 1: Call the seed in restore phase 8 (after repos are cloned in phase 5)**
 In `restore-scratch.sh` `phase8_automation()`, just before its `mark_phase 8`, add:
@@ -274,13 +274,13 @@ In the phase-9 `DONE` banner, after the per-app age-keys line, add:
 Run: `cd /home/cloud/Ideaprojects/STEP0 && bash -n restore-scratch.sh && echo OK && ./restore-scratch.sh --dry-run --from-phase 0 2>&1 | grep -cE 'PHASE [0-9]'`
 Expected: `OK`, `10`.
 
-- [ ] **Step 4: Note in base-architecture-scaffold.md §4 (cold-boot trigger row)**
+- [ ] **Step 4: Note in docs/base-architecture-scaffold.md §4 (cold-boot trigger row)**
 Append to the "Cold-boot build trigger" row's cell: ` New apps: add a line to STEP0/jenkins-jobs.manifest (app job endpoint token); agents assemble JENKINS_DEPLOY_URL via STEP0/jenkins-deploy-url.sh — never store the token per-repo.`
 
 - [ ] **Step 5: Commit + push everything**
 ```bash
 cd /home/cloud/Ideaprojects/STEP0
-git add restore-scratch.sh base-architecture-scaffold.md
+git add restore-scratch.sh docs/base-architecture-scaffold.md
 git commit -m "restore+docs: re-arm agent deploy URLs on restore; manifest onboarding note"
 git push origin master
 ```

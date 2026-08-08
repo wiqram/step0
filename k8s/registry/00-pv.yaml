@@ -1,4 +1,4 @@
-# R8 — durable registry blob storage (plan.md). PV backed by a hostPath that, inside the
+# R8 — durable registry blob storage (docs/plan.md). PV backed by a hostPath that, inside the
 # minikube node, resolves to /mnt/container-registry-images. That node path is the host bind
 #   /mnt/kachra/container-registry-images  (sdb2, 195G free)  →
 #   /mnt/minikube-backups/minikube-mnt/container-registry-images  (the dir minikube binds to /mnt)

@@ -29,7 +29,7 @@
 | `restore-lib.sh` (create) | Pure, sourceable functions: `pick_latest_archive`, `restore_repo_manifest`. No side effects. |
 | `tests/test-restore-lib.sh` (create) | Bash unit test asserting `pick_latest_archive` and the manifest. |
 | `restore-scratch.sh` (create) | The DR orchestrator: phases 0–9, resumable via phase marker, `--dry-run`/`--from-phase` flags, non-`set -e`. |
-| `RESTART-RECOVERY.md`, `architecture.md` (modify) | Cross-reference the new cold DR path. |
+| `docs/RESTART-RECOVERY.md`, `docs/architecture.md` (modify) | Cross-reference the new cold DR path. |
 
 ---
 
@@ -54,7 +54,7 @@
 # separately once DNS points at this host.
 #
 # Each curl carries the inline Jenkins API credential + per-job build token (these
-# already live in the repo; rotating/relocating them is tracked in plan.md P0 #1 and
+# already live in the repo; rotating/relocating them is tracked in docs/plan.md P0 #1 and
 # is out of scope here). Requires: jenkins.traderyolo.com reachable (NPM + DNS up).
 #
 # NOTE: best-effort, NOT set -e — a single unreachable job must not abort the rest.
@@ -881,7 +881,7 @@ git add restore-scratch.sh && git commit -m "feat(restore): phase 9 — verifica
 - Modify: `/home/cloud/Ideaprojects/STEP0/architecture.md`
 - Modify: `/home/cloud/Ideaprojects/STEP0/CLAUDE.md` (Key files table)
 
-- [ ] **Step 1: Add a "Total-loss / bare-metal" row to RESTART-RECOVERY.md**
+- [ ] **Step 1: Add a "Total-loss / bare-metal" row to docs/RESTART-RECOVERY.md**
 
 Add near the warm-vs-cold decision section:
 
@@ -904,7 +904,7 @@ Add a row:
 | `trigger-app-builds.sh` | The per-app Jenkins build triggers, extracted from `start-scratch.sh`. Run after a restore once DNS points at the host. |
 ```
 
-- [ ] **Step 3: Add an architecture.md §7 note that restore inverts the backup**
+- [ ] **Step 3: Add an docs/architecture.md §7 note that restore inverts the backup**
 
 Append to §7 (Off-site copy): one paragraph noting `restore-scratch.sh` is the documented inverse — pulls the newest `private-cloud-*.tgz` via interactive `gcloud auth login`, and that registry blobs (on sdb2) and ollama models are NOT in the archive so they are rebuilt/re-pulled.
 
@@ -922,7 +922,7 @@ Expected: `OK` for all four; unit test exit 0; the phase count is `10` (phases 0
 - [ ] **Step 5: Commit**
 
 ```bash
-git add RESTART-RECOVERY.md architecture.md CLAUDE.md
+git add docs/RESTART-RECOVERY.md docs/architecture.md CLAUDE.md
 git commit -m "docs: cross-reference restore-scratch.sh cold DR path"
 ```
 

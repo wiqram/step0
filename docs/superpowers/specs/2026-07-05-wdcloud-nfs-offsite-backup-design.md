@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-05
 **Status:** approved (design), pending implementation
-**Touches:** `backup-minikube-mnt.sh`, `restore-scratch.sh`, `architecture.md` §7, `CLAUDE.md`
+**Touches:** `backup-minikube-mnt.sh`, `restore-scratch.sh`, `docs/architecture.md` §7, `CLAUDE.md`
 
 ## Goal
 
@@ -107,7 +107,7 @@ The old GCS block (vars + upload + floored prune) is moved into a `# ---- GCS Co
 
 ## Change 3 — docs
 
-- **`architecture.md` §7** "Off-site copy — Google Cloud Storage Coldline" → rewrite for
+- **`docs/architecture.md` §7** "Off-site copy — Google Cloud Storage Coldline" → rewrite for
   **WD Cloud over NFS** (mount, month-retention prune with **no** 90-day floor, guarded/additive).
   Update the §7 restore paragraph and the components-table row (line ~530) similarly.
 - **`CLAUDE.md`** — the `backup-minikube-mnt.sh` row, the `restore-scratch.sh` row, and the

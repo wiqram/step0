@@ -4,8 +4,8 @@ Bootstrap layer for a **single-node, GPU-accelerated private cloud** running on 
 workstation (`private-cloud`). This repo is a collection of bash scripts + manifests — not
 an application. It brings the whole stack up from a clean machine and keeps it alive.
 
-> **Cluster unhealthy after a reboot/crash?** → read **[`RESTART-RECOVERY.md`](./RESTART-RECOVERY.md)** first.
-> **Building a brand-new app on the cluster?** → read **[architecture.md §10](./architecture.md#10-deploying-a-new-app-onto-the-cluster-dev--prod-scaffolding)** (new-app scaffolding).
+> **Cluster unhealthy after a reboot/crash?** → read **[`docs/RESTART-RECOVERY.md`](./docs/RESTART-RECOVERY.md)** first.
+> **Building a brand-new app on the cluster?** → read **[docs/architecture.md §10](./docs/architecture.md#10-deploying-a-new-app-onto-the-cluster-dev--prod-scaffolding)** (new-app scaffolding).
 
 ---
 
@@ -47,11 +47,11 @@ forwards it to a Kubernetes NodePort on `172.16.238.2`.
 
 | Doc | When to read it |
 |---|---|
-| **[architecture.md](./architecture.md)** | The full system design — host, network, bootstrap flow, platform services, apps, persistence/backups, **and §10 "deploy a new app"**. The single source of truth. |
-| **[RESTART-RECOVERY.md](./RESTART-RECOVERY.md)** | Cluster down/unhealthy after reboot — warm-vs-cold decision, what auto-recovers, symptom→fix triage. **Read first in an incident.** |
-| **[plan.md](./plan.md)** | The improvement backlog (P0/P1…), including known fragilities and tech debt. |
+| **[docs/architecture.md](./docs/architecture.md)** | The full system design — host, network, bootstrap flow, platform services, apps, persistence/backups, **and §10 "deploy a new app"**. The single source of truth. |
+| **[docs/RESTART-RECOVERY.md](./docs/RESTART-RECOVERY.md)** | Cluster down/unhealthy after reboot — warm-vs-cold decision, what auto-recovers, symptom→fix triage. **Read first in an incident.** |
+| **[docs/plan.md](./docs/plan.md)** | The improvement backlog (P0/P1…), including known fragilities and tech debt. |
 | **[CLAUDE.md](./CLAUDE.md)** | Conventions/guardrails for Claude Code working in this repo. |
-| **[VAULT-SECRETS.md](./VAULT-SECRETS.md)** | Vault secret handling notes. |
+| **[docs/VAULT-SECRETS.md](./docs/VAULT-SECRETS.md)** | Vault secret handling notes. |
 | `HANDOFF-*.md` | Point-in-time incident handoffs. |
 
 ## Key scripts
@@ -61,7 +61,7 @@ forwards it to a Kubernetes NodePort on `172.16.238.2`.
 | `start-scratch.sh` | **Master cold bootstrap** (order matters: network → minikube → addons → monitoring → vault → jenkins → apps → splunk). |
 | `restart-minikube.sh` | Warm restart (reuse cluster, idempotent vault, most apps commented out). |
 | `cluster-autostart.sh` / `vault-auto-unseal.sh` | Host crons that auto-heal the cluster + keep Vault unsealed after a reboot. |
-| `backup-minikube-mnt.sh` | **Weekly `root` cron** DR backup (see [architecture.md §7](./architecture.md#7-persistence--backups)). |
+| `backup-minikube-mnt.sh` | **Weekly `root` cron** DR backup (see [docs/architecture.md §7](./docs/architecture.md#7-persistence--backups)). |
 | `k8s/vault-backup/` | Vault durability (2026-07-20): the durable Retain PV/PVC for Vault's file backend + the daily in-cluster snapshot CronJob (`vault/vault-data-backup`, 04:30 UTC → `minikube-mnt/vault-backups/`). Applied by `start-scratch.sh` **before** `start-vault.sh`. |
 | `minikube-delete-and-upgrade.sh`, `reduce-*.sh`, `delete-docker-reg-images.sh`, `remove-old-snaps.sh` | Rebuild / disk-space maintenance. |
 
@@ -80,9 +80,9 @@ cat /etc/cron.d/wd-backup       # nightly 02:00 WD My Cloud 8TB→16TB backup (/
 ## Common operations
 
 - **Cold rebuild from scratch:** `bash start-scratch.sh` (mutates live infra — be sure).
-- **Warm restart after reboot:** usually automatic; otherwise see RESTART-RECOVERY.md.
+- **Warm restart after reboot:** usually automatic; otherwise see docs/RESTART-RECOVERY.md.
 - **Run a backup now:** `sudo bash backup-minikube-mnt.sh` (must be root; flock-guarded).
-- **Onboard a new app:** follow the checklist in [architecture.md §10](./architecture.md#10-deploying-a-new-app-onto-the-cluster-dev--prod-scaffolding); copy `qcguy-ghost/` (simple) or `ollama` (GPU) as templates.
+- **Onboard a new app:** follow the checklist in [docs/architecture.md §10](./docs/architecture.md#10-deploying-a-new-app-onto-the-cluster-dev--prod-scaffolding); copy `qcguy-ghost/` (simple) or `ollama` (GPU) as templates.
 
 > ⚠️ These scripts act on **real running infrastructure and public websites**. Confirm
 > before anything that mutates the live cluster (`minikube`, `kubectl apply`, `docker push`,

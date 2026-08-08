@@ -24,7 +24,7 @@ else
   echo "Minikube NOT running - Creating one now"
   #minikube start --cpus 4 --memory 16384 --nodes 2 #--driver=none--driver=docker --alsologtostderr -v=4
   #---------------------------------------------------------------------------------------------------------
-  # Mirrors the resource-efficient start line in start-scratch.sh (see plan.md "Cluster resource efficiency").
+  # Mirrors the resource-efficient start line in start-scratch.sh (see docs/plan.md "Cluster resource efficiency").
   #   --cpus 16 --memory 65536 : matches the cold-boot envelope so a warm rebuild gets the same sizing.
   #                          64G envelope on the 96G DDR5 host (2x32G + 2x16G; was 32768/32G on the old 48G host).
   #   kubelet system-reserved=31Gi : docker driver advertises the FULL host (24CPU/96G) to the scheduler (kubelet
@@ -32,7 +32,7 @@ else
   #                          reservation must bridge the whole host->cgroup gap: 94Gi cap - 31Gi sys - 2Gi kube - 1Gi
   #                          evict => ~60Gi Allocatable, ~4Gi under the 64G cgroup. (Was 2Gi -> ~89Gi Allocatable =
   #                          25Gi silent over-commit.) CPU left over-advertised on purpose (compressible). See
-  #                          start-scratch.sh for the full rationale. zram swap stays on the host (plan.md R1).
+  #                          start-scratch.sh for the full rationale. zram swap stays on the host (docs/plan.md R1).
   #   --gpus all           : added for parity with start-scratch so Ollama can claim the GPU on a warm rebuild
   #                          (if so, also uncomment the nvidia-gpu-device-plugin addon below).
   minikube start --cpus 16 --memory 65536 --disk-size 40g --driver=docker --network 5million --gpus all --mount-string="/mnt/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.system-reserved=cpu=1,memory=31Gi --extra-config=kubelet.kube-reserved=cpu=1,memory=2Gi --extra-config=kubelet.eviction-hard="memory.available<1Gi,nodefs.available<10%" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0

@@ -293,7 +293,7 @@ phase1_tooling() {
   fi
 
   # Order the docker unit behind its own partition, BEFORE docker exists. On this box
-  # /var/lib/docker is a separate filesystem (GM9000-MIGRATION.md §1.2, p5 'docker-data').
+  # /var/lib/docker is a separate filesystem (docs/GM9000-MIGRATION.md §1.2, p5 'docker-data').
   # Without this drop-in dockerd can start before that mount lands, write its whole graph
   # into the underlying directory, and then have the mount shadow it — images and volumes
   # are not lost, they are simply invisible, and the partition looks mysteriously empty.
@@ -327,7 +327,7 @@ phase1_tooling() {
   # `cgroupfs` on a v2 host gives docker the wrong driver against a systemd-managed
   # hierarchy: containers fail to start or the node misreports resources, and never with a
   # clean error at the point of misconfiguration. `systemd` is also what kubeadm expects.
-  # See UBUNTU-UPGRADE.md §0 and §2.3, which called out this exact line as the thing that
+  # See docs/UBUNTU-UPGRADE.md §0 and §2.3, which called out this exact line as the thing that
   # would silently revert the migration if restore-scratch.sh were re-run afterwards.
   if [ ! -f /etc/docker/daemon.json ]; then
     if [ "$DRY_RUN" = 1 ]; then
@@ -517,7 +517,7 @@ phase3_dirs() {
   ensure_labeled_mount Kachra           /mnt/kachra
 
   # --- OS-level partition layout (VERIFY ONLY — never mutates) -----------------------------
-  # GM9000-MIGRATION.md §1.2 puts /var, /home and /var/lib/docker on their own labelled
+  # docs/GM9000-MIGRATION.md §1.2 puts /var, /home and /var/lib/docker on their own labelled
   # partitions of the 4TB NVMe. Those mountpoints are chosen in the INSTALLER, not here — but
   # the installer silently NOT applying them is a real, observed failure. After the 2026-08-07
   # reinstall all three partitions existed with the correct labels and sizes while /etc/fstab
@@ -994,7 +994,7 @@ MANUAL host-level steps NOT auto-reconstructed (credentials / can't be scripted 
      archive. The per-host "Websockets Support" toggle lives in NPM's own database, not in
      any repo. grafana.traderyolo.com needs it ON or Grafana Live (/api/live/ws) 400s in a
      retry loop. Verify with a FORCED HTTP/1.1 upgrade — over HTTP/2 the classic handshake
-     is invalid and 400s regardless, which reads as a false failure. See architecture.md
+     is invalid and 400s regardless, which reads as a false failure. See docs/architecture.md
      "Grafana public access".
 ==================================================================
 DONE
