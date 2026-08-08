@@ -164,6 +164,39 @@ set -euo pipefail
 trap 'echo "FAILED at line $LINENO: $BASH_COMMAND" >&2' ERR
 ```
 
+### 19. yolo `shadow` MongoDB has NO recoverable backup (added 2026-08-08)
+
+**This is the highest-severity open item in this file — do it before any P2 polish.**
+`verify-recovery.sh` FAILs on it today, and it is the only FAIL on an otherwise healthy
+box (59 PASS / 2 WARN / 1 FAIL under sudo, 2026-08-08):
+
+```
+FAIL shadow: no dump file (*.archive.gz/*.dump/*.sql) under
+     /mnt/minikube-mnt/yolo-db-snapshots/shadow
+```
+
+Every sibling database has a current logical dump — `notifications`, `private`, `quant`
+and `postgres` all snapshotted within the day. `shadow` has none, so **no `db-snapshot`
+CronJob targets it.**
+
+Why this is worse than it looks, and why the weekly DR tar does not cover it: per the
+"never copy a running database" rule (CLAUDE.md, and `docs/RESTART-RECOVERY.md`), the raw
+WiredTiger directories swept into `private-cloud-<date>.tgz` are **not** a valid Mongo
+restore source. Mongo restores from them faithfully and then fails its own checksums
+(`WiredTiger.wt: potential hardware corruption`). Postgres and MySQL survive a live copy
+only because they replay a WAL/binlog; Mongo does not. So the archive gives false comfort
+here — the data appears backed up and is not recoverable.
+
+Fix: add a `shadow` target to the `db-snapshot` CronJob set in the yolo repo, matching the
+existing four (logical `mongodump` → `/mnt/minikube-mnt/yolo-db-snapshots/shadow`), then
+confirm `verify-recovery.sh` goes green. Also confirm whether `shadow` is live or retired —
+if retired, the correct fix is to remove the database, not to back it up; `verify-recovery.sh`
+already has an "info … retired database" path for `quant-recovered*` that would apply.
+
+⚠️ Owned by the **yolo** repo (the CronJobs live there), not STEP0 — but tracked here because
+STEP0's survey is what detects it. Related open WARN: `db-snapshot-audit` has never run, so
+the `audit` database is in the same position until its first scheduled run.
+
 ---
 
 ## P2 — Maintainability & operability
@@ -343,12 +376,15 @@ for real traffic would need Ollama to expose `/metrics` itself.
 
 ## Suggested order of execution
 
-1. **P0 #1, #2** — rotate + remove secrets (urgent, independent of everything else).
-2. **P1 #6, #7, #8** — quick correctness fixes (subnet, paths, strict mode).
-3. **P1 #3, #4, #5** — readiness gates + idempotency (biggest reliability win).
-4. **P2 #9** — unify the two scripts (prevents future drift; do after #3–#5 so the
+1. **P1 #19** — give the yolo `shadow` Mongo a logical backup (or retire it). Highest
+   severity in this file: it is a live database with no recoverable restore source, and
+   the weekly DR tar does **not** cover it. One CronJob target; do it first.
+2. **P0 #1, #2** — rotate + remove secrets (urgent, independent of everything else).
+3. **P1 #6, #7, #8** — quick correctness fixes (subnet, paths, strict mode).
+4. **P1 #3, #4, #5** — readiness gates + idempotency (biggest reliability win).
+5. **P2 #9** — unify the two scripts (prevents future drift; do after #3–#5 so the
    functions you extract are already correct).
-5. **P2 #10–#15** — operability polish.
+6. **P2 #10–#15** — operability polish.
 
 ---
 
