@@ -6,17 +6,20 @@
 ####################################
 # WHY THIS EXISTS (2026-08-04)
 #
-# kube-prometheus mounts Grafana's /var/lib/grafana from an **emptyDir**. Grafana keeps
-# its users — including the admin password — in a SQLite DB in there, so the DB is
+# kube-prometheus USED TO mount Grafana's /var/lib/grafana from an **emptyDir**. Grafana
+# keeps its users — including the admin password — in a SQLite DB in there, so the DB was
 # destroyed on every pod restart, every rollout, and every minikube rebuild. Setting the
-# password in the Grafana UI therefore lasts exactly until the next restart, after which
-# the login silently reverts to the built-in admin/admin.
+# password in the Grafana UI therefore lasted exactly until the next restart, after which
+# the login silently reverted to the built-in admin/admin. That volume is now a durable PV
+# (kube-prometheus manifests/grafana-dataVolume.yaml), so the DB survives.
 #
-# Grafana re-applies GF_SECURITY_ADMIN_USER / GF_SECURITY_ADMIN_PASSWORD to the admin
-# account on EVERY startup, on a fresh DB or an existing one. So the fix is to feed those
-# two env vars from something that outlives the pod. kube-prometheus's
-# grafana-deployment.yaml now reads them from a Secret `monitoring/grafana-admin`
-# (secretKeyRef, optional: true). This script is what puts that Secret there.
+# GF_SECURITY_ADMIN_USER / GF_SECURITY_ADMIN_PASSWORD are fed from a Secret
+# `monitoring/grafana-admin` (secretKeyRef, optional: true) by kube-prometheus's
+# grafana-deployment.yaml. This script is what puts that Secret there.
+#
+# ⚠️ But those env vars are NOT sufficient on their own — Grafana only honours them when
+# it CREATES the admin user, never against an existing user DB. See the enforcement block
+# at the bottom of this script, which is what actually pins the live login.
 #
 ##### WHERE THE PASSWORD ACTUALLY LIVES ############################################
 #
@@ -197,16 +200,60 @@ info "applied $NS/$SECRET_NAME from $VAULT_KV_PATH"
 # refreshed in place. So a changed password needs a restart, and an unchanged one must
 # not cause a pointless rollout on every bootstrap.
 NEW="$(printf '%s' "$V_PASS" | base64 -w0)"
-if [ "$PREV" = "$NEW" ]; then
-  info "password unchanged; not restarting grafana."
-  exit 0
-fi
 if ! kubectl -n "$NS" get deploy grafana >/dev/null 2>&1; then
   info "deployment $NS/grafana not present yet; it will pick the Secret up when created."
   exit 0
 fi
-info "password changed; restarting $NS/grafana to apply it"
-kubectl -n "$NS" rollout restart deployment/grafana >/dev/null 2>&1
-kubectl -n "$NS" rollout status deployment/grafana --timeout=180s \
-  || warn "grafana rollout did not report ready within 180s; check 'kubectl -n $NS get po'."
+if [ "$PREV" = "$NEW" ]; then
+  info "password unchanged; not restarting grafana."
+else
+  info "password changed; restarting $NS/grafana to apply it"
+  kubectl -n "$NS" rollout restart deployment/grafana >/dev/null 2>&1
+  kubectl -n "$NS" rollout status deployment/grafana --timeout=180s \
+    || warn "grafana rollout did not report ready within 180s; check 'kubectl -n $NS get po'."
+fi
+
+##### THE ENV VAR IS NOT ENOUGH — ENFORCE IT IN GRAFANA'S OWN USER DB ###############
+#
+# ⚠️ GF_SECURITY_ADMIN_PASSWORD only applies when Grafana CREATES the admin user, i.e.
+# against an EMPTY user DB. On every later start Grafana reads its SQLite DB, finds
+# user id 1 already there, and IGNORES the env var completely. So projecting Vault ->
+# Secret -> env and restarting the pod changes nothing on a cluster that has booted
+# even once. Verified 2026-08-09: Vault, the Secret and the pod env all read the new
+# password, the pod had restarted, and the OLD password still authenticated.
+#
+# This used to work only by accident. /var/lib/grafana was an emptyDir, so every pod
+# restart destroyed the user DB and Grafana re-created the admin from the env var —
+# which is exactly the bug that motivated this script. Making that volume a durable PV
+# (kube-prometheus manifests/grafana-dataVolume.yaml) fixed the data loss and, in the
+# same stroke, made the env-var mechanism inert. The header comment above still
+# describes the old "re-applied on every startup" behaviour; it is wrong, and that
+# wrongness is why an operator-set password could silently revert.
+#
+# `grafana cli admin reset-admin-password` writes the user DB directly and needs NO
+# existing credential, so it also recovers a Grafana nobody can log into any more.
+# Probe first: the reset runs DB migrations and is far too heavy for every bootstrap,
+# and a needless failed login would count against Grafana's brute-force lockout.
+####################################################################################
+
+# Basic-auth probe from INSIDE the pod, so this works with no NodePort/route assumptions.
+# Credential goes over stdin, never argv, so it stays out of the pod's process table.
+if printf '%s:%s' "$V_USER" "$V_PASS" | base64 -w0 \
+   | kubectl exec -i -n "$NS" deploy/grafana -- sh -c \
+       'read -r A; wget -q -O /dev/null --header="Authorization: Basic $A" http://127.0.0.1:3000/api/user' \
+       >/dev/null 2>&1; then
+  info "verified $V_USER can log in to grafana with the $VAULT_KV_PATH password."
+  exit 0
+fi
+
+warn "grafana rejects the $VAULT_KV_PATH password (env var does not apply to an existing"
+warn "user DB); resetting admin user id 1 directly via grafana cli."
+if printf '%s' "$V_PASS" | kubectl exec -i -n "$NS" deploy/grafana -- \
+     grafana cli --homepath /usr/share/grafana --config /etc/grafana/grafana.ini \
+     admin reset-admin-password --password-from-stdin >/dev/null 2>&1; then
+  info "reset grafana admin password from $VAULT_KV_PATH."
+else
+  warn "grafana cli reset FAILED; the login is NOT what $VAULT_KV_PATH says."
+  warn "check: kubectl -n $NS logs deploy/grafana"
+fi
 exit 0
