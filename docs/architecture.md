@@ -1004,9 +1004,21 @@ ever make them scrapable, delete that route** or you will have muted two genuine
 / 95 °C critical), GPU temperature (85 / 90 °C) and GPU framebuffer (90 % full). Thresholds are
 copied from the old `RC_*` defaults so the move did not silently change *when* you get told,
 and `for: 15m` reproduces the old 3-sample debounce. Note **CPU temp is
-`node_thermal_zone_temp{type="x86_pkg_temp"}`**: node-exporter runs with
-`--no-collector.hwmon`, so `node_hwmon_temp_celsius` does not exist here and a rule using it
-would never fire.
+`node_thermal_zone_temp{type="x86_pkg_temp"}`**.
+
+⚠️ **Updated 2026-08-09 — `node_hwmon_temp_celsius` now exists.** This section previously
+said it did not, because node-exporter ran with upstream kube-prometheus's
+`--no-collector.hwmon`. That flag is now deliberately removed
+(`manifests/nodeExporter-daemonset.yaml`): hwmon is the only source of **NVMe drive
+temperature**, and the 4 TB Predator GM9000 in slot **M.2_1** carries every app database,
+Jenkins, Vault and Grafana — a drive that throttles long before it fails. Enabling it also
+adds per-core `coretemp`. The drive figure is
+`node_hwmon_temp_celsius{chip="nvme_nvme0"}` narrowed to the `Composite` sensor by joining
+`node_hwmon_sensor_label` (`Sensor 1` is the controller and runs ~9 °C hotter). It costs
+~26 series — scoped by the hardware present, not by workload. The CPU **rules** still use
+`x86_pkg_temp`; do not add a parallel coretemp rule, since per-core and package temps track
+each other and that means two pages per event. There is currently **no NVMe
+over-temperature alert** — the temperature is on the overview dashboard only.
 
 **Grafana alerting is a separate system and stays that way.** The yolo app repo owns
 `grafana-alerting-yolo` (→ topic `yolo-grafana`); this is Alertmanager (→

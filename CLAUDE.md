@@ -228,9 +228,17 @@ to a Kubernetes NodePort on `172.16.238.2`.
   - `manifests/platform-hardware-prometheusRule.yaml` holds the only rules upstream cannot
     provide — CPU package temp, GPU temp/memory. Everything else (node CPU/mem/disk, PVs,
     crashloops, `TargetDown`) is already upstream; a duplicate means two pages per event.
-  - **CPU temp is `node_thermal_zone_temp{type="x86_pkg_temp"}`.** node-exporter runs with
-    `--no-collector.hwmon`, so `node_hwmon_temp_celsius` **does not exist** here — a rule
-    using it would never fire and nothing would say so.
+  - **CPU package temp is `node_thermal_zone_temp{type="x86_pkg_temp"}`.** ⚠️ **Changed
+    2026-08-09: `node_hwmon_temp_celsius` now DOES exist.** Until then node-exporter ran
+    with upstream's `--no-collector.hwmon` and this file warned that any rule using hwmon
+    would never fire. The collector is now deliberately enabled in
+    kube-prometheus `manifests/nodeExporter-daemonset.yaml`, because hwmon is the **only**
+    source of NVMe drive temperature — and the 4TB GM9000 in slot M.2_1 holds every app
+    database, Jenkins, Vault and Grafana. It also adds per-core `coretemp`. The drive
+    figure is `node_hwmon_temp_celsius{chip="nvme_nvme0"}` selected to the `Composite`
+    sensor via `node_hwmon_sensor_label` (`Sensor 1` is the controller, ~9 °C hotter).
+    Costs ~26 series on this box — it is scoped by the hardware present, not by workload,
+    so it is nothing like the per-mountpoint filesystem explosion below.
   - **`KubeSchedulerDown` / `KubeControllerManagerDown` are routed to `null` on purpose.**
     Both components are healthy; minikube binds them to `127.0.0.1` so they have no Service,
     and the rules are `absent(up{...})`, which therefore fires forever. Deleting the
