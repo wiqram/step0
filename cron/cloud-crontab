@@ -81,6 +81,19 @@
 # frequency, NOT notification frequency. Cheap: two curls + two instant queries.
 */5 * * * * /home/cloud/Ideaprojects/STEP0/alerting-pipeline-watch.sh >> /home/cloud/Ideaprojects/STEP0/logs/alerting-pipeline-watch.cron.log 2>&1
 
+# YOLO public-uptime probe — push to ntfy `yolo-public-uptime` when the follower-facing
+# serving path (public UI + the /v1/market/session API depth chain) is down for 15
+# sustained minutes. Runs OUTSIDE the cluster because the 08-03→08-07 yolo outage took
+# the in-cluster Loki/Grafana alerting down WITH the platform — four dark days, zero
+# pages. Same debounce as the alerting-pipeline watch (3 consecutive fails, hourly
+# repeat, one cleared note), so */5 is sampling frequency, not notification frequency.
+# Cheap: two curls.
+*/5 * * * * /home/cloud/Ideaprojects/STEP0/yolo-uptime-probe.sh >> /home/cloud/Ideaprojects/STEP0/logs/yolo-uptime-probe.cron.log 2>&1
+# Weekly selftest (Sunday 06:07 local) — proves the probe still DETECTS an outage
+# (missing path reads down, real API reads up, state machine transitions). Pushes only
+# when the selftest itself fails; a weekly "still fine" note would train you to skim.
+7 6 * * 0 /home/cloud/Ideaprojects/STEP0/yolo-uptime-probe.sh --selftest >> /home/cloud/Ideaprojects/STEP0/logs/yolo-uptime-probe.cron.log 2>&1
+
 # Docker build-cache cap (node AND host) + orphaned build-cache volume reclaim — bound
 # /var against Jenkins build churn (docs/plan.md R7). EVERY 6 HOURS, was daily 04:30.
 # Why the change (2026-08-04): a cap bounds the FLOOR after a prune, not the PEAK.

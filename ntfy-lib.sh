@@ -41,6 +41,7 @@ NTFY_TOPIC_RESTORE_SCRATCH="${NTFY_TOPIC_RESTORE_SCRATCH:-yolo-private-cloud-res
 NTFY_TOPIC_RESOURCE_CRUNCH="${NTFY_TOPIC_RESOURCE_CRUNCH:-yolo-private-cloud-resource-crunch}" # alerting-pipeline watchdog (alerting-pipeline-watch.sh)
 NTFY_TOPIC_PLATFORM="${NTFY_TOPIC_PLATFORM:-yolo-private-cloud-platform}"               # infra alerts from Alertmanager (kube-prometheus alertmanager-secret.yaml)
 NTFY_TOPIC_GRAFANA="${NTFY_TOPIC_GRAFANA:-yolo-grafana}"                                # yolo APP alerts from Grafana alerting (yolo repo's grafana-alerting-yolo ConfigMap)
+NTFY_TOPIC_UPTIME="${NTFY_TOPIC_UPTIME:-yolo-public-uptime}"                            # yolo public-serving probe, host-side (yolo-uptime-probe.sh)
 
 # Space-separated list of every topic this repo is allowed to publish to.
 #
@@ -51,7 +52,7 @@ NTFY_TOPIC_GRAFANA="${NTFY_TOPIC_GRAFANA:-yolo-grafana}"                        
 # ntfy-topic-check.sh's manifest scan validates those URLs against exactly this list.
 # yolo-grafana in particular was live for months without being registered — nothing
 # failed, because the gate only ever read shell scripts. That is now check [5/5].
-NTFY_TOPICS="$NTFY_TOPIC_BACKUP $NTFY_TOPIC_WD_BACKUP $NTFY_TOPIC_START_SCRATCH $NTFY_TOPIC_RESTORE_SCRATCH $NTFY_TOPIC_RESOURCE_CRUNCH $NTFY_TOPIC_PLATFORM $NTFY_TOPIC_GRAFANA"
+NTFY_TOPICS="$NTFY_TOPIC_BACKUP $NTFY_TOPIC_WD_BACKUP $NTFY_TOPIC_START_SCRATCH $NTFY_TOPIC_RESTORE_SCRATCH $NTFY_TOPIC_RESOURCE_CRUNCH $NTFY_TOPIC_PLATFORM $NTFY_TOPIC_GRAFANA $NTFY_TOPIC_UPTIME"
 
 # ntfy_topic_shape_ok <topic> — true if ntfy itself would accept the name.
 # ntfy rejects anything outside [-_A-Za-z0-9]{1,64} with a 400 that a fail-soft
