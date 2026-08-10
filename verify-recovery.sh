@@ -600,8 +600,29 @@ SNAP_NS="${SNAP_NS:-yolo}"
 # add one and it starts checking without anybody editing this file.
 SNAP_JOBS=""
 if have kubectl; then
-  SNAP_JOBS="$(kubectl get cronjobs -n "$SNAP_NS" -o name 2>/dev/null \
+  _snap_jobs_all="$(kubectl get cronjobs -n "$SNAP_NS" -o name 2>/dev/null \
                 | sed 's|.*/db-snapshot-||' | grep -v '^cronjob' || true)"
+  # Not every db-snapshot-* CronJob PRODUCES a dump. `db-snapshot-audit` is the auditor OF
+  # the other five: it mounts the snapshot tree `readOnly: true` and reports on their
+  # freshness. It therefore can never write $SNAP_ROOT/audit, and there is no "audit"
+  # database to restore — so holding it to the producer bar below made this script FAIL
+  # permanently on a completely healthy box (found 2026-08-10, while its own log read
+  # "audit OK — 5 store(s) present, non-empty and fresh"). That is not a cosmetic bug:
+  # restore-scratch.sh phase 9 runs this script and it exits 1 on any FAIL, so a permanent
+  # false FAIL is precisely what teaches an operator to stop believing the exit code — the
+  # same "a dead channel looks like a healthy system" failure the ntfy registry exists for.
+  # Ask the CLUSTER which jobs are verifiers rather than hardcoding the name: a read-only
+  # mount structurally cannot produce a dump, so the mount IS the test, and a future
+  # auditor gets classified correctly with nobody remembering to edit this file.
+  for _j in $_snap_jobs_all; do
+    _ro="$(kubectl get cronjob "db-snapshot-$_j" -n "$SNAP_NS" \
+             -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[*].volumeMounts[?(@.name=="snapshots")].readOnly}' 2>/dev/null)"
+    case "$_ro" in
+      *true*) info "db-snapshot-$_j mounts the snapshot tree read-only — verifier, not a producer; not held to the backup bar" ; continue ;;
+    esac
+    SNAP_JOBS="${SNAP_JOBS}${_j}
+"
+  done
 fi
 if [ -d "$SNAP_ROOT" ]; then
   # DISCOVER the per-database trees rather than hardcoding names. The snapshot CronJob's
