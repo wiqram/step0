@@ -377,6 +377,20 @@ fi
 if cloud_crontab | grep -q alerting-pipeline-watch; then pass "alerting-pipeline watchdog cron present (ntfy yolo-private-cloud-resource-crunch)"
 else warn "alerting-pipeline watchdog NOT in the cloud crontab — re-run ./install-cron.sh"; fi
 
+# The yolo public-uptime probe, checked by name for the SAME reason as the line above and
+# not covered by it: alerting-pipeline-watch.sh watches the kube-prometheus pipeline, this
+# watches yolo's follower-facing serving path, and the 2026-08-03->08-07 outage is the
+# proof they are different failures — that one took yolo's in-cluster Loki/Grafana alerting
+# down WITH the platform and paged nobody for four days. The drift check below cannot
+# substitute: a restore that clones an older STEP0 gets a cloud-crontab with no probe line,
+# live and canonical agree perfectly, and the drift check PASSES while nothing is watching.
+if cloud_crontab | grep -q yolo-uptime-probe; then pass "yolo public-uptime probe cron present (ntfy yolo-public-uptime)"
+else warn "yolo public-uptime probe NOT in the cloud crontab — the follower-facing serving path has no outside-the-cluster watcher. Re-run ./install-cron.sh"; fi
+# Its weekly --selftest is what proves the probe can still DETECT an outage; a probe that
+# has quietly stopped failing is indistinguishable from a healthy platform.
+if cloud_crontab | grep -q 'yolo-uptime-probe.*--selftest'; then pass "yolo uptime probe weekly --selftest scheduled"
+else warn "yolo uptime probe --selftest NOT scheduled — nothing proves the probe can still fail. Re-run ./install-cron.sh"; fi
+
 # Canonical-vs-live crontab drift. install-cron.sh installs cron/cloud-crontab VERBATIM,
 # so that file — not the live crontab — is what a bare-metal restore reproduces. Drift is
 # one-directional and silent: fixes get made with `crontab -e` and never written back, and

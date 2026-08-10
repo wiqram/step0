@@ -38,7 +38,7 @@ ok()   { printf '  . %s\n' "$1"; }
 # listed here that stops sourcing the lib, or sends to an unregistered topic, fails
 # the gate. wd-backup.sh lives OUTSIDE this repo (~/wd-backup, captured in the weekly
 # DR archive) — checked best-effort so a dev box without it still passes.
-PUBLISHERS="backup-minikube-mnt.sh start-scratch.sh restore-scratch.sh alerting-pipeline-watch.sh"
+PUBLISHERS="backup-minikube-mnt.sh start-scratch.sh restore-scratch.sh alerting-pipeline-watch.sh yolo-uptime-probe.sh"
 WD_PUBLISHER="/home/cloud/wd-backup/wd-backup.sh"
 
 # Non-bash publishers: manifests that hardcode an ntfy URL because the thing doing the
