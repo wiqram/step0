@@ -682,6 +682,26 @@ phase4_extract() {
     log "WARN: ~/wd-backup not in this archive (predates the change) — phase 8 will note the dev-box re-pull."
   fi
 
+  # 4h. Tailscale node identity. tailscaled.state IS this machine's identity on the tailnet:
+  #     put it back and the rebuilt box rejoins as the SAME machine — same 100.x address,
+  #     same ALREADY-APPROVED subnet route — so off-LAN access to jenkins/grafana returns
+  #     with NO browser login and NO route re-approval. Without it phase 8 can only get as
+  #     far as printing a login URL and waiting for a human.
+  #     Staged to a persistent path (not $HOME, not $stage — this function deletes $stage
+  #     below, and phase 8 runs much later, possibly in a separate --from-phase 8 invocation).
+  #     Stays root:root 0600: it is a private key.
+  if sudo test -s "$stage/var/lib/tailscale/tailscaled.state"; then
+    run "sudo rm -rf /mnt/minikube-backups/tailscale-state-restore"
+    run "sudo mkdir -p /mnt/minikube-backups/tailscale-state-restore"
+    run "sudo cp -a '$stage/var/lib/tailscale/tailscaled.state' /mnt/minikube-backups/tailscale-state-restore/"
+    run "sudo chmod 700 /mnt/minikube-backups/tailscale-state-restore"
+    run "sudo chmod 600 /mnt/minikube-backups/tailscale-state-restore/tailscaled.state"
+    log "tailscale node identity staged — phase 8 will rejoin the tailnet non-interactively"
+  else
+    log "NOTE: no tailscale node identity in this archive (predates the change, or tailscale was not installed)."
+    log "      Phase 8 will fall back to TAILSCALE_AUTHKEY in .env, then to interactive auth."
+  fi
+
   run "rm -rf '$stage'"
   mark_phase 4
 }
@@ -907,7 +927,7 @@ phase8_automation() {
   #     of pipeline logs incl. follower emails) is reachable from the whole bridge network
   #     after any Docker restart, with nothing to say so. See loki-nodeport-guard.sh.
   if [ "$DRY_RUN" = 1 ]; then
-    echo "  DRYRUN> sudo $SCRIPT_DIR/10gbe-link-watchdog.sh --install ; sudo $SCRIPT_DIR/enable-devbox-kube-access.sh --install ; sudo $SCRIPT_DIR/loki-nodeport-guard.sh --install"
+    echo "  DRYRUN> sudo $SCRIPT_DIR/10gbe-link-watchdog.sh --install ; sudo $SCRIPT_DIR/enable-devbox-kube-access.sh --install ; sudo $SCRIPT_DIR/loki-nodeport-guard.sh --install ; sudo $SCRIPT_DIR/tailscale-access.sh --install"
   else
     sudo "$SCRIPT_DIR/10gbe-link-watchdog.sh" --install >/dev/null 2>&1 \
       && log "10gbe-link-watchdog.service installed" || log "WARN: 10gbe-link-watchdog --install failed (re-run by hand)."
@@ -916,6 +936,19 @@ phase8_automation() {
     sudo "$SCRIPT_DIR/loki-nodeport-guard.sh" --install >/dev/null 2>&1 \
       && log "yolo-loki-nodeport-guard.service installed (SEC-LOKI-NODEPORT)" \
       || log "WARN: loki-nodeport-guard --install failed — Loki NodePort 30310 is UNRESTRICTED. Re-run: sudo $SCRIPT_DIR/loki-nodeport-guard.sh --install"
+    # Tailscale: re-arms off-LAN access to the admin vhosts (jenkins/grafana/vault/...).
+    # NOT output-suppressed like the three above, deliberately — this is the one that can
+    # need a human (interactive auth if phase 4h found no node identity AND .env carries no
+    # auth key), and swallowing its stdout would hide the login URL that unblocks it.
+    # Best-effort by design: it fails OPEN in the sense that nothing else on the platform
+    # depends on it, so a non-zero exit must not derail the restore.
+    if sudo "$SCRIPT_DIR/tailscale-access.sh" --install; then
+      log "tailscale-access installed (off-LAN access to the admin vhosts re-armed)"
+    else
+      log "WARN: tailscale-access --install did not complete — jenkins/grafana are reachable"
+      log "      from the house and the dev box only. Nothing else is affected. Re-run:"
+      log "      sudo $SCRIPT_DIR/tailscale-access.sh --install ; ./tailscale-access.sh --status"
+    fi
   fi
 
   # (c) Persist the WD Cloud NFS off-site mount in fstab (phase 2 only mounted it transiently

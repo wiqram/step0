@@ -209,6 +209,15 @@ sudo -n "$HOME/Ideaprojects/STEP0/enable-devbox-kube-access.sh" || echo "devbox-
 # No root needed; only writes a file in $HOME. The dev box still pulls/merges it — docs/architecture.md §3.
 "$HOME/Ideaprojects/STEP0/enable-devbox-kube-access.sh" --emit-kubeconfig \
   || echo "devbox-kube-access: kubeconfig re-emit skipped (re-run --emit-kubeconfig by hand)"
+# Re-assert the tailscale prefs that carry off-LAN access to the admin vhosts. --ensure, NOT
+# --install: on this path the box is already prepped, so installing a package mid-bootstrap
+# would be a surprise; DR does the installing (restore-scratch.sh phase 8). What this catches
+# is pref drift — above all a hand-typed `tailscale up` that dropped --accept-dns=false, which
+# hands this host's DNS to the tailnet and risks every pod in ImagePullBackOff via the
+# container-registry hairpin. Best-effort and non-fatal: nothing on the platform depends on
+# tailscale, so it must never be able to abort a bootstrap (set -e is on).
+sudo -n "$HOME/Ideaprojects/STEP0/tailscale-access.sh" --ensure \
+  || echo "tailscale-access: skipped (not installed, or no passwordless sudo — './tailscale-access.sh --status' to check)"
 ###########x`######grafana-prometheus###########################
 # Grafana's /var/lib/grafana is a DURABLE hostPath PV (kube-prometheus
 # manifests/grafana-dataVolume.yaml -> node /mnt/grafana-data == host

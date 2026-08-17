@@ -52,6 +52,15 @@ backup_files5="/home/cloud/.vault"
 # (regenerable churn). Same trust level as ~/.vault above — the archive already
 # carries the Vault root token, so these creds ride along consistently.
 backup_files6="/home/cloud/wd-backup"
+# Tailscale's node identity (tailscaled.state). This one small file IS the machine's
+# identity on the tailnet: restore it and a rebuilt box rejoins as the SAME machine —
+# same 100.x address, same ALREADY-APPROVED subnet route, no login URL, no human. Without
+# it, DR produces a NEW machine that needs someone to open a browser and re-approve the
+# route before off-LAN access to jenkins/grafana works again. It is a private key, 0600
+# root — same trust level as ~/.vault above, which this archive already carries. Runs as
+# root cron, so it can read it. Logs/caches under the dir are excluded on the tar line
+# (regenerable churn). See tailscale-access.sh.
+backup_files7="/var/lib/tailscale"
 
 #First refresh the live vault config files into minikube-mnt so the backup captures
 #the current per-app secrets (these can't live in GitHub).
@@ -113,7 +122,7 @@ hostname=$(hostname -s)
 archive_file="$hostname-$day.tgz"
 
 # Print start status message.
-echo "Backing up $backup_files and $backup_files2 and $backup_files3 and $backup_files4 and $backup_files5 and $backup_files6 to $dest/$archive_file"
+echo "Backing up $backup_files and $backup_files2 and $backup_files3 and $backup_files4 and $backup_files5 and $backup_files6 and $backup_files7 to $dest/$archive_file"
 date
 echo
 
@@ -131,6 +140,14 @@ echo
 # tar's exit code was previously discarded; the weekly push reports it, so a truncated
 # or partial archive (rc=2 on a read error, rc=1 on files changing mid-read) now
 # surfaces on the phone instead of only in the cron log.
+# tar exits 2 on a path it cannot stat, and $backup_files7 is the one entry that is NOT
+# guaranteed to exist — tailscale is an operator convenience, not a platform dependency, so
+# a box without it is legitimate. Left unguarded, that absence would turn every weekly run
+# into a "tar FAILED" push and train us to ignore the one notification that matters.
+if [ ! -d "$backup_files7" ]; then
+    echo "NOTE: $backup_files7 absent (tailscale not installed) — skipping it, not an error."
+    backup_files7=""
+fi
 tar_start=$(date +%s)
 # --numeric-owner: store UIDs/GIDs as NUMBERS, never as user names. tar records both by
 # default and, on extract, resolves the NAME against the destination's /etc/passwd — so a
@@ -142,7 +159,7 @@ tar_start=$(date +%s)
 # which is why the corruption looked like random per-app inconsistency. Container UIDs are
 # numeric facts; the names are meaningless noise. restore-scratch.sh extracts with the same
 # flag, and handles older name-bearing archives the same way.
-tar -czf $dest/$archive_file --numeric-owner --exclude='*/ollama/models' --exclude='*/wd-backup/logs' --exclude='*/container-registry-images' $backup_files $backup_files2 $backup_files3 $backup_files4 $backup_files5 $backup_files6
+tar -czf $dest/$archive_file --numeric-owner --exclude='*/ollama/models' --exclude='*/wd-backup/logs' --exclude='*/container-registry-images' --exclude='*/tailscale/tailscaled.log*' --exclude='*/tailscale/derpmap.cached.json' $backup_files $backup_files2 $backup_files3 $backup_files4 $backup_files5 $backup_files6 $backup_files7
 tar_rc=$?
 tar_elapsed=$(( $(date +%s) - tar_start ))
 if [ "$tar_rc" -eq 1 ]; then

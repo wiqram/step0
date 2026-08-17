@@ -85,6 +85,11 @@ DEV_OOB_SSH="${DEV_OOB_SSH:-vik@192.168.50.161}"   # dev box over the LAN (OOB) 
 EXP_HOSTNAME="${EXP_HOSTNAME:-private-cloud}"
 DNS_NAME="${DNS_NAME:-jenkins.traderyolo.com}"     # public entry point; should resolve to us
 
+# SEC-EDGE-ALLOWLIST + off-LAN access (see tailscale-access.sh, nginx docs/edge-exposure.md).
+EXP_PUBLIC_IP="${EXP_PUBLIC_IP:-213.48.246.115}"   # our static public IP == the advertised /32
+NPM_ALLOWLIST="${NPM_ALLOWLIST:-/home/cloud/Ideaprojects/nginx/data/nginx/custom/http_top.conf}"
+NPM_ENFORCE="${NPM_ENFORCE:-/home/cloud/Ideaprojects/nginx/data/nginx/custom/server_proxy.conf}"
+
 QUIET=0
 [ "${1:-}" = "--quiet" ] && QUIET=1
 
@@ -472,6 +477,79 @@ if have kubectl; then
     *)              pass "Grafana root_url set (appUrl=$_appurl)"
                     note "Grafana appUrl: $_appurl" ;;
   esac
+fi
+
+# ---- SEC-EDGE-ALLOWLIST: the edge lockdown itself -------------------------------------
+# This is the control that stopped the admin vhosts (NPM's own admin UI + API, the
+# kube-apiserver, Vault, the registry's /v2/_catalog, an unauthenticated Prometheus) being
+# reachable by name from the internet — nginx routes on the Host header, so "not in DNS"
+# protects nothing. It lives in two hand-written files that are the ONLY part of NPM's
+# data/ under version control. A restore that loses them comes back serving all of it to
+# the world again, silently and with every site working perfectly. FAIL, not WARN.
+if [ -f "$NPM_ALLOWLIST" ] && [ -f "$NPM_ENFORCE" ]; then
+  if grep -q 'yolo_deny' "$NPM_ENFORCE" 2>/dev/null && grep -q "$EXP_PUBLIC_IP" "$NPM_ALLOWLIST" 2>/dev/null; then
+    pass "SEC-EDGE-ALLOWLIST present (geo + enforcement, trusts $EXP_PUBLIC_IP)"
+  else
+    fail "SEC-EDGE-ALLOWLIST files exist but look wrong — enforcement 'if (\$yolo_deny)' or the $EXP_PUBLIC_IP trust entry is missing. Losing the latter puts EVERY k8s image pull into ImagePullBackOff (they hairpin in as that address); losing the former re-exposes the admin vhosts."
+  fi
+  # Live check beats file check: NPM regenerates its proxy-host confs from its DB on every
+  # restart, so the question is whether the running nginx is enforcing, not whether a file
+  # is on disk. An untrusted vantage is required — the docker bridge is deliberately NOT in
+  # the geo (a curl from this host proves nothing; loopback is trusted).
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^nginx-proxy-manager$'; then
+    _deny="$(docker run --rm --network bridge curlimages/curl:latest -s -o /dev/null \
+               -m 8 -w '%{http_code}' -H "Host: $DNS_NAME" http://172.17.0.1/ 2>/dev/null || echo "")"
+    case "$_deny" in
+      403) pass "edge deny branch live: untrusted source -> 403 on $DNS_NAME" ;;
+      "")  warn "could not test the deny branch (no curl image / no docker bridge) — verify by hand before trusting the edge" ;;
+      *)   fail "UNTRUSTED SOURCE GOT HTTP $_deny FROM $DNS_NAME — the admin vhosts are exposed to the internet. Check $NPM_ENFORCE is included and 'docker exec nginx-proxy-manager nginx -t'." ;;
+    esac
+  fi
+else
+  fail "SEC-EDGE-ALLOWLIST missing ($NPM_ALLOWLIST / $NPM_ENFORCE) — the admin vhosts (NPM admin UI+API, kube-apiserver, Vault, registry catalog, Prometheus) are reachable by Host header from the whole internet. Restore from the nginx repo: git -C ~/Ideaprojects/nginx checkout -- data/nginx/custom/"
+fi
+
+# ---- Tailscale: off-LAN access to those same vhosts -----------------------------------
+# Deliberately NOT fatal in most branches: tailscale is an operator convenience and nothing
+# on the platform depends on it (the box dual-purpose serves the public sites regardless).
+# The exception is accept-dns, which can take the CLUSTER down — see below.
+if command -v tailscale >/dev/null 2>&1; then
+  if tailscale status >/dev/null 2>&1; then
+    _ts_json="$(tailscale status --json 2>/dev/null)"
+    _ts_route="$(printf '%s' "$_ts_json" | python3 -c "
+import json,sys
+try: s=(json.load(sys.stdin).get('Self') or {})
+except Exception: print('unknown'); sys.exit(0)
+ip='$EXP_PUBLIC_IP/32'
+print('approved' if ip in (s.get('AllowedIPs') or []) and ip in (s.get('PrimaryRoutes') or []) else 'not-approved')
+" 2>/dev/null || echo unknown)"
+    case "$_ts_route" in
+      approved) pass "tailscale up; $EXP_PUBLIC_IP/32 subnet route APPROVED (off-LAN access to jenkins/grafana works)" ;;
+      # The silent one. Advertising is not approving: enrolled devices simply do not use an
+      # unapproved route, with no error at either end, so this looks identical to "working"
+      # from the server side. An autoApprovers ACL removes the human step for good.
+      not-approved) warn "tailscale is up but the $EXP_PUBLIC_IP/32 route is NOT APPROVED — off-LAN devices silently fall back to their own network and get 403. Approve: console -> Machines -> $EXP_HOSTNAME -> Edit route settings (or add an autoApprovers ACL)" ;;
+      *) warn "could not read tailscale route state" ;;
+    esac
+    # accept-dns MUST stay off. If it is on, this host's DNS is served by the tailnet, and
+    # container-registry.traderyolo.com — which every image pull resolves and hairpins
+    # through the router — can stop resolving to the public IP. Failure mode is cluster-wide
+    # ImagePullBackOff traced to a VPN client. That is a platform outage, so: FAIL.
+    if tailscale debug prefs 2>/dev/null | grep -q '"CorpDNS": *true'; then
+      fail "tailscale accept-dns is ENABLED — this host's DNS is now the tailnet's. Risks cluster-wide ImagePullBackOff via the container-registry.traderyolo.com hairpin. Fix: sudo $(dirname "$0")/tailscale-access.sh --ensure"
+    else
+      pass "tailscale accept-dns disabled (container-registry hairpin protected)"
+    fi
+    _adv="$(printf '%s' "$_ts_json" | python3 -c "
+import json,sys
+try: print(','.join((json.load(sys.stdin).get('Self') or {}).get('AllowedIPs') or []))
+except Exception: pass" 2>/dev/null)"
+    note "tailscale: $(tailscale ip -4 2>/dev/null | head -1) advertising [$_adv]"
+  else
+    warn "tailscale installed but LOGGED OUT — off-LAN access to the admin vhosts is down (house LAN + dev box unaffected). Re-arm: sudo $(dirname "$0")/tailscale-access.sh --install"
+  fi
+else
+  warn "tailscale not installed — jenkins/grafana reachable only from the house LAN and the dev box. Install: sudo $(dirname "$0")/tailscale-access.sh --install"
 fi
 
 # ============================== 5. HOST STORAGE LAYOUT ==============================
