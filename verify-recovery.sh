@@ -323,6 +323,107 @@ if have kubectl; then
     || warn "$notrun pod(s) not Running/Completed (transient ImagePullBackOff is expected right after a single-disk restore)"
 else warn "kubectl not installed — skipping Vault/pod checks"; fi
 
+# ---- Vault ACL: can the runtime identities actually WRITE where they must? -------------
+# BUG-VAULT-PLATFORM-KEY-403 (found 2026-08-18). yolo-policy granted create/update on
+# kv/data/yolo/followers/* only; the admin data-source key path kv/yolo/platform-data-sources
+# fell through to the read-ONLY glob kv/data/yolo/*. So the admin key-upload form 403'd on
+# EVERY write for a month while getPlatformSourceCreds kept returning code=OK against a store
+# that never gained an ig_platform value — every consumer silently used its env fallback.
+#
+# ⚠️ Read-granted-write-denied is the point of this block. It has NO symptom: the app is up,
+# reads work, health checks pass, and nothing logs an error. Neither "Vault is unsealed" nor
+# "all pods Running" above can see it, and a rollout-time probe would not catch a policy that
+# a DR restore rebuilt wrong — which is exactly why the assertion belongs here.
+#
+# ⚠️ This is the ONE block in this script that is not purely read-only: `vault token
+# capabilities` needs a token, so we mint a 90s throwaway per policy and revoke it
+# immediately. Nothing else is created and no secret is read or written — in particular we do
+# NOT test-write to a real path, because those bundles hold live credentials and a
+# read-modify-write probe races whoever is using the admin UI. `token capabilities` IS Vault's
+# ACL evaluator, so it answers the 403 question exactly without touching any data.
+# The root token is piped over stdin, never passed in argv where `ps` would show it.
+# Set SKIP_VAULT_ACL=1 to opt out.
+VAULT_KEYS="${VAULT_KEYS:-$HOME/.vault/cluster-keys.json}"
+VR_APPS="${VR_APPS:-bestrentaladmin dyingpaleblue helpmepdf ollama predictonomy prop-investech qcguy yolo}"
+# Overridable ONLY so the write-path branch below can be proven to still FAIL (point it at a
+# policy lacking those paths). A check that cannot fail is worse than no check — see the
+# db-snapshot-audit false-FAIL and the yolo-uptime-probe --selftest for the same lesson.
+VR_YOLO_POLICY="${VR_YOLO_POLICY:-yolo-policy}"
+if [ "${SKIP_VAULT_ACL:-0}" = 1 ]; then info "Vault ACL sweep skipped (SKIP_VAULT_ACL=1)"
+elif ! have kubectl || ! have jq; then warn "kubectl/jq missing — skipping the Vault ACL capability sweep"
+elif [ "${sealed:-}" != false ]; then warn "Vault not unsealed — skipping the Vault ACL capability sweep"
+elif [ ! -r "$VAULT_KEYS" ]; then
+  warn "$VAULT_KEYS unreadable — skipping the Vault ACL capability sweep (a root token is needed to mint the throwaway probe tokens)"
+else
+  _vt="$(jq -r '.root_token // empty' "$VAULT_KEYS" 2>/dev/null)"
+  if [ -z "$_vt" ]; then warn "no .root_token in $VAULT_KEYS — skipping the Vault ACL capability sweep"; else
+    _acl="$(printf '%s\n' "$_vt" | kubectl -n vault exec -i vault-0 -- env APPS="$VR_APPS" YPOL="$VR_YOLO_POLICY" sh -c '
+      read -r VAULT_TOKEN || exit 1; export VAULT_TOKEN
+      mint() { vault token create -policy="$1" -ttl=90s -field=token 2>/dev/null; }
+      caps() { vault token capabilities "$1" "$2" 2>/dev/null | tr -d " "; }
+      has()  { case ",$1," in *",$2,"*) return 0 ;; esac; return 1 ; }
+
+      # --- yolo: the only app with a runtime Vault client (userService vault-client.js) ---
+      T=$(mint "$YPOL")
+      if [ -z "$T" ]; then echo "SKIP $YPOL absent or token mint refused"; else
+        for p in kv/data/yolo/followers/000000000000000000000000 kv/data/yolo/platform-data-sources; do
+          c=$(caps "$T" "$p")
+          if has "$c" create && has "$c" update && has "$c" read
+            then echo "OKW yolo runtime write path $p [$c]"
+            else echo "BAD yolo CANNOT WRITE $p [${c:-?}] — admin/registration saves will 403 with no symptom"; fi
+        done
+        c=$(caps "$T" kv/data/yolo/user)
+        if has "$c" create || has "$c" update
+          then echo "BAD yolo-policy WIDENED: kv/data/yolo/user is writable [$c] — the leaf grants must not become a glob"
+          else echo "OK kv/data/yolo/user still read-only [$c]"; fi
+        c=$(caps "$T" kv/data/age-keys/yolo)
+        if [ "$c" = deny ]
+          then echo "OK app token denied on kv/data/age-keys/yolo"
+          else echo "BAD app token can reach its SOPS age key kv/data/age-keys/yolo [$c]"; fi
+        vault token revoke "$T" >/dev/null 2>&1
+      fi
+
+      # --- per-app: Jenkins AppRole must write; the app runtime must NOT ---
+      for a in $APPS; do
+        o=yolo; [ "$a" = yolo ] && o=qcguy          # a different tenant, to prove isolation
+        T=$(mint "jenkins-$a-policy")
+        if [ -z "$T" ]; then echo "SKIP jenkins-$a-policy absent"; else
+          c=$(caps "$T" "kv/data/$a/svc")
+          if has "$c" create && has "$c" update
+            then echo "OK jenkins-$a-policy can sync kv/data/$a/*"
+            else echo "BAD jenkins-$a-policy CANNOT WRITE kv/data/$a/* [${c:-?}] — vaultSync will fail the build"; fi
+          c=$(caps "$T" "kv/data/$o/svc")
+          if [ "$c" = deny ]
+            then echo "OK jenkins-$a-policy isolated from $o"
+            else echo "BAD jenkins-$a-policy can reach kv/data/$o/* [$c] — cross-tenant secret access"; fi
+          vault token revoke "$T" >/dev/null 2>&1
+        fi
+        T=$(mint "$a-policy")
+        if [ -z "$T" ]; then echo "SKIP $a-policy absent"; else
+          c=$(caps "$T" "kv/data/$a/svc")
+          has "$c" read || echo "BAD $a-policy cannot READ its own kv/data/$a/* [${c:-?}] — the app cannot boot"
+          if has "$c" create || has "$c" update
+            then echo "BAD $a-policy has WRITE on kv/data/$a/* [$c] — app runtimes are read-only by design"
+            else echo "OK $a-policy read-only on its own secrets"; fi
+          vault token revoke "$T" >/dev/null 2>&1
+        fi
+      done' 2>/dev/null)"
+    unset _vt
+    if [ -z "$_acl" ]; then warn "Vault ACL sweep produced no output (vault-0 not answering?)"; else
+      _ok=0
+      while IFS= read -r _l; do
+        case "$_l" in
+          OKW\ *) pass "Vault ACL: ${_l#OKW }" ;;                 # the paths that actually broke
+          OK\ *)  _ok=$((_ok+1)) ;;                               # aggregated to keep output readable
+          BAD\ *) fail "Vault ACL: ${_l#BAD }" ;;
+          SKIP\ *) warn "Vault ACL: ${_l#SKIP }" ;;
+        esac
+      done <<< "$_acl"
+      [ "$_ok" -gt 0 ] && pass "Vault ACL: $_ok further assertions passed (per-app write/read split, tenant isolation, age-key containment)"
+    fi
+  fi
+fi
+
 # Cron: the two backup jobs + the canonical cloud crontab.
 if [ -f /etc/cron.d/wd-backup ]; then pass "/etc/cron.d/wd-backup present (nightly WD My Cloud rsync, 02:00)"
 else warn "/etc/cron.d/wd-backup MISSING — re-arm: sudo ~/wd-backup/install-on-prod.sh"; fi
