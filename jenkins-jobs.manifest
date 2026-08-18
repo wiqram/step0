@@ -22,6 +22,15 @@ qcguy            qcguy                  build                qcguy
 predictonomy     predictonomy           build                predict
 bestrentaladmin  bestrentaladmin        build                best
 dyingpaleblue    dyingpaleblue          build                dying
+# aisucks added 2026-08-18 — the SAME bug this file's header describes, third instance.
+# The Jenkins job `aisucks` has existed and worked for a while (builds */main, live at
+# aisucks.qcguy.com with a running `aisucks` namespace), but it was never listed here, so
+# no bootstrap and no DR run ever deployed it — exactly how qcx and prop-investech were
+# found. It was ALSO missing from restore-lib.sh's clone manifest, so a bare-metal restore
+# would neither clone nor deploy it: the site would simply not come back, with no error.
+# Like prop-investech, this job has NO authToken in its config.xml; the 4th column must be
+# non-empty but is not load-bearing (the request authenticates via JENKINS_CRED).
+aisucks          aisucks                build                aisucks
 ollama           ollama                 build                ollama
 qcx              QCX                    build                qcx
 prop-investech   prop-investech         build                prop-investech
