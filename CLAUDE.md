@@ -173,6 +173,25 @@ to a Kubernetes NodePort on `172.16.238.2`.
   Minikube + Nginx, all co-located on `172.16.238.x`.
 - **Fixed IPs:** Minikube node `172.16.238.2` (API/NodePorts/registry:5000),
   nginx-proxy-manager `172.16.238.10`, gateway `172.16.238.1`, network `5million`.
+- **⚠️ Apps reference the registry by its PUBLIC name, and that is deliberate — do not
+  "optimise" it to `172.16.238.2:5000`.** Both addresses reach the same blob store, and the
+  internal one is **60x faster** (measured 2026-08-18: ~900 MB/s vs ~15 MB/s on the same
+  layer, because the public name resolves to this host's public IP and hairpins out through
+  the 1GbE NIC to the router and back). It is still the wrong default, for two reasons.
+  (a) **`172.16.238.2` only works while Jenkins, the registry and every workload that pulls
+  share this ONE minikube cluster on this ONE host.** The instant Jenkins or the registry
+  moves to a different cluster, that address means nothing from the other side and every
+  internal-IP shortcut breaks — the fallback is `container-registry.traderyolo.com`
+  everywhere, which is the only address that survives the split. (b) the hairpin is
+  **load-bearing**: pulls arrive at nginx as `213.48.246.115`, which is what passes
+  SEC-EDGE-ALLOWLIST — nginx answers **403** to a docker-bridge source, and the allowlist
+  must not be widened to `172.16.0.0/16` to work around it. Also note the kubelet pulls via
+  **cri-dockerd → dockerd, not containerd**, so a containerd `certs.d` mirror does nothing
+  for pod pulls no matter how well it benchmarks with `ctr` (tried and reverted 2026-08-18).
+  And measure first: on a redeploy the layers are already cached, so the pull is **150 ms**
+  of a ~25s rollout — the 60x only bites on a cold store (fresh bootstrap / DR restore).
+  Full detail, numbers and the rejected alternatives: `docs/architecture.md` §"Image
+  Registry" → "The internal address is a SINGLE-CLUSTER optimisation".
 - **Two `Ideaprojects` dirs differing only by case** —
   `/home/cloud/Ideaprojects` (lowercase, most things) and
   `/home/cloud/IdeaProjects` (capital P, the populated `splunk-hsbc-demo`).

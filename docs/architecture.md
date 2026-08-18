@@ -601,6 +601,60 @@ shutdown and will discard an edit made while it is running. Full procedure in
   and the externally-named `container-registry.traderyolo.com` (NPM → :5000).
 - Maintenance: `delete-docker-reg-images.sh` garbage-collects orphaned registry blobs.
 
+#### ⚠️ The internal address is a SINGLE-CLUSTER optimisation. The public URL is the contract.
+
+`172.16.238.2:5000` and `container-registry.traderyolo.com` are two routes to the **same
+blob store**. They are not interchangeable, and which one is *correct* depends entirely on
+a topology assumption that is true today and may not stay true:
+
+> **Everything — Jenkins, the registry, and every workload that pulls — lives in ONE
+> minikube cluster on ONE host.**
+
+While that holds, `172.16.238.2:5000` is reachable from the node, from Jenkins agents (they
+are pods in this cluster) and from the host, and it is *dramatically* faster. Measured
+2026-08-18 on the same 8.6 MB layer, pulled from the node:
+
+| route | throughput | note |
+|---|---|---|
+| `http://172.16.238.2:5000` (internal) | **~900 MB/s** | no TLS, no router, stays on the box |
+| `https://container-registry.traderyolo.com` (public) | **~15 MB/s** | **60x slower** |
+
+The public name resolves to this host's **public IP**, so a pull leaves via the 1GbE LAN
+NIC, NATs at the router and comes back in through nginx — a hairpin. That is the entire
+60x. See also §"Off-site copy" for the same 1GbE constraint elsewhere.
+
+**The moment Jenkins moves to a different cluster, or the registry moves to a different
+cluster, every internal-IP shortcut breaks** — `172.16.238.2` is this minikube node's
+address on the `5million` docker network and means nothing from anywhere else. At that
+point the fallback is not a workaround, it is the correct answer: **go back to
+`container-registry.traderyolo.com` everywhere.** The public URL is the only address that
+survives the split, which is precisely why the apps reference it today rather than the
+fast internal one.
+
+Two things that make this easy to get wrong:
+
+1. **The hairpin is load-bearing, not incidental.** In-cluster pulls arrive at nginx as
+   `213.48.246.115`, which is what passes the SEC-EDGE-ALLOWLIST geo block. nginx returns
+   **403** to a docker-bridge source address (verified 2026-08-18 by probing NPM directly
+   at `172.16.238.10`). So the slow path is also the *authorised* path, and the allowlist
+   must **not** be widened to `172.16.0.0/16` to "fix" it — that trusts every container on
+   the host, the SEC-LOKI-NODEPORT exposure. See `CLAUDE.md` → the admin-vhost allowlist.
+2. **The kubelet pulls via cri-dockerd → dockerd, NOT containerd** (`kubectl get node
+   minikube -o jsonpath='{.status.nodeInfo.containerRuntimeVersion}'` → `docker://…`;
+   `ctr namespace ls` on the node shows only `moby`). A containerd registry mirror in
+   `/etc/containerd/certs.d/` therefore does **nothing** for pod pulls, however well it
+   benchmarks with `ctr`. This was tried and reverted on 2026-08-18. Docker has no
+   per-registry mirror for non-Hub registries, so any future local-shortcut attempt needs
+   `/etc/hosts` + a plain-HTTP listener on `:443` + `insecure-registries`, or changed image
+   references — all of which are exactly the things that must be undone on a cluster split.
+
+**Before optimising this, measure whether it matters.** On a *redeploy* it does not: layers
+are already cached on the node, so only the manifest crosses the wire. The kubelet's own
+figure for a real `rollout restart` of a 288 MB image was **150 ms** — 0.7% of a 24.8s
+rollout. The 60x only shows up on a **cold** store: a fresh bootstrap or a DR restore, where
+the node pulls all ~6.7 GB. That is the case worth optimising, and it is also the case that
+tolerates the slow path best, because it happens rarely and unattended.
+
 ---
 
 ## 6. Applications
