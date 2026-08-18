@@ -22,6 +22,28 @@ pick_latest_archive() {
 # restore would have come back with no ollama metrics shim, no router metrics and no
 # ServiceMonitors, all without a single error. Check with:
 #   for d in <dirs>; do git -C $d rev-parse --abbrev-ref HEAD; done
+#
+# A WRONG BRANCH IS THE LOUD VERSION OF THIS BUG. The quiet one is a repo that is not
+# listed AT ALL: nothing clones it, so there is no branch to diff and the audit above
+# cannot see it. aisucks and propinvestech were both missing until 2026-08-18 — two live
+# public sites (namespaces `aisucks` and `prop-investech`, both with Jenkins jobs) that a
+# bare-metal restore would simply never have brought back. Re-audit by diffing this list
+# against every local git repo that has a Jenkinsfile/deployment.yaml, not just by
+# checking the branches of the repos already named here:
+#   source ./restore-lib.sh
+#   for d in /home/cloud/Ideaprojects/*/ /home/cloud/IdeaProjects/*/; do
+#     p=${d%/}; [ -d "$p/.git" ] || continue
+#     [ -f "$p/Jenkinsfile" ] || [ -f "$p/deployment.yaml" ] || continue   # deployable only
+#     restore_repo_manifest | grep -q "^$p " || echo "NOT IN MANIFEST: $p"
+#   done
+# Use the PIPE, not `grep ... <(restore_repo_manifest)` — the process-substitution form
+# silently matches nothing here and reports every repo as missing, which reads like a
+# catastrophe and is purely an artefact of the command.
+# Deliberately absent after that audit, both verified not deployed on 2026-08-18:
+#   splunk-hsbc-demo — start-scratch.sh's splunk block is commented out and prints
+#                      "End - NOT deploying splunk"; no splunk namespace exists.
+#   tatesremedies    — no namespace, no Jenkins job, no registry repo.
+# If either is ever actually deployed, it has to be added here at the same time.
 restore_repo_manifest() {
   cat <<'EOF'
 /home/cloud/Ideaprojects/vault https://github.com/wiqram/vault.git main
@@ -29,8 +51,10 @@ restore_repo_manifest() {
 /home/cloud/Ideaprojects/kube-prometheus https://github.com/wiqram/kube-prometheus.git main
 /home/cloud/Ideaprojects/nginx https://github.com/wiqram/nginx.git master
 /home/cloud/Ideaprojects/qcguy-ghost https://github.com/wiqram/qcguy-ghost.git main
+/home/cloud/IdeaProjects/aisucks https://github.com/wiqram/aisucks.git main
 /home/cloud/IdeaProjects/bestrentaladmin https://github.com/wiqram/bestrentaladmin.git main
 /home/cloud/IdeaProjects/dyingpaleblue https://github.com/wiqram/dyingpaleblue.git main
+/home/cloud/IdeaProjects/propinvestech https://github.com/wiqram/propinvestech.git main
 /home/cloud/IdeaProjects/ollama https://github.com/wiqram/ollama.git Claude-agent-update
 /home/cloud/IdeaProjects/Predictonomy https://github.com/wiqram/Predictonomy.git Claude-agent-updates
 /home/cloud/IdeaProjects/IG-Trading-Microservices https://github.com/wiqram/IG-Trading-Microservices.git Claude-agent-update
