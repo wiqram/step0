@@ -42,7 +42,19 @@ API_PORT="${API_PORT:-8443}"          # kube API server port
 # pin the raw/PREROUTING ACCEPT to the point-to-point link, so a host on the general LAN cannot
 # reach the API by spoofing $DEV_IP — worth having, as rp_filter here is loose (2), not strict.
 # If detection fails we omit -i rather than fail: the rule is still scoped by src+dst+dport.
+SELF_IP="${SELF_IP:-10.10.10.1}"      # this host's end of the /30 — used only to validate detection
 LINK_IFACE="${LINK_IFACE:-$(ip -o route get "$DEV_IP" 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -1)}"
+# ⚠️ Validate the detection, don't trust it. `ip route get` falls through to the DEFAULT route
+# whenever the /30 isn't up yet — which happens on every boot where the dev box is powered off
+# (point-to-point link, no peer -> no carrier -> NM never activates the profile) and happened
+# 2026-08-30 as a pure race (unit ran at 13:14:24, enp5s0 got its IP at :25). The result was the
+# ACCEPT pinned to the LAN NIC (enp7s0): dev-box SYNs arriving on enp5s0 missed it, hit Docker's
+# raw drop, and kubectl timed out with every documented setting looking correct. If the detected
+# iface doesn't own $SELF_IP it is NOT the point-to-point link — fall back to the unpinned rule
+# (still src+dst+dport scoped), which works; a wrong pin is a silent total failure.
+if [ -n "$LINK_IFACE" ] && ! ip -o -4 addr show dev "$LINK_IFACE" 2>/dev/null | grep -q " ${SELF_IP}/"; then
+  LINK_IFACE=""
+fi
 
 SELFDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STABLE_PATH="/usr/local/sbin/enable-devbox-kube-access.sh"   # where the systemd unit runs it from
@@ -75,7 +87,15 @@ if [ -n "$LINK_IFACE" ]; then
 else
   RAW_ARGS=(-s "$DEV_IP" -d "$API_IP" -p tcp --dport "$API_PORT" -j ACCEPT)
 fi
-del_raw()  { while iptables -t raw -C PREROUTING "${RAW_ARGS[@]}" 2>/dev/null; do iptables -t raw -D PREROUTING "${RAW_ARGS[@]}"; done; }
+# Delete EVERY prior variant of our ACCEPT — any -i pin or none — not just the one matching the
+# current RAW_ARGS. A rule pinned to the wrong iface by a stale detection (see above) would
+# otherwise survive a corrective re-run: `-D` with today's args can't match yesterday's pin, and
+# the leftover ACCEPT on the LAN NIC quietly defeats the anti-spoof point of pinning at all.
+del_raw() {
+  iptables-save -t raw 2>/dev/null | sed -n 's/^-A PREROUTING //p' | \
+    grep -E -- "-s ${DEV_IP}/32 -d ${API_IP}/32 .*--dport ${API_PORT} -j ACCEPT" | \
+    while read -r rule; do eval "iptables -t raw -D PREROUTING $rule"; done
+}
 
 apply_rules() {
   need_root
