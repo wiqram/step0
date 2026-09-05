@@ -927,7 +927,7 @@ phase8_automation() {
   #     of pipeline logs incl. follower emails) is reachable from the whole bridge network
   #     after any Docker restart, with nothing to say so. See loki-nodeport-guard.sh.
   if [ "$DRY_RUN" = 1 ]; then
-    echo "  DRYRUN> sudo $SCRIPT_DIR/10gbe-link-watchdog.sh --install ; sudo $SCRIPT_DIR/enable-devbox-kube-access.sh --install ; sudo $SCRIPT_DIR/loki-nodeport-guard.sh --install ; sudo $SCRIPT_DIR/tailscale-access.sh --install"
+    echo "  DRYRUN> sudo $SCRIPT_DIR/10gbe-link-watchdog.sh --install ; sudo $SCRIPT_DIR/enable-devbox-kube-access.sh --install ; sudo $SCRIPT_DIR/loki-nodeport-guard.sh --install ; sudo $SCRIPT_DIR/docker-runtime-upgrade.sh --install ; sudo $SCRIPT_DIR/tailscale-access.sh --install"
   else
     sudo "$SCRIPT_DIR/10gbe-link-watchdog.sh" --install >/dev/null 2>&1 \
       && log "10gbe-link-watchdog.service installed" || log "WARN: 10gbe-link-watchdog --install failed (re-run by hand)."
@@ -936,6 +936,12 @@ phase8_automation() {
     sudo "$SCRIPT_DIR/loki-nodeport-guard.sh" --install >/dev/null 2>&1 \
       && log "yolo-loki-nodeport-guard.service installed (SEC-LOKI-NODEPORT)" \
       || log "WARN: loki-nodeport-guard --install failed — Loki NodePort 30310 is UNRESTRICTED. Re-run: sudo $SCRIPT_DIR/loki-nodeport-guard.sh --install"
+    # docker-runtime-upgrade: apt-mark hold on docker-ce/containerd + a Saturday 04:32 root timer
+    # that upgrades them in the market-closed window (OBS-ALERT-EXECERR, 2026-09-05). Without the
+    # hold, the next ad-hoc `apt upgrade` restarts containerd+docker and with them every pod.
+    sudo "$SCRIPT_DIR/docker-runtime-upgrade.sh" --install >/dev/null 2>&1 \
+      && log "docker-runtime-upgrade.timer installed (docker/containerd held; Saturday window)" \
+      || log "WARN: docker-runtime-upgrade --install failed — docker-ce is UNHELD; an ad-hoc apt upgrade will restart the cluster. Re-run: sudo $SCRIPT_DIR/docker-runtime-upgrade.sh --install"
     # Tailscale: re-arms off-LAN access to the admin vhosts (jenkins/grafana/vault/...).
     # NOT output-suppressed like the three above, deliberately — this is the one that can
     # need a human (interactive auth if phase 4h found no node identity AND .env carries no

@@ -79,6 +79,7 @@ EXP_10G_DRIVER="${EXP_10G_DRIVER:-atlantic}"       # Aquantia/Marvell 10GBASE-T
 WATCHDOG_SVC="${WATCHDOG_SVC:-10gbe-link-watchdog.service}"
 KUBEACCESS_SVC="${KUBEACCESS_SVC:-devbox-kube-access.service}"
 LOKI_GUARD_SVC="${LOKI_GUARD_SVC:-yolo-loki-nodeport-guard.service}"  # SEC-LOKI-NODEPORT
+RUNTIME_UPGRADE_TMR="${RUNTIME_UPGRADE_TMR:-docker-runtime-upgrade.timer}"  # OBS-ALERT-EXECERR: docker held, Saturday window
 EXP_LOKI_PORT="${EXP_LOKI_PORT:-30310}"            # Loki NodePort — must be host-only
 DEV_OOB_SSH="${DEV_OOB_SSH:-vik@192.168.50.161}"   # dev box over the LAN (OOB) — to verify its egress back to us
 
@@ -240,6 +241,14 @@ if have systemctl; then
       *) info "$svc = $st" ;;
     esac
   done
+  # docker/containerd must be HELD and the Saturday upgrade timer enabled — otherwise the next
+  # ad-hoc `apt upgrade` restarts every pod (2026-09-05). Both come from one --install.
+  st="$(systemctl is-enabled "$RUNTIME_UPGRADE_TMR" 2>/dev/null)"
+  if [ "$st" = "enabled" ] && apt-mark showhold 2>/dev/null | grep -qx docker-ce; then
+    pass "$RUNTIME_UPGRADE_TMR enabled + docker-ce held (next: $(systemctl show "$RUNTIME_UPGRADE_TMR" -p NextElapseUSecRealtime --value 2>/dev/null))"
+  else
+    warn "$RUNTIME_UPGRADE_TMR = ${st:-not-installed} / docker-ce held: $(apt-mark showhold 2>/dev/null | grep -qx docker-ce && echo yes || echo NO) — reinstall: sudo ./docker-runtime-upgrade.sh --install"
+  fi
 
   # `is-active` is NOT enough, and this is the lesson from 2026-08-07: the service reported
   # active, both DOCKER-USER rules were present and correct, the link was up — and dev->prod was
