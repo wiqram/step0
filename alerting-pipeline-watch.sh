@@ -33,6 +33,14 @@
 #   notify-failures     alertmanager_notifications_failed_total rising over 15m. Catches
 #                       the case where everything is up and the ntfy webhook itself is
 #                       failing — DNS, egress, a typo'd topic.
+#   loki-down           Loki /ready over its NodePort (host-originated, so the
+#                       SEC-LOKI-NODEPORT DOCKER-USER drop does not apply — see
+#                       loki-nodeport-guard.sh). Added 2026-09-05: every YOLO Grafana rule
+#                       is Loki-backed and now carries `execErrState: KeepLast`, so a Loki
+#                       that is down no longer fires those rules — it makes them SILENT.
+#                       This probe is the one place that says so. The 15-minute
+#                       SUSTAINED rule below is what separates "docker restarted, Loki
+#                       back in 5 min" (nothing) from "Loki is gone" (one page).
 #
 # WHAT IT DELIBERATELY DOES NOT WATCH
 #   Resource pressure of any kind. CPU/GPU temperature, node CPU/memory, disk, kubelet
@@ -75,6 +83,7 @@ fi
 # which is the entire point of the script.
 AP_PROM_URL="${AP_PROM_URL:-http://172.16.238.2:30339}"
 AP_ALERTMANAGER_URL="${AP_ALERTMANAGER_URL:-http://172.16.238.2:30333}"
+AP_LOKI_URL="${AP_LOKI_URL:-http://172.16.238.2:30310}"
 AP_HTTP_TIMEOUT="${AP_HTTP_TIMEOUT:-10}"
 AP_NOTIFY_FAIL_WINDOW="${AP_NOTIFY_FAIL_WINDOW:-15m}"
 AP_NEED_CONSEC="${AP_NEED_CONSEC:-3}"   # x 5-minute cron = 15 minutes sustained
@@ -206,6 +215,9 @@ add_metric "prometheus-down" "$([ "$PROM_UP" = "1" ] && echo 0 || echo 1)" 1 "" 
 AM_UP="$(ap_http_ok "$AP_ALERTMANAGER_URL/-/healthy")"
 add_metric "alertmanager-down" "$([ "$AM_UP" = "1" ] && echo 0 || echo 1)" 1 "" \
   "Alertmanager unreachable ($AP_ALERTMANAGER_URL)"
+LOKI_UP="$(ap_http_ok "$AP_LOKI_URL/ready")"
+add_metric "loki-down" "$([ "$LOKI_UP" = "1" ] && echo 0 || echo 1)" 1 "" \
+  "Loki unreachable ($AP_LOKI_URL) — every YOLO Grafana rule is Loki-backed and KeepLast, so they are all silent, not red"
 
 # ---- 3 + 4. Prometheus-derived probes ---------------------------------------------
 # Skipped entirely when Prometheus is down: prometheus-down already says so, and three
