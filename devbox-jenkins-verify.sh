@@ -174,7 +174,18 @@ else:
 fi
 
 git rev-parse --git-dir >/dev/null 2>&1 || { echo "  --commit must run inside the project's git repo" >&2; exit 1; }
-me=$(git rev-parse --verify "$commit^{commit}" 2>/dev/null) || { echo "  cannot resolve '$commit' in this repo" >&2; exit 1; }
+me=$(git rev-parse --verify "$commit^{commit}" 2>/dev/null) || {
+  echo "  VERDICT: UNKNOWN — cannot resolve '$commit' in the repo you are standing in." >&2
+  here=$(git config --get remote.origin.url 2>/dev/null || echo "?")
+  echo "  cwd repo:      $here" >&2
+  echo "  '$app' builds: a repo whose remote matches '$repo'" >&2
+  case "$here" in
+    *"$repo"*) echo "  The repo is right, so the SHA is not in this clone — try 'git fetch'." >&2 ;;
+    *) echo "  Those differ, so you are in the wrong clone. A submodule sha is NOT a commit" >&2
+       echo "  in its parent's object store (and vice versa) — cd to the '$repo' checkout" >&2
+       echo "  and re-run. For yolo the submodule lives at ./robin_stocks." >&2 ;;
+  esac
+  exit 1; }
 
 if [ -z "$shas" ]; then
   echo "  VERDICT: UNKNOWN — no checkout of '$repo' found in build #$build."
