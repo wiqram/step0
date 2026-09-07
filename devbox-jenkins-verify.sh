@@ -27,7 +27,7 @@
 # Never prints the credential.
 set -eu
 
-APPS="qcguy predictonomy bestrentaladmin dyingpaleblue ollama yolo"
+APPS="qcguy predictonomy bestrentaladmin dyingpaleblue ollama yolo robin_stocks"
 usage() { echo "usage: jenkins-verify <app> [--build N] [--commit SHA] [--wait] [--since]  (apps: $APPS)" >&2; exit 2; }
 
 app="${1:-}"; [ -n "$app" ] || usage; shift || true
@@ -38,6 +38,7 @@ case "$app" in
   dyingpaleblue)   job=dyingpaleblue;         repo=dyingpaleblue ;;
   ollama)          job=ollama;                repo=ollama ;;
   yolo)            job=trading-microservices; repo=ig-trading-microservices ;;
+  robin_stocks)    job=robin_stocks;          repo=robin_stocks ;;   # own job, own rollout, downstream of every parent build
   *) echo "jenkins-verify: unknown app '$app'" >&2; usage ;;
 esac
 
@@ -130,10 +131,16 @@ if [ -z "$shas" ]; then
   exit 1
 fi
 
-total=0; yes=0; missing=0
+total=0; yes=0; missing=0; unrelated=0
 for s in $shas; do
   total=$((total+1))
   if git cat-file -e "${s}^{commit}" 2>/dev/null; then
+    # A commit sharing NO history with the built revision is from a DIFFERENT REPO --
+    # easy to hit here, because a parent repo with a submodule remote configured can
+    # resolve the submodule's shas locally. Without this, such a commit reports a
+    # confident "NOT DEPLOYED (the build predates it)", which is the exact class of
+    # wrong-but-well-formed answer this tool exists to prevent.
+    if ! git merge-base "$me" "$s" >/dev/null 2>&1; then unrelated=$((unrelated+1)); continue; fi
     if git merge-base --is-ancestor "$me" "$s" 2>/dev/null; then yes=$((yes+1)); fi
   else
     missing=$((missing+1))
@@ -141,7 +148,14 @@ for s in $shas; do
   fi
 done
 
+if [ "$unrelated" -gt 0 ] && [ "$unrelated" -eq "$total" ]; then
+  echo "  VERDICT: UNKNOWN — $(printf '%.12s' "$me") shares no history with anything job '$job' builds."
+  echo "  That commit belongs to a different repository. Did you mean a different app?"
+  echo "  (a submodule commit can resolve here while belonging to another repo's history)"
+  exit 1
+fi
 echo "  commit $(printf '%.12s' "$me") is an ancestor of $yes of $total checkout(s)"
+[ "$unrelated" -gt 0 ] && { echo "  VERDICT: UNKNOWN — $unrelated checkout(s) share no history with your commit"; exit 1; }
 [ "$missing" -gt 0 ] && { echo "  VERDICT: UNKNOWN — $missing built sha(s) unfetched"; exit 1; }
 if   [ "$yes" -eq "$total" ]; then echo "  VERDICT: DEPLOYED"; exit 0
 elif [ "$yes" -eq 0 ];        then echo "  VERDICT: NOT DEPLOYED — build #$build predates your commit"; exit 1

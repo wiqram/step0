@@ -70,4 +70,22 @@ fixture "0123456789abcdef0123456789abcdef01234567"
 out="$(run "$c1")"; rc=$?
 case "$out" in *"VERDICT: UNKNOWN"*) [ $rc -ne 0 ] && ok "unfetched built sha -> UNKNOWN, not a false negative" || no "unknown but exit 0";; *) no "expected UNKNOWN for unfetched sha, got: $out";; esac
 
+# --- a commit from ANOTHER repo is UNKNOWN, never NOT DEPLOYED ---------------
+# Real case: the yolo job's app repo has a submodule whose remote is configured in the
+# parent clone, so a submodule sha RESOLVES locally while belonging to a different
+# history. Before this guard the tool reported a confident
+# "NOT DEPLOYED — the build predates your commit", which is false in the worst way:
+# it names a cause. An unrelated history shares no merge-base, which is the discriminant.
+git -C "$repo" checkout -q --orphan other
+echo x > "$repo/g"; git -C "$repo" add g; git -C "$repo" commit -q -m "unrelated"
+foreign=$(git -C "$repo" rev-parse HEAD)
+git -C "$repo" checkout -q master 2>/dev/null || git -C "$repo" checkout -q -
+fixture "$c1" "$c2" "$c3"
+out="$(run "$foreign")"; rc=$?
+case "$out" in
+  *"VERDICT: UNKNOWN"*) [ $rc -ne 0 ] && ok "foreign-repo commit -> UNKNOWN, not a false NOT DEPLOYED" || no "unknown but exit 0" ;;
+  *"NOT DEPLOYED"*)     no "REGRESSION: a foreign commit reported NOT DEPLOYED (the defect this guards)" ;;
+  *)                    no "expected UNKNOWN for a foreign commit, got: $out" ;;
+esac
+
 exit $fail
