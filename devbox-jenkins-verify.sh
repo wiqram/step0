@@ -62,14 +62,41 @@ J="https://$JENKINS_CRED@jenkins.traderyolo.com"
 if [ "$since" = 1 ]; then
   curl -s "$J/job/$job/api/json?tree=nextBuildNumber" \
     | python3 -c 'import sys,json;print(json.load(sys.stdin)["nextBuildNumber"])'
-  echo "jenkins-verify: pin that number BEFORE triggering; verify THAT build, not lastBuild." >&2
+  echo "jenkins-verify: that is the number your next trigger should produce." >&2
+  echo "  After  jenkins-deploy $app,  verify it with:" >&2
+  echo "    jenkins-verify $app --build <that number> --commit HEAD --wait" >&2
+  echo "  Passing it back with --build is REQUIRED: without it this tool resolves the" >&2
+  echo "  job's latest build, which right after a trigger is still the PREVIOUS one." >&2
   exit 0
 fi
 
-if [ -z "$build" ] && [ -n "${JENKINS_VERIFY_FIXTURE:-}" ]; then build=0; fi
+explicit_build=1
+t0=$(python3 -c 'import time;print(int(time.time()*1000))')
+if [ -z "$build" ] && [ -n "${JENKINS_VERIFY_FIXTURE:-}" ]; then build=0; explicit_build=0; fi
 if [ -z "$build" ]; then
-  build=$(curl -s "$J/job/$job/api/json?tree=lastBuild%5Bnumber%5D" \
-    | python3 -c 'import sys,json;d=json.load(sys.stdin).get("lastBuild");print(d["number"] if d else "")')
+  explicit_build=0
+  # A trigger that has been ACCEPTED but not STARTED has no build object yet, so the
+  # job's lastBuild is still the previous build — failure mode 1 from this tool's own
+  # header, reached from inside the tool. With --wait, sit through the queue and follow
+  # the build that actually starts.
+  qtries=0
+  while : ; do
+    js0=$(curl -s "$J/job/$job/api/json?tree=inQueue,nextBuildNumber,lastBuild%5Bnumber,building%5D")
+    inq=$(printf '%s' "$js0" | python3 -c 'import sys,json;print("1" if json.load(sys.stdin).get("inQueue") else "0")')
+    build=$(printf '%s' "$js0" | python3 -c 'import sys,json;d=json.load(sys.stdin).get("lastBuild");print(d["number"] if d else "")')
+    bldg=$(printf '%s' "$js0" | python3 -c 'import sys,json;d=json.load(sys.stdin).get("lastBuild") or {};print("1" if d.get("building") else "0")')
+    if [ "$dowait" = 1 ] && { [ "$inq" = 1 ] || [ "$bldg" = 1 ]; }; then
+      qtries=$((qtries+1)); [ "$qtries" -gt 180 ] && { echo "jenkins-verify: still queued/building after ~30min" >&2; break; }
+      sleep 10; continue
+    fi
+    if [ "$dowait" != 1 ] && [ "$inq" = 1 ]; then
+      echo "jenkins-verify: VERDICT: UNKNOWN — a build of '$job' is QUEUED and has not started."
+      echo "  The latest build object (#$build) is therefore NOT the one you just triggered."
+      echo "  Re-run with --wait, or name it: jenkins-verify $app --build <n> --commit ... "
+      exit 1
+    fi
+    break
+  done
   [ -n "$build" ] || { echo "jenkins-verify: $job has no builds" >&2; exit 1; }
 fi
 
@@ -121,6 +148,30 @@ print("\n".join(s for _, s, _ in mine if s))
 
 echo "$job #$build"
 [ -n "$commit" ] || exit 0
+
+# A build that had already FINISHED before this command started cannot be one this
+# command's caller just triggered. Answering about it is how "NOT DEPLOYED" gets said
+# about the previous build -- and, pointed the other way, how an older SUCCESS that
+# happens to contain your commit reads as DEPLOYED while your real build is still running.
+# Only refuse when the build was not named explicitly: --build N means "I mean THIS one".
+if [ "$explicit_build" = 0 ]; then
+  ended=$(printf '%s' "$js" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+if d.get("building"): print(0)
+else:
+    ts, du = d.get("timestamp"), d.get("duration")
+    print((ts + du) if isinstance(ts, int) and isinstance(du, int) else 0)
+')
+  if [ "${ended:-0}" -gt 0 ] && [ "$ended" -lt "$t0" ]; then
+    echo "  VERDICT: UNKNOWN — build #$build finished before this check started, so it"
+    echo "  cannot be a build you just triggered. This tool will not judge your deploy"
+    echo "  by a build that predates the question."
+    echo "  Name the build you mean:  jenkins-verify $app --build <n> --commit $commit"
+    echo "  (jenkins-verify $app --since, run BEFORE triggering, prints that number.)"
+    exit 1
+  fi
+fi
 
 git rev-parse --git-dir >/dev/null 2>&1 || { echo "  --commit must run inside the project's git repo" >&2; exit 1; }
 me=$(git rev-parse --verify "$commit^{commit}" 2>/dev/null) || { echo "  cannot resolve '$commit' in this repo" >&2; exit 1; }

@@ -88,4 +88,26 @@ case "$out" in
   *)                    no "expected UNKNOWN for a foreign commit, got: $out" ;;
 esac
 
+# --- a build that FINISHED BEFORE the check started is UNKNOWN ---------------
+# Observed live: `--since` then deploy then `--commit HEAD --wait` inspected the
+# PREVIOUS build and said "NOT DEPLOYED — build #124 predates your commit". The queued
+# build had no build object yet, so the job's latest build was still the old one. The
+# same resolution pointed the other way returns DEPLOYED about a build that is not yours,
+# which is the dangerous direction. A build that ended before we started asking cannot be
+# the one the caller just triggered.
+stale() { # build a fixture that finished an hour ago
+  ts=$(( ($(date +%s) - 3600) * 1000 ))
+  { printf '{"building":false,"result":"SUCCESS","timestamp":%s,"duration":1000,"actions":[' "$ts"
+    printf '{"_class":"hudson.plugins.git.util.BuildData","remoteUrls":["https://github.com/wiqram/IG-Trading-Microservices.git"],"lastBuiltRevision":{"SHA1":"%s","branch":[{"SHA1":"%s","name":"b"}]}}' "$1" "$1"
+    printf ']}'
+  } > "$tmp/j.json"
+}
+stale "$c3"
+out="$(run "$c1")"; rc=$?     # c1 IS in c3: without the guard this returns DEPLOYED
+case "$out" in
+  *"VERDICT: UNKNOWN"*) [ $rc -ne 0 ] && ok "build older than the question -> UNKNOWN" || no "unknown but exit 0" ;;
+  *"VERDICT: DEPLOYED"*) no "REGRESSION: judged the deploy by a build that predates the question" ;;
+  *) no "expected UNKNOWN for a stale build, got: $out" ;;
+esac
+
 exit $fail
