@@ -149,6 +149,43 @@ print("\n".join(s for _, s, _ in mine if s))
 echo "$job #$build"
 [ -n "$commit" ] || exit 0
 
+# ---------------------------------------------------------------------------
+# THE BUILD'S RESULT GATES THE VERDICT. Ancestry answers "was my commit in the
+# tree this build READ" -- never "did it SHIP". A FAILED build whose checkout
+# contains your commit passed the ancestry test and deployed nothing, so without
+# this gate the tool printed DEPLOYED for a build that failed at image-build.
+# That is the false green this whole script exists to prevent.
+# ---------------------------------------------------------------------------
+result=$(printf '%s' "$js" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("" if d.get("building") else (d.get("result") or ""))')
+if [ "$result" != "SUCCESS" ]; then
+  [ -z "$result" ] && result="STILL BUILDING"
+  # wfapi knows which stages ran. If no deploy stage SUCCEEDED, nothing shipped and
+  # we can say so; if one did and the build failed later, part of it may be live.
+  if [ -n "${JENKINS_VERIFY_FIXTURE:-}" ]; then deployed_stage=""; else
+  deployed_stage=$(curl -s "$J/job/$job/$build/wfapi/describe" 2>/dev/null | python3 -c '
+import sys, json
+try: d = json.load(sys.stdin)
+except Exception: print("?"); raise SystemExit
+ok = [s.get("name","") for s in d.get("stages", [])
+      if "deploy" in (s.get("name","").lower()) and s.get("status") == "SUCCESS"]
+print("|".join(ok) if ok else "")
+' 2>/dev/null); fi
+  echo "  build result: $result"
+  case "$deployed_stage" in
+    "?") echo "  VERDICT: UNKNOWN — build #$build is not SUCCESS, and its stage detail is"
+         echo "  unreadable, so nothing can be concluded about what reached production."
+         echo "  Do NOT treat $(printf '%.12s' "$commit") as live." ;;
+    "")  echo "  VERDICT: NOT DEPLOYED — build #$build ended $result and no deploy stage"
+         echo "  completed, so nothing from it reached production. Your commit being in"
+         echo "  the checkout only means the build READ it. Fix and re-deploy." ;;
+    *)   echo "  VERDICT: UNKNOWN — build #$build ended $result, but these deploy stage(s)"
+         echo "  DID complete: $deployed_stage"
+         echo "  Part of the change may be live and part not. Treat as a PARTIAL deploy:"
+         echo "  re-deploy, and do not rely on either state." ;;
+  esac
+  exit 1
+fi
+
 # A build that had already FINISHED before this command started cannot be one this
 # command's caller just triggered. Answering about it is how "NOT DEPLOYED" gets said
 # about the previous build -- and, pointed the other way, how an older SUCCESS that

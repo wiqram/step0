@@ -110,4 +110,24 @@ case "$out" in
   *) no "expected UNKNOWN for a stale build, got: $out" ;;
 esac
 
+# --- a FAILED build is never DEPLOYED, however good the ancestry -------------
+# Observed live: `--build 2158 --commit <sha>` printed `status: FAILURE`, then
+# `VERDICT: DEPLOYED`, because the commit WAS in the tree that build checked out.
+# #2158 failed at Build App Images; nothing reached prod. Ancestry answers "was my
+# commit in the tree the build READ", never "did it ship" — the result gates the verdict.
+failed_build() {
+  { printf '{"building":false,"result":"FAILURE","actions":['
+    printf '{"_class":"hudson.plugins.git.util.BuildData","remoteUrls":["https://github.com/wiqram/IG-Trading-Microservices.git"],"lastBuiltRevision":{"SHA1":"%s","branch":[{"SHA1":"%s","name":"b"}]}}' "$1" "$1"
+    printf ']}'
+  } > "$tmp/j.json"
+}
+failed_build "$c3"
+out="$(run "$c1")"; rc=$?     # c1 IS an ancestor of c3 — ancestry alone would say DEPLOYED
+case "$out" in
+  *"VERDICT: DEPLOYED"*) no "REGRESSION: called a FAILED build DEPLOYED (the false green)" ;;
+  *"VERDICT: NOT DEPLOYED"*) [ $rc -ne 0 ] && ok "FAILURE build -> NOT DEPLOYED despite good ancestry" || no "right verdict, exit 0" ;;
+  *"VERDICT: UNKNOWN"*) [ $rc -ne 0 ] && ok "FAILURE build -> refused a deployed verdict" || no "right verdict, exit 0" ;;
+  *) no "expected a non-DEPLOYED verdict for a FAILED build, got: $out" ;;
+esac
+
 exit $fail
