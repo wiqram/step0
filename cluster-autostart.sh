@@ -86,6 +86,36 @@ self_heal_vault_injection() {
   fi
 }
 
+# Keep kubelet's container-log rotation limit above docker's (called once the cluster is healthy).
+# WHY: with kubelet on its 10Mi default under docker's 100m json-file max-size, kubelet renames
+# every big pod's /var/log/pods symlink every few minutes and promtail re-ships whole files — every
+# yolo log line stored 2-3x in Loki (2026-09-14). A warm/bare `minikube start` (step 6) can never add
+# the start-line flag to a profile that predates it, and a kubeadm drift reconfigure regenerates
+# kubelet's config.yaml, so the */10 watchdog is what makes a regression self-repairing. The script
+# is a cheap no-op when the effective value is already right, restarts ONLY kubelet (containers keep
+# running) on a mismatch, and fails closed (changes nothing) when it cannot read the value.
+# Best-effort: never changes this script's exit code.
+self_heal_kubelet_log_rotation() {
+  local out rc
+  out="$("$SELFDIR/tune-kubelet-log-rotation.sh" 2>&1)"; rc=$?
+  case "$out" in
+    *"nothing to do"*) return 0 ;;   # the normal */10 case — keep the log quiet
+  esac
+  printf '%s\n' "$out" | while IFS= read -r l; do log "kubelet-log-rotation: $l"; done
+  if [ "$rc" -eq 0 ]; then
+    ntfy "kubelet log rotation re-applied" "kubelet containerLogMaxSize was not above docker's max-size; tune-kubelet-log-rotation.sh set it and restarted kubelet (containers kept running). See cluster-autostart.log." default "wrench,cloud"
+  elif [ "$rc" -ne 2 ]; then
+    # rc 2 = could not read the value (API proxy not ready yet) — transient, retried in 10 min, no page.
+    # Anything else is a real refusal/failure that repeats every tick, so page at most once a day.
+    local stamp="$LOGDIR/.kubelet-log-rotation-alerted"
+    if [ -z "$(find "$stamp" -mmin -1440 2>/dev/null)" ]; then
+      touch "$stamp"
+      ntfy "kubelet log rotation tune FAILED" "tune-kubelet-log-rotation.sh exited $rc — Loki may be storing duplicate lines. Run ./tune-kubelet-log-rotation.sh --status. See cluster-autostart.log. (Paged at most once a day.)"
+    fi
+  fi
+  return 0
+}
+
 # Single instance (the */10 watchdog no-ops while a run is in flight).
 exec 9>"$LOCK"; flock -n 9 || exit 0
 
@@ -120,12 +150,12 @@ fi
 
 # 5. Container is running — let k8s self-heal first; only reconcile if it stays unhealthy.
 k8s_ok(){ minikube status -o json 2>/dev/null | grep -q '"APIServer":"Running"' && minikube status -o json 2>/dev/null | grep -q '"Kubelet":"Running"'; }
-for _ in $(seq 1 40); do k8s_ok && { log "cluster healthy (container up, APIServer+Kubelet Running)"; self_heal_vault_injection; exit 0; }; sleep 3; done
+for _ in $(seq 1 40); do k8s_ok && { log "cluster healthy (container up, APIServer+Kubelet Running)"; self_heal_vault_injection; self_heal_kubelet_log_rotation; exit 0; }; sleep 3; done
 
 # 6. Up but unhealthy after ~2min -> reconcile with `minikube start` (fixes kubeconfig/IP + control plane).
 log "container running but k8s unhealthy after 120s — reconciling with 'minikube start --driver=docker'"
 if timeout 360 minikube start --driver=docker >>"$LOG" 2>&1; then
-  if k8s_ok; then log "reconcile OK — cluster healthy"; self_heal_vault_injection; ntfy "minikube cluster auto-recovered" "Host rebooted; cluster reconciled to healthy via minikube start." default "white_check_mark,cloud"; exit 0
+  if k8s_ok; then log "reconcile OK — cluster healthy"; self_heal_vault_injection; self_heal_kubelet_log_rotation; ntfy "minikube cluster auto-recovered" "Host rebooted; cluster reconciled to healthy via minikube start." default "white_check_mark,cloud"; exit 0
   else log "minikube start returned but k8s still unhealthy"; ntfy "minikube auto-recover INCOMPLETE" "minikube start ran but APIServer/Kubelet not Running — manual check needed."; exit 1; fi
 else
   log "minikube start FAILED — manual recovery needed (possibly from-scratch). NOT auto-deleting."

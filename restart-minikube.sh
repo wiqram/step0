@@ -35,7 +35,13 @@ else
   #                          start-scratch.sh for the full rationale. zram swap stays on the host (docs/plan.md R1).
   #   --gpus all           : added for parity with start-scratch so Ollama can claim the GPU on a warm rebuild
   #                          (if so, also uncomment the nvidia-gpu-device-plugin addon below).
-  minikube start --cpus 16 --memory 65536 --disk-size 40g --driver=docker --network 5million --gpus all --mount-string="/mnt/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.system-reserved=cpu=1,memory=31Gi --extra-config=kubelet.kube-reserved=cpu=1,memory=2Gi --extra-config=kubelet.eviction-hard="memory.available<1Gi,nodefs.available<10%" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
+  # --extra-config=kubelet.container-log-max-size=200Mi (2026-09-14): kubelet's default 10Mi is BELOW
+  #   the 100m json-file max-size minikube writes into the node's daemon.json, so kubelet "rotated"
+  #   every big container log by renaming its /var/log/pods symlink, cri-dockerd re-created it onto
+  #   the SAME json.log, and promtail re-read whole files -> every yolo log line stored 2-3x in Loki.
+  #   The rule is kubelet limit > docker max-size, so docker is the only rotator. The flag covers a
+  #   cluster CREATED by this line; tune-kubelet-log-rotation.sh (below) covers an existing one.
+  minikube start --cpus 16 --memory 65536 --disk-size 40g --driver=docker --network 5million --gpus all --mount-string="/mnt/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.system-reserved=cpu=1,memory=31Gi --extra-config=kubelet.kube-reserved=cpu=1,memory=2Gi --extra-config=kubelet.eviction-hard="memory.available<1Gi,nodefs.available<10%" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=kubelet.container-log-max-size=200Mi --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
   # Previous line (kept for reference): 6 CPU / 16G, no kubelet reservations/eviction, no GPU.
   #minikube start --cpus 6 --memory 16384 --disk-size 40g --driver=docker --network 5million --mount-string="/mnt/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
   #minikube start --cpus 6 --memory 16384 --disk-size 40g --driver=docker --network 5million --mount-string="/home/cloud/Ideaprojects/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
@@ -60,6 +66,14 @@ fi
 # retry loop. Idempotent + best-effort. See tune-cri-dockerd-timeout.sh for the trace.
 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tune-cri-dockerd-timeout.sh" \
   || echo "WARN: cri-dockerd timeout tuning failed; container creates may time out under IO load."
+#################kubelet container-log rotation#################
+# Keep kubelet's containerLogMaxSize ABOVE docker's json-file max-size (100m): below it kubelet
+# renames the /var/log/pods symlinks every few minutes and promtail re-ships whole log files
+# (2-3x duplicate lines in Loki, 2026-09-14). Re-applied after every start because a cluster that
+# predates the --extra-config flag never gets it from a warm start. Idempotent + best-effort;
+# restarts ONLY kubelet, only on a mismatch. See tune-kubelet-log-rotation.sh for the trace.
+"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tune-kubelet-log-rotation.sh" \
+  || echo "WARN: kubelet log-rotation tuning failed; Loki may store duplicate log lines."
 #to install docker container registry
 minikube addons enable registry
 # Resource metrics for `kubectl top` / HPAs. prometheus-adapter can't serve pod

@@ -145,7 +145,13 @@ else
     echo "NOTE: this host is well under the 96G design point — the full app set (Jenkins +"
     echo "      kube-prometheus + Vault + ollama + splunk + apps) will be tight at ${MK_GI}Gi."
   fi
-  minikube start --cpus "$MK_CPUS" --memory "$(( MK_GI * 1024 ))" --disk-size 40g --driver=docker --network 5million --gpus all --mount-string="/mnt/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.system-reserved=cpu=1,memory=${SYS_RES_GI}Gi --extra-config=kubelet.kube-reserved=cpu=1,memory=2Gi --extra-config=kubelet.eviction-hard="memory.available<1Gi,nodefs.available<10%" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
+  # --extra-config=kubelet.container-log-max-size=200Mi (2026-09-14): kubelet's default 10Mi is BELOW
+  #   the 100m json-file max-size minikube writes into the node's daemon.json, so kubelet "rotated"
+  #   every big container log by renaming its /var/log/pods symlink, cri-dockerd re-created it onto
+  #   the SAME json.log, and promtail re-read whole files -> every yolo log line stored 2-3x in Loki.
+  #   The rule is kubelet limit > docker max-size, so docker is the only rotator. The flag covers a
+  #   cluster CREATED by this line; tune-kubelet-log-rotation.sh (below) covers an existing one.
+  minikube start --cpus "$MK_CPUS" --memory "$(( MK_GI * 1024 ))" --disk-size 40g --driver=docker --network 5million --gpus all --mount-string="/mnt/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.system-reserved=cpu=1,memory=${SYS_RES_GI}Gi --extra-config=kubelet.kube-reserved=cpu=1,memory=2Gi --extra-config=kubelet.eviction-hard="memory.available<1Gi,nodefs.available<10%" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=kubelet.container-log-max-size=200Mi --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
   # Pre-2026-08-07 line (hardcoded for the 96G host), kept for reference:
   #minikube start --cpus 16 --memory 65536 --disk-size 40g --driver=docker --network 5million --gpus all --mount-string="/mnt/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.system-reserved=cpu=1,memory=31Gi --extra-config=kubelet.kube-reserved=cpu=1,memory=2Gi --extra-config=kubelet.eviction-hard="memory.available<1Gi,nodefs.available<10%" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
   # Previous line (kept for reference): no kubelet reservations/eviction -> scheduler over-commits the 32G cgroup cap.
@@ -174,6 +180,15 @@ fi
 # Best-effort: a tuning miss must not abort the bootstrap.
 "$(dirname "$SCRIPT_PATH")/tune-cri-dockerd-timeout.sh" \
   || echo "WARN: cri-dockerd timeout tuning failed; container creates may time out under IO load."
+#################kubelet container-log rotation#################
+# Keep kubelet's containerLogMaxSize ABOVE docker's json-file max-size (100m), so docker is the only
+# rotator. Below it, kubelet renames the /var/log/pods symlink every few minutes and promtail
+# re-ships whole log files (every yolo line stored 2-3x in Loki, 2026-09-14). The start line's
+# --extra-config already sets 200Mi on a NEW cluster; this is the idempotent no-op that proves it
+# (and repairs a cluster that predates the flag). Restarts ONLY kubelet, and only on a mismatch.
+# Best-effort: a tuning miss must not abort the bootstrap.
+"$(dirname "$SCRIPT_PATH")/tune-kubelet-log-rotation.sh" \
+  || echo "WARN: kubelet log-rotation tuning failed; Loki may store duplicate log lines. Check: $(dirname "$SCRIPT_PATH")/tune-kubelet-log-rotation.sh --status"
 #to install docker container registry — R8: self-managed + durable on sdb2 (NOT the ephemeral addon).
 # The addon stored blobs on the pod's ephemeral /var/lib/registry, so every cluster stop wiped all
 # images (cluster-wide ImagePullBackOff — the 2026-06-16 outage). We disable it and run our own

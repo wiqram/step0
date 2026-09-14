@@ -196,6 +196,44 @@ Still genuinely open, and the only backup gap left: the `db-snapshot-audit` WARN
 that CronJob has never run (schedule `20 3 * * *`), so the `audit` database has no logical
 backup until it first fires. Expected on a young cluster; re-check after the next run.
 
+### 20. Kubelet renamed every pod log's symlink every few minutes — ✅ FIXED IN REPO 2026-09-14 (live apply pending operator)
+**Symptom (yolo):** every yolo app log line stored 2-3x in Loki with identical nanosecond timestamps
+(Thu 09-10 20:00-21:00Z: 11 stored `predictonomy calendar:` lines, 4 distinct), and promtail's pushes
+400'd "entry too far behind" (211 in 48h). Nothing looked down.
+
+**Root cause (proven on the node):** runtime is docker via cri-dockerd, so
+`/var/log/pods/<ns>_<pod>_<uid>/<c>/0.log` is a symlink to `/var/lib/docker/containers/<id>/<id>-json.log`.
+Minikube writes json-file `max-size: 100m` into the node's `daemon.json`; kubelet had no
+`containerLogMaxSize`, so it used 10Mi. Kubelet's log manager renamed the symlink to `0.log.<ts>`,
+cri-dockerd re-created `0.log` onto the SAME large json.log, and ~5-7 min later it happened again, for
+every pod over 10Mi, all in the same second. Promtail correctly treated each new symlink as a new
+file and re-read it from offset 0: the <1h tail was ingested again, the rest rejected.
+Ruled out first (don't re-chase): Loki `shard_streams`, promtail push timeouts, inotify limits.
+
+**Fix:** kubelet `containerLogMaxSize: 200Mi` (> docker's 100m, so docker is the only rotator).
+- `start-scratch.sh` / `restart-minikube.sh` start lines: `--extra-config=kubelet.container-log-max-size=200Mi`
+  (a cluster CREATED from them).
+- `tune-kubelet-log-rotation.sh`: idempotent node tune for the EXISTING cluster. Called after
+  `minikube start` in both start scripts and on `cluster-autostart.sh`'s healthy exits.
+  `verify-recovery.sh` FAILs on the thrash condition.
+- Why both: minikube stores ExtraOptions in the profile and a bare `minikube start` reuses them, so
+  autostart can never add the flag to today's cluster. Passing `--extra-config` to an existing cluster
+  REPLACES the stored set (`updateExistingConfigFromFlags`: `cc.KubernetesConfig.ExtraOptions =
+  getExtraOptions()`), and `minikube start` restarts dockerd (`cruntime` Docker `Enable` ->
+  `restartServiceWithExpoRetry("docker")`). So a one-flag `minikube start` would drop system-reserved/
+  eviction-hard and bounce every pod. The profile picks the flag up the next time the cluster is
+  started from stopped by `restart-minikube.sh` / `start-scratch.sh` (full flag set).
+
+**Live apply (operator-approved step, on the prod host):** ⚠️ **pulling this commit into the prod
+clone IS the live apply** — the `*/10` `cluster-autostart.sh` cron calls the tune on its healthy exit,
+so kubelet is restarted within ten minutes of the pull. To control the moment: pull, then straight
+away `./tune-kubelet-log-rotation.sh --dry-run` and `./tune-kubelet-log-rotation.sh` (restarts only
+kubelet; brief node NotReady). Confirm:
+`--status` -> OK; in 15 min no new `0.log.<ts>` under `/var/log/pods/yolo_*` for long-running pods,
+no "tail channel closed" in promtail's log, zero "entry too far behind"; after an hour Loki stored ==
+distinct line counts per container. Rollback: restore `/var/lib/kubelet/config.yaml.pre-log-rotation`
+in the node and restart kubelet. Note: duplicates already in Loki age out with its 720h retention.
+
 ---
 
 ## P2 — Maintainability & operability

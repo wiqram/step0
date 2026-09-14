@@ -332,6 +332,25 @@ if have kubectl; then
     || warn "$notrun pod(s) not Running/Completed (transient ImagePullBackOff is expected right after a single-disk restore)"
 else warn "kubectl not installed — skipping Vault/pod checks"; fi
 
+# Kubelet container-log rotation vs docker's (2026-09-14). kubelet's 10Mi default sits BELOW the
+# 100m json-file max-size minikube writes into the node's daemon.json, so kubelet renames every big
+# pod's /var/log/pods symlink every few minutes and promtail re-ships whole files: every yolo log
+# line stored 2-3x in Loki, and promtail's older lines 400'd "entry too far behind". Nothing is DOWN
+# while that happens — pods Running, Loki answering — so only a comparison of the two limits sees it.
+# Read-only: --status never writes or restarts. READ_TIMEOUT=0 so a down cluster reports at once.
+if [ -x "$VR_SELFDIR/tune-kubelet-log-rotation.sh" ] && have minikube; then
+  _klr_out="$(READ_TIMEOUT=0 "$VR_SELFDIR/tune-kubelet-log-rotation.sh" --status 2>&1)"; _klr_rc=$?
+  _klr_line="$(printf '%s\n' "$_klr_out" | grep 'tune-kubelet-log-rotation: ' | tail -1 | sed 's/^tune-kubelet-log-rotation: //')"
+  case "$_klr_rc" in
+    0) pass "kubelet log rotation: $_klr_line" ;;
+    1) fail "kubelet log rotation: $_klr_line" ;;
+    3) warn "kubelet log rotation: $_klr_line" ;;
+    *) warn "kubelet log rotation: could not check (${_klr_line:-exit $_klr_rc}) — run ./tune-kubelet-log-rotation.sh --status" ;;
+  esac
+else
+  warn "tune-kubelet-log-rotation.sh or minikube missing — kubelet-vs-docker log rotation not checked"
+fi
+
 # ---- Vault ACL: can the runtime identities actually WRITE where they must? -------------
 # BUG-VAULT-PLATFORM-KEY-403 (found 2026-08-18). yolo-policy granted create/update on
 # kv/data/yolo/followers/* only; the admin data-source key path kv/yolo/platform-data-sources
