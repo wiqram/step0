@@ -166,10 +166,15 @@ else
   #   v1.37.0, which kube-prometheus 0.18 (our customised monitoring + alerting stack) does NOT
   #   support (its compatibility matrix stops at 1.36; 1.37 needs kube-prometheus 0.19).
   #   Upgrading minikube must never silently move the cluster past what the alerting stack
-  #   supports. UPDATE 2026-11-13: kube-prometheus is now 0.19 (matrix 1.35-1.37), so 1.37 is
-  #   UNBLOCKED but deliberately not done in the same change — it is its own window: bump this
-  #   and restore-scratch.sh's K8S_APT_MINOR (kubectl skew is +/-1 minor) in the same commit.
-  K8S_VERSION="${K8S_VERSION:-v1.36.4}"
+  #   supports. UPDATE 2026-11-13: kube-prometheus is now 0.19 (matrix 1.35-1.37), and the
+  #   cluster moved to v1.37.0 the same evening. Bump this together with restore-scratch.sh's
+  #   K8S_APT_MINOR (kubectl skew is +/-1 minor).
+  # ⚠️ NEVER upgrade Kubernetes in place with `minikube start --kubernetes-version=<newer>` on
+  #   the existing cluster. On 2026-11-13 (minikube 1.39, docker 29.7) that printed "Unable to
+  #   restart control-plane node(s), will reset cluster" and ran kubeadm reset: etcd WIPED, every
+  #   namespace gone (hostPath data under /mnt/minikube-mnt survived). Treat a version change as
+  #   a planned cold rebuild: fresh logical dumps, then this script on an empty cluster.
+  K8S_VERSION="${K8S_VERSION:-v1.37.0}"
   # --container-runtime=docker is PINNED too (2026-11-13): minikube 1.39 changed its default
   #   runtime to containerd (kubernetes/minikube#23562). This cluster is built on docker +
   #   cri-dockerd — `--gpus all` refuses anything else ("MK_USAGE: The gpus flag can only be used
