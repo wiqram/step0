@@ -86,6 +86,31 @@ self_heal_vault_injection() {
   fi
 }
 
+# Delete dead Deployment pods (called once the cluster is healthy). Added 2026-11-13.
+# WHY: every unclean boot strands pods the ReplicaSet has ALREADY replaced, and nothing ever
+# removes them — the kube-controller-manager's terminated-pod GC only starts at 12,500. The
+# recurring case: ollama admitted before nvidia-device-plugin re-registers the GPU ->
+# `UnexpectedAdmissionError` ("no healthy devices"); the RS spins a replacement that gets the GPU,
+# and the rejected pod sits there for good (three of them, 6-27 days old, on 2026-11-13). They
+# also keep `KubeContainerWaiting`-style alerts firing on objects that will never run again.
+# SCOPE, deliberately narrow: phase=Failed AND owned by a ReplicaSet. Such a pod is never
+# restarted (restartPolicy Always only reaches Failed via eviction / admission rejection / node
+# loss) and its replacement already exists, so deleting it changes nothing about what runs.
+# Job pods are NOT touched: CronJob history limits already bound them, and they are the evidence
+# behind every KubeJobFailed alert. The reason is logged before each delete, so the evidence
+# outlives the pod. Best-effort: never changes this script's exit code.
+self_heal_dead_rs_pods() {
+  local kc="minikube kubectl --" rows ns pod owner reason n=0
+  rows=$($kc get pods -A --field-selector=status.phase=Failed -o jsonpath='{range .items[*]}{.metadata.namespace}{"|"}{.metadata.name}{"|"}{.metadata.ownerReferences[0].kind}{"|"}{.status.reason}{"\n"}{end}' 2>/dev/null) || return 0
+  while IFS='|' read -r ns pod owner reason; do
+    [ "$owner" = "ReplicaSet" ] || continue
+    log "self-heal: deleting dead pod $ns/$pod (phase=Failed, reason=${reason:-none}; its ReplicaSet already replaced it)"
+    $kc -n "$ns" delete pod "$pod" --wait=false >>"$LOG" 2>&1 && n=$((n+1))
+  done <<< "$rows"
+  [ "$n" -gt 0 ] && log "self-heal: removed $n dead ReplicaSet pod(s)"
+  return 0
+}
+
 # Keep kubelet's container-log rotation limit above docker's (called once the cluster is healthy).
 # WHY: with kubelet on its 10Mi default under docker's 100m json-file max-size, kubelet renames
 # every big pod's /var/log/pods symlink every few minutes and promtail re-ships whole files — every
@@ -150,12 +175,12 @@ fi
 
 # 5. Container is running — let k8s self-heal first; only reconcile if it stays unhealthy.
 k8s_ok(){ minikube status -o json 2>/dev/null | grep -q '"APIServer":"Running"' && minikube status -o json 2>/dev/null | grep -q '"Kubelet":"Running"'; }
-for _ in $(seq 1 40); do k8s_ok && { log "cluster healthy (container up, APIServer+Kubelet Running)"; self_heal_vault_injection; self_heal_kubelet_log_rotation; exit 0; }; sleep 3; done
+for _ in $(seq 1 40); do k8s_ok && { log "cluster healthy (container up, APIServer+Kubelet Running)"; self_heal_vault_injection; self_heal_kubelet_log_rotation; self_heal_dead_rs_pods; exit 0; }; sleep 3; done
 
 # 6. Up but unhealthy after ~2min -> reconcile with `minikube start` (fixes kubeconfig/IP + control plane).
 log "container running but k8s unhealthy after 120s — reconciling with 'minikube start --driver=docker'"
 if timeout 360 minikube start --driver=docker >>"$LOG" 2>&1; then
-  if k8s_ok; then log "reconcile OK — cluster healthy"; self_heal_vault_injection; self_heal_kubelet_log_rotation; ntfy "minikube cluster auto-recovered" "Host rebooted; cluster reconciled to healthy via minikube start." default "white_check_mark,cloud"; exit 0
+  if k8s_ok; then log "reconcile OK — cluster healthy"; self_heal_vault_injection; self_heal_kubelet_log_rotation; self_heal_dead_rs_pods; ntfy "minikube cluster auto-recovered" "Host rebooted; cluster reconciled to healthy via minikube start." default "white_check_mark,cloud"; exit 0
   else log "minikube start returned but k8s still unhealthy"; ntfy "minikube auto-recover INCOMPLETE" "minikube start ran but APIServer/Kubelet not Running — manual check needed."; exit 1; fi
 else
   log "minikube start FAILED — manual recovery needed (possibly from-scratch). NOT auto-deleting."
