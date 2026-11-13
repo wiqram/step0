@@ -18,9 +18,10 @@
 #     two-hour DR run); a notification must never be the thing that kills it. Hence
 #     ntfy_push ALWAYS returns 0 and never writes to stdout.
 #
-# TOPIC NAMES ARE NOT SECRETS. ntfy.sh topics are world-readable AND world-writable,
-# so they are committed in the clear here (same "plain-name scheme" as yolo) — and
-# for exactly that reason a message body must carry no secret, token or PII.
+# TOPIC NAMES ARE NOT SECRETS. The self-hosted server is auth-only, but the ntfy.sh
+# FALLBACK topics are world-readable AND world-writable, so names are committed in the
+# clear here (same "plain-name scheme" as yolo) — and because any message may take the
+# fallback path, a message body must still carry no secret, token or PII.
 # ntfy's own constraint: a topic is [-_A-Za-z0-9]{1,64}, no slashes, no wildcards —
 # there is no hierarchy, so the "namespace" is just a `yolo-` prefix convention.
 #
@@ -28,7 +29,20 @@
 # vault-auto-unseal.sh) is a DIFFERENT, private random topic and is deliberately left
 # alone — it carries cluster up/down alerts, not the five channels below.
 
-# Server base. Override for a self-hosted ntfy instance; no trailing slash.
+# ---- transport: self-hosted FIRST, ntfy.sh as the fallback (2026-11-13) ---------
+# ntfy.sh's anonymous tier allows 250 messages/day PER SOURCE IP, shared by every publisher
+# on this box; on 2026-11-13 it was gone by 09:34Z and every alert was dropped (HTTP 429,
+# code 42908). Pushes now go to the platform's own ntfy (ntfy-server.sh): on its fixed
+# address, NOT the public name, so delivery does not depend on nginx-proxy-manager or DNS —
+# both things these jobs report on. It requires a token (auth deny-all); the step0 token is
+# read from STEP0/.env AT SEND TIME (sourcing this file must stay definitions-only, and a
+# token rotated by `ntfy-server.sh --ensure` is picked up immediately).
+# If the self-hosted push fails for ANY reason the same message goes to ntfy.sh instead —
+# that is how alerting-pipeline-watch's `ntfy-down` note still reaches the phone when the
+# self-hosted server is the thing that died. Keep the ntfy.sh subscriptions on the phone.
+NTFY_SELF_BASE="${NTFY_SELF_BASE:-http://172.16.238.12}"   # empty = skip self-hosted
+NTFY_SELF_ENV="${NTFY_SELF_ENV:-$(dirname "${BASH_SOURCE[0]}")/.env}"
+# Fallback server base (public ntfy.sh); no trailing slash.
 NTFY_BASE="${NTFY_BASE:-https://ntfy.sh}"
 
 # ---- the registry: one line per channel; this is the source of truth ----------
@@ -114,12 +128,25 @@ ntfy_push() {
   local args=(-fsS -m "${NTFY_TIMEOUT:-15}" -H "Title: $safe_title" -H "Priority: $prio")
   [ -n "$safe_tags" ] && args+=(-H "Tags: $safe_tags")
 
+  local token=""
+  if [ -n "$NTFY_SELF_BASE" ]; then
+    token="${NTFY_SELF_TOKEN:-$(grep -E '^NTFY_TOKEN_STEP0=' "$NTFY_SELF_ENV" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'"'')}"
+  fi
+
   if [ "${NTFY_DRY_RUN:-0}" = "1" ]; then
-    echo "DRYRUN ntfy -> $NTFY_BASE/$topic [$prio] [$safe_tags] $safe_title" >&2
+    if [ -n "$NTFY_SELF_BASE" ] && [ -n "$token" ]; then
+      echo "DRYRUN ntfy -> $NTFY_SELF_BASE/$topic (fallback $NTFY_BASE) [$prio] [$safe_tags] $safe_title" >&2
+    else
+      echo "DRYRUN ntfy -> $NTFY_BASE/$topic [$prio] [$safe_tags] $safe_title" >&2
+    fi
     echo "$body" >&2
     return 0
   fi
 
+  if [ -n "$NTFY_SELF_BASE" ] && [ -n "$token" ]; then
+    curl "${args[@]}" -H "Authorization: Bearer $token" --data-binary "$body" "$NTFY_SELF_BASE/$topic" >/dev/null 2>&1 && return 0
+    echo "WARN: self-hosted ntfy push to $topic failed — sending via $NTFY_BASE fallback." >&2
+  fi
   curl "${args[@]}" --data-binary "$body" "$NTFY_BASE/$topic" >/dev/null 2>&1 \
     || echo "WARN: ntfy push to $topic failed (network/topic) — continuing." >&2
   return 0
