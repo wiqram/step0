@@ -181,13 +181,19 @@ to a Kubernetes NodePort on `172.16.238.2`.
   alternatives (Cloudflare Access, split DNS, `tailscale serve`, exit node):
   nginx repo `docs/edge-exposure.md`.
 - **`start-scratch.sh` pins the Kubernetes version AND the container runtime — keep both
-  (2026-11-13).** minikube 1.39 changed two defaults that each break this cluster silently or
-  loudly: Kubernetes **v1.37.0**, which kube-prometheus 0.18 does not support (`K8S_VERSION`,
-  default `v1.36.4`), and the **containerd** runtime (minikube#23562) — `--gpus all` then exits
-  14 before creating anything, and everything here assumes dockerd/cri-dockerd
-  (`--container-runtime=docker`). **kube-prometheus is 0.19 since 2026-11-13** (matrix
-  1.35–1.37), so 1.37 is unblocked: bump `K8S_VERSION` and `restore-scratch.sh`'s
-  `K8S_APT_MINOR` together, in their own window.
+  (2026-11-13).** Upgrading minikube must never silently move the cluster: minikube 1.39
+  changed its default Kubernetes (to v1.37.0) and its runtime (to **containerd**,
+  minikube#23562 — `--gpus all` then exits 14 before creating anything, and everything here
+  assumes dockerd/cri-dockerd, hence `--container-runtime=docker`). The cluster runs
+  **v1.37.0** since 2026-11-13 (kube-prometheus 0.19 supports 1.35–1.37). `K8S_VERSION` and
+  `restore-scratch.sh`'s `K8S_APT_MINOR` (host kubectl, ±1 minor skew) move together.
+  ⚠️ **A Kubernetes version change is a COLD REBUILD, never an in-place `minikube start
+  --kubernetes-version=<newer>`.** The 2026-11-13 1.36.4→1.37.0 attempt printed "Unable to
+  restart control-plane node(s), will reset cluster" and ran kubeadm reset: etcd wiped, every
+  namespace gone (hostPath data survived; start-scratch rebuilt it in ~35 min). Plan it as
+  one: fresh logical dumps, pause the cloud cron, then `start-scratch.sh`. (The `inspect
+  gateway ... no entry for key "Gateway"` error minikube prints alongside is harmless — a
+  plain warm start logs it too and completes without a reset.)
 - **Single host, single node.** No multi-node K8s. "private cloud" = Docker + one
   Minikube + Nginx, all co-located on `172.16.238.x`.
 - **Fixed IPs:** Minikube node `172.16.238.2` (API/NodePorts/registry:5000),
