@@ -358,6 +358,13 @@ JSON
     fi
   fi
 
+  # Host logrotate for STEP0's own cron logs. Lives in the repo (logrotate/step0.conf);
+  # until 2026-11-13 it existed only in /etc on the prod box, so a rebuild silently lost
+  # it and every */5 cron log grew without a ceiling again. Idempotent: install(1)
+  # overwrites with the committed copy. (NPM's per-host logs are rotated separately by a
+  # cloud-crontab line — logrotate/npm-host-logs.conf — which the crontab install re-arms.)
+  run "sudo install -m 0644 '$SCRIPT_DIR/logrotate/step0.conf' /etc/logrotate.d/step0"
+
   # kubectl (pinned-stable via official pkg repo).
   #
   # THIS PIN MUST TRACK WHAT MINIKUBE ACTUALLY DEPLOYS. start-scratch.sh passes no
