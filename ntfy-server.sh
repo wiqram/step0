@@ -9,7 +9,8 @@
 # WHAT IT OWNS (all idempotent; safe to re-run any time):
 #   * the container (docker compose up -d), data at /mnt/minikube-mnt/ntfy (DR-swept)
 #   * users + ACLs in ntfy's auth DB:
-#       phone         read-only  yolo-*                       (the operator's iPhone app)
+#       $NTFY_PHONE_USER (default "phone"; operator chose "private-cloud")
+#                     read-only  yolo-*                       (the operator's iPhone app)
 #       step0         read-write yolo-*                       (ntfy-lib.sh publishers + probes)
 #       alertmanager  write-only yolo-private-cloud-platform  (kube-prometheus webhook)
 #       yolo          write-only yolo-*                       (yolo apps / Grafana, via Vault)
@@ -26,6 +27,8 @@
 #     missing on a cold boot alertmanager-main-0 sits in ContainerCreating.
 #
 # NEVER prints a credential. To read one: grep NTFY_PHONE_PASSWORD ~/Ideaprojects/STEP0/.env
+# To change the reader login: edit NTFY_PHONE_USER / NTFY_PHONE_PASSWORD in .env (single-quote a
+# password containing $ or !), then ./ntfy-server.sh --ensure.
 #
 # Usage:
 #   ./ntfy-server.sh --install      # container + users/tokens/ACLs + Vault + k8s Secret
@@ -88,15 +91,22 @@ ensure_token() {  # <user> <ENV_KEY> — keep the .env token if ntfy still knows
 }
 
 ensure_auth() {
-  local pw; pw="$(env_val NTFY_PHONE_PASSWORD)"
+  # The reader account's NAME and PASSWORD are both operator-settable in .env (the operator
+  # renamed it 2026-11-13). .env is the source of truth: re-applied on every run. If the name
+  # changes, the previously-configured reader is removed so no stale login lingers.
+  local pw puser old
+  pw="$(env_val NTFY_PHONE_PASSWORD)"
   [ -n "$pw" ] || { pw="$(genpass)"; env_set NTFY_PHONE_PASSWORD "$pw"; info "generated the phone password -> .env NTFY_PHONE_PASSWORD"; }
-  env_set NTFY_PHONE_USER phone
+  puser="$(env_val NTFY_PHONE_USER)"; puser="${puser:-phone}"
   env_set NTFY_SELF_URL "$BASE_URL"
-  ensure_user phone "$pw"
+  ensure_user "$puser" "$pw"
+  nt access "$puser" 'yolo-*' read-only >/dev/null 2>&1
+  for old in $(nt user list 2>/dev/null | grep -oE '^user [a-z0-9_.-]+' | awk '{print $2}'); do
+    case "$old" in "$puser"|step0|alertmanager|yolo|'*') ;; *) nt user del "$old" >/dev/null 2>&1 && info "removed stale reader user $old" ;; esac
+  done
   # Publishers authenticate with tokens only, but ntfy needs a password on the account:
   # a random throwaway nobody stores is the right value.
   ensure_user step0 "$(genpass)"; ensure_user alertmanager "$(genpass)"; ensure_user yolo "$(genpass)"
-  nt access phone        'yolo-*'                      read-only  >/dev/null 2>&1
   nt access step0        'yolo-*'                      read-write >/dev/null 2>&1
   nt access alertmanager 'yolo-private-cloud-platform' write-only >/dev/null 2>&1
   nt access yolo         'yolo-*'                      write-only >/dev/null 2>&1
