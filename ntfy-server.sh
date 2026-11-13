@@ -19,7 +19,7 @@
 #     NTFY_TOKEN_STEP0, NTFY_TOKEN_ALERTMANAGER, NTFY_TOKEN_YOLO. .env is the source of truth
 #     for the phone password (re-applied on every run); a token is kept while ntfy still
 #     knows it and re-issued (and .env updated) only if ntfy lost it.
-#   * the yolo token in Vault at kv/ntfy/yolo  (STEP0-owned path — NOT kv/yolo/*, which the
+#   * the yolo token in Vault at kv/ntfy/yolo {url, internal_url, token}  (STEP0-owned path — NOT kv/yolo/*, which the
 #     yolo pipeline's vault-sync reconciles from yolo's own sops files)
 #   * the Kubernetes Secret monitoring/alertmanager-ntfy-token (Alertmanager reads it via
 #     credentials_file). Created by --k8s-secret, which start-scratch.sh calls AFTER
@@ -42,6 +42,7 @@ COMPOSE="$SELFDIR/ntfy/docker-compose.yml"
 DATA_DIR="${NTFY_DATA_DIR:-/mnt/minikube-mnt/ntfy}"
 CONTAINER=ntfy
 BASE_URL="https://ntfy.traderyolo.com"
+INTERNAL_URL="http://172.16.238.12"   # fixed IP in ntfy/docker-compose.yml
 KEYS_FILE="${VAULT_KEYS_FILE:-$HOME/.vault/cluster-keys.json}"
 
 info() { echo "ntfy-server: $*"; }
@@ -124,8 +125,11 @@ sync_vault() {
   root="$(jq -r '.root_token // empty' "$KEYS_FILE" 2>/dev/null)"; [ -n "$root" ] || { warn "no Vault root token in $KEYS_FILE"; return 0; }
   kubectl exec -i vault-0 -n vault -- vault login - <<< "$root" >/dev/null 2>&1 || { warn "vault login failed"; return 0; }
   tok="$(env_val NTFY_TOKEN_YOLO)"; [ -n "$tok" ] || return 0
-  if [ "$(kubectl exec vault-0 -n vault -- vault kv get -field=token kv/ntfy/yolo 2>/dev/null)" != "$tok" ]; then
-    kubectl exec -i vault-0 -n vault -- sh -c 'read -r t; vault kv put kv/ntfy/yolo url="'"$BASE_URL"'" token="$t" >/dev/null' <<< "$tok" \
+  # Fields: url (public, phone-facing), internal_url (the container's fixed address — what an
+  # in-cluster publisher should use, so delivery does not depend on NPM/DNS), token.
+  if [ "$(kubectl exec vault-0 -n vault -- vault kv get -field=token kv/ntfy/yolo 2>/dev/null)" != "$tok" ] \
+     || [ "$(kubectl exec vault-0 -n vault -- vault kv get -field=internal_url kv/ntfy/yolo 2>/dev/null)" != "$INTERNAL_URL" ]; then
+    kubectl exec -i vault-0 -n vault -- sh -c 'read -r t; vault kv put kv/ntfy/yolo url="'"$BASE_URL"'" internal_url="'"$INTERNAL_URL"'" token="$t" >/dev/null' <<< "$tok" \
       && info "Vault kv/ntfy/yolo updated" || warn "could not write kv/ntfy/yolo"
   fi
 }
