@@ -185,8 +185,9 @@ to a Kubernetes NodePort on `172.16.238.2`.
   loudly: Kubernetes **v1.37.0**, which kube-prometheus 0.18 does not support (`K8S_VERSION`,
   default `v1.36.4`), and the **containerd** runtime (minikube#23562) — `--gpus all` then exits
   14 before creating anything, and everything here assumes dockerd/cri-dockerd
-  (`--container-runtime=docker`). Path to 1.37: kube-prometheus 0.19 first, then bump
-  `K8S_VERSION` and `restore-scratch.sh`'s `K8S_APT_MINOR` together.
+  (`--container-runtime=docker`). **kube-prometheus is 0.19 since 2026-11-13** (matrix
+  1.35–1.37), so 1.37 is unblocked: bump `K8S_VERSION` and `restore-scratch.sh`'s
+  `K8S_APT_MINOR` together, in their own window.
 - **Single host, single node.** No multi-node K8s. "private cloud" = Docker + one
   Minikube + Nginx, all co-located on `172.16.238.x`.
 - **Fixed IPs:** Minikube node `172.16.238.2` (API/NodePorts/registry:5000),
@@ -243,7 +244,7 @@ to a Kubernetes NodePort on `172.16.238.2`.
   namespaces, but kube-prometheus grants that Role only in `default`, `kube-system` and
   `monitoring`. Without it the ServiceMonitor is accepted, shows up in the operator's config,
   and **never produces a target — with no error anywhere**.
-  ⚠️ **As of the 2026-08-04 upgrade to kube-prometheus 0.18 / prometheus-operator 0.92,
+  ⚠️ **Since the 2026-08-04 upgrade to kube-prometheus 0.18 / prometheus-operator 0.92 (now 0.19 / 0.94 since 2026-11-13, unchanged in this respect),
   service discovery uses `EndpointSlice`, not the deprecated core `Endpoints`.** A Role that
   still lists only `services/endpoints/pods` silently yields ZERO targets — this is exactly
   what happened to `yolo` during the upgrade. The only evidence is in the `prometheus-k8s`

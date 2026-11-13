@@ -121,6 +121,7 @@ echo "[5/5] non-bash publishers (Alertmanager, Grafana) target REGISTERED topics
 # These files are outside the repo, so a missing one is a NOTE, not a failure: a dev
 # box legitimately has neither. A file that IS present and names an unregistered topic
 # is a hard failure, same as any other drift from the registry.
+NTFY_MANIFEST_URL_RE='(ntfy\.sh|ntfy\.traderyolo\.com|172\.16\.238\.12)/[A-Za-z0-9_-]+'
 seen_manifest=0
 for m in $MANIFEST_PUBLISHERS; do
   [ -n "$m" ] || continue
@@ -130,11 +131,15 @@ for m in $MANIFEST_PUBLISHERS; do
   fi
   # A manifest may embed the URL query-escaped (Alertmanager templates ntfy's ?tpl=
   # parameters), so match the topic segment only and stop at the first non-topic byte.
-  if ! grep -qoE 'ntfy\.sh/[A-Za-z0-9_-]+' "$m" 2>/dev/null; then
+  # Any of the platform's ntfy addresses counts (2026-11-13): public ntfy.sh, the
+  # self-hosted server's public name, or its fixed IP — Alertmanager (and, once yolo
+  # migrates, Grafana) publish to the fixed IP. Matching only ntfy.sh reported the
+  # migrated Alertmanager channel as DORMANT.
+  if ! grep -qoE "$NTFY_MANIFEST_URL_RE" "$m" 2>/dev/null; then
     fail "$(basename "$m") is registered as a manifest publisher but names no ntfy topic — its channel is DORMANT"
     continue
   fi
-  grep -oE 'ntfy\.sh/[A-Za-z0-9_-]+' "$m" 2>/dev/null | sort -u > "$tmp" || true
+  grep -oE "$NTFY_MANIFEST_URL_RE" "$m" 2>/dev/null | sort -u > "$tmp" || true
   while IFS= read -r url; do
     [ -n "$url" ] || continue
     seen_manifest=1
