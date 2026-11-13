@@ -28,12 +28,19 @@
 #      back (priority high if it did not — cluster-autostart.sh's */10 cron will keep
 #      reconciling, but somebody should know).
 #
-# THE HOLD IS THE INSTALL. `--install` applies the hold AND the timer; a bare-metal rebuild
-# reproduces both via restore-scratch.sh (phase 8, next to the other --install units).
-# verify-recovery.sh checks the timer is enabled. `apt-mark showhold` is the proof.
+# TIMER RETIRED 2026-11-13 (operator decision): docker/containerd are now upgraded BY HAND, in
+# a window the operator picks. The HOLD stays — it is what stops a weekday `apt upgrade` from
+# restarting every pod, and that reason is unchanged. So the platform mode is `--hold`: hold the
+# packages and make sure the timer is OFF (disabled + unit files removed). restore-scratch.sh
+# (phase 8) calls `--hold`, and verify-recovery.sh checks the hold is present and the timer is
+# NOT enabled. `--install` (hold + timer) is kept for reference / if the operator ever wants the
+# automatic Saturday window back — it is no longer called by anything.
+# To upgrade docker by hand: sudo ./docker-runtime-upgrade.sh --force (unhold, upgrade, re-hold,
+# wait for the cluster to converge, one ntfy note) — ideally in a market-closed window.
 #
 # Usage:
-#   sudo ./docker-runtime-upgrade.sh --install     # hold packages + install/enable timer
+#   sudo ./docker-runtime-upgrade.sh --hold        # PLATFORM MODE: hold packages, timer OFF
+#   sudo ./docker-runtime-upgrade.sh --install     # hold packages + install/enable timer (retired)
 #   sudo ./docker-runtime-upgrade.sh --uninstall   # remove timer + unhold (back to ad-hoc)
 #        ./docker-runtime-upgrade.sh --status      # hold state, next timer run, last result
 #        ./docker-runtime-upgrade.sh --check       # what WOULD be upgraded (no root, no change)
@@ -155,6 +162,18 @@ UNIT
   log "installed: $(echo $PKGS | wc -w) packages held; $UNIT.timer enabled (next: $(systemctl show "$UNIT.timer" -p NextElapseUSecRealtime --value))"
 }
 
+# --hold: the 2026-11-13 platform mode. Hold the runtime packages; retire the timer if present.
+hold_only() {
+  need_root
+  hold
+  if [ -e "$TMR_PATH" ] || systemctl is-enabled "$UNIT.timer" >/dev/null 2>&1; then
+    systemctl disable --now "$UNIT.timer" >/dev/null 2>&1 || true
+    rm -f "$SVC_PATH" "$TMR_PATH"; systemctl daemon-reload
+    log "timer retired (operator decision 2026-11-13)"
+  fi
+  log "held: $PKGS (no timer — upgrade docker by hand with --force)"
+}
+
 uninstall_all() {
   need_root
   systemctl disable --now "$UNIT.timer" >/dev/null 2>&1 || true
@@ -164,7 +183,7 @@ uninstall_all() {
 }
 
 status() {
-  if held_ok; then echo "hold:   PRESENT ($PKGS)"; else echo "hold:   ABSENT  — apply with: sudo $0 --install"; fi
+  if held_ok; then echo "hold:   PRESENT ($PKGS)"; else echo "hold:   ABSENT  — apply with: sudo $0 --hold"; fi
   local st; st="$(systemctl is-enabled "$UNIT.timer" 2>/dev/null)" || st="not-installed"
   echo "timer:  $st / next: $(systemctl show "$UNIT.timer" -p NextElapseUSecRealtime --value 2>/dev/null || echo -)"
   echo "last:   $(grep -E 'nothing to upgrade|cluster back|NOT converged|apt-get FAILED' "$LOG" 2>/dev/null | tail -1 || echo -)"
@@ -172,6 +191,7 @@ status() {
 }
 
 case "${1:-}" in
+  --hold)      hold_only ;;
   --install)   install_all ;;
   --uninstall) uninstall_all ;;
   --status)    status ;;

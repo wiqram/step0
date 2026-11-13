@@ -79,7 +79,7 @@ EXP_10G_DRIVER="${EXP_10G_DRIVER:-atlantic}"       # Aquantia/Marvell 10GBASE-T
 WATCHDOG_SVC="${WATCHDOG_SVC:-10gbe-link-watchdog.service}"
 KUBEACCESS_SVC="${KUBEACCESS_SVC:-devbox-kube-access.service}"
 LOKI_GUARD_SVC="${LOKI_GUARD_SVC:-yolo-loki-nodeport-guard.service}"  # SEC-LOKI-NODEPORT
-RUNTIME_UPGRADE_TMR="${RUNTIME_UPGRADE_TMR:-docker-runtime-upgrade.timer}"  # OBS-ALERT-EXECERR: docker held, Saturday window
+RUNTIME_UPGRADE_TMR="${RUNTIME_UPGRADE_TMR:-docker-runtime-upgrade.timer}"  # OBS-ALERT-EXECERR: docker held; timer RETIRED 2026-11-13
 EXP_LOKI_PORT="${EXP_LOKI_PORT:-30310}"            # Loki NodePort — must be host-only
 DEV_OOB_SSH="${DEV_OOB_SSH:-vik@192.168.50.161}"   # dev box over the LAN (OOB) — to verify its egress back to us
 
@@ -241,13 +241,17 @@ if have systemctl; then
       *) info "$svc = $st" ;;
     esac
   done
-  # docker/containerd must be HELD and the Saturday upgrade timer enabled — otherwise the next
-  # ad-hoc `apt upgrade` restarts every pod (2026-09-05). Both come from one --install.
+  # docker/containerd must be HELD — otherwise the next ad-hoc `apt upgrade` restarts every pod
+  # (2026-09-05). The Saturday auto-upgrade timer was RETIRED 2026-11-13 by operator decision
+  # (docker is upgraded by hand), so it must NOT be enabled: an enabled timer means something
+  # re-ran the old --install. Both are set by `docker-runtime-upgrade.sh --hold`.
   st="$(systemctl is-enabled "$RUNTIME_UPGRADE_TMR" 2>/dev/null)"
-  if [ "$st" = "enabled" ] && apt-mark showhold 2>/dev/null | grep -qx docker-ce; then
-    pass "$RUNTIME_UPGRADE_TMR enabled + docker-ce held (next: $(systemctl show "$RUNTIME_UPGRADE_TMR" -p NextElapseUSecRealtime --value 2>/dev/null))"
+  if ! apt-mark showhold 2>/dev/null | grep -qx docker-ce; then
+    warn "docker-ce is NOT held — the next ad-hoc apt upgrade restarts every pod. Fix: sudo ./docker-runtime-upgrade.sh --hold"
+  elif [ "$st" = "enabled" ]; then
+    warn "$RUNTIME_UPGRADE_TMR is ENABLED but was retired 2026-11-13 (operator: docker is upgraded by hand). Fix: sudo ./docker-runtime-upgrade.sh --hold"
   else
-    warn "$RUNTIME_UPGRADE_TMR = ${st:-not-installed} / docker-ce held: $(apt-mark showhold 2>/dev/null | grep -qx docker-ce && echo yes || echo NO) — reinstall: sudo ./docker-runtime-upgrade.sh --install"
+    pass "docker-ce held, $RUNTIME_UPGRADE_TMR off (${st:-not-installed}) — docker upgraded by hand (--force)"
   fi
 
   # `is-active` is NOT enough, and this is the lesson from 2026-08-07: the service reported
