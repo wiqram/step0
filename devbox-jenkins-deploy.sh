@@ -18,7 +18,7 @@
 #   jenkins-deploy <app> --dry-run  # print the job path only (never prints the credential)
 set -eu
 
-APPS="qcguy predictonomy bestrentaladmin dyingpaleblue ollama yolo"
+APPS="qcguy predictonomy bestrentaladmin dyingpaleblue ollama yolo robinstocks"
 usage() { echo "usage: jenkins-deploy <app> [--dry-run]   (apps: $APPS)" >&2; exit 2; }
 
 app="${1:-}"; [ -n "$app" ] || usage
@@ -29,6 +29,7 @@ case "$app" in
   dyingpaleblue)    job=dyingpaleblue;         endpoint=build;                token=dying ;;
   ollama)           job=ollama;                endpoint=build;                token=ollama ;;
   yolo)             job=trading-microservices; endpoint=buildWithParameters;  token=yolo ;;  # parameterised; no params = job defaults
+  robinstocks)      job=robin_stocks;          endpoint=build;                token=robinstocks ;;  # normally fired BY Jenkins after a SUCCESSFUL yolo build
   *) echo "jenkins-deploy: unknown app '$app'" >&2; usage ;;
 esac
 

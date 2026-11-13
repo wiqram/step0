@@ -5,10 +5,11 @@
 # so adding a row here is all it takes to deploy an app. (Until 2026-08-07 the script
 # also carried a hardcoded list, and a row added here alone did nothing.)
 #
-# ORDER MATTERS: yolo stays LAST. It is the heaviest pipeline, and monitoring/grafana
-# hard-mounts two ConfigMaps that only the yolo deploy creates (grafana-alerting-yolo,
-# grafana-dashboard-yolo-pipeline — see kube-prometheus manifests/YOLO-OWNERSHIP.md), so
-# Grafana stays ContainerCreating until yolo lands.
+# ORDER MATTERS: yolo stays LAST among the independent deploys (follow-on rows such as
+# robinstocks may sit after it; trigger-app-builds.sh runs those after the loop anyway).
+# It is the heaviest pipeline, and monitoring/grafana hard-mounts two ConfigMaps that only
+# the yolo deploy creates (grafana-alerting-yolo, grafana-dashboard-yolo-pipeline — see
+# kube-prometheus manifests/YOLO-OWNERSHIP.md), so Grafana stays ContainerCreating until yolo lands.
 #
 # build-token: Jenkins' per-job remote-trigger token. jenkins-deploy-url.sh builds
 #   https://<cred>@jenkins.../job/<job>/<endpoint>?token=<build-token>
@@ -35,3 +36,12 @@ ollama           ollama                 build                ollama
 qcx              QCX                    build                qcx
 prop-investech   prop-investech         build                prop-investech
 yolo             trading-microservices  buildWithParameters  yolo
+# robinstocks added 2026-11-13 — a FOLLOW-ON, not an independent deploy. Jenkins fires the
+# robin_stocks job itself after a SUCCESSFUL trading-microservices build (ReverseBuildTrigger
+# in the job config, threshold SUCCESS), so trigger-app-builds.sh does NOT deploy this row
+# in its loop: FOLLOW_ONS there waits for yolo, gives Jenkins its chance, and fires this
+# only if Jenkins didn't. Without it, an UNSTABLE cold-boot yolo build leaves robinstocks
+# absent indefinitely (it did: 2026-10-16 -> 11-13). The row also lets
+# `jenkins-deploy-url.sh robinstocks` / the dev-box `jenkins-deploy robinstocks` fire it.
+# No authToken matters here either (authenticated request; see the build-token note above).
+robinstocks      robin_stocks           build                robinstocks

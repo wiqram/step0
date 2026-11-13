@@ -31,6 +31,14 @@ assert_eq "$(up_http_probe "http://127.0.0.1:$PORT/session")"                   
 assert_eq "$(up_http_probe "http://127.0.0.1:$PORT/session" '"state"')"             "1" "2xx with required substring reads UP"
 assert_eq "$(up_http_probe "http://127.0.0.1:$PORT/session" '"never-here"')"        "0" "2xx MISSING the required substring reads DOWN (dead backend behind a live proxy)"
 assert_eq "$(up_http_probe "http://127.0.0.1:$PORT/no-such-path")"                  "0" "404 reads DOWN"
+
+# The 2026-11-13 miss: robinstocks gone, the gateway still answers 200 with its OWN
+# field set — `"state"` present, so the positive check alone read it UP for 28 days.
+# Byte-for-byte the body production served that day.
+printf '{"state":"unknown","exchange":"XNYS","reason":"lookup_failed","source":"","timezone":"","nextOpen":"","sessionClose":"","earlyClose":false,"updatedAt":""}' > "$TMP/degraded"
+assert_eq "$(up_http_probe "http://127.0.0.1:$PORT/degraded" '"state"')"            "1" "positive check ALONE reads the degraded body UP (the bug, pinned)"
+assert_eq "$(up_http_probe "http://127.0.0.1:$PORT/degraded" "$UP_API_MUST_CONTAIN" "$UP_API_MUST_NOT_CONTAIN")" "0" "degraded 200 (reason lookup_failed) reads DOWN with the shipped defaults"
+assert_eq "$(up_http_probe "http://127.0.0.1:$PORT/session"  "$UP_API_MUST_CONTAIN" "$UP_API_MUST_NOT_CONTAIN")" "1" "healthy body still reads UP with the shipped defaults"
 assert_eq "$(UP_HTTP_TIMEOUT=2 up_http_probe "http://127.0.0.1:1/refused")"         "0" "refused connection reads DOWN"
 
 # ---- the sourced machine is actually present (the reuse this script depends on) --

@@ -94,6 +94,29 @@ MAX_PARALLEL="${MAX_PARALLEL:-1}"
 case "$MAX_PARALLEL" in ''|*[!0-9]*) echo "trigger-app-builds: MAX_PARALLEL must be a positive integer (got '$MAX_PARALLEL')" >&2; exit 2 ;; esac
 [ "$MAX_PARALLEL" -lt 1 ] && MAX_PARALLEL=1
 JENKINS_HOST="${JENKINS_HOST:-jenkins.traderyolo.com}"
+
+##### FOLLOW-ON JOBS — the 2026-10-16 robinstocks gap ###############################
+# Some manifest rows are NOT independent deploys: Jenkins itself fires them after an
+# upstream job, via a "Build after other projects are built" (ReverseBuildTrigger) in the
+# JOB's config — not in any Jenkinsfile. robin_stocks is one: it builds + rolls the
+# `robinstocks` Deployment after trading-microservices, and the yolo pipeline deliberately
+# skips robinstocks in its own verify ("rolled by the follow-on robin_stocks job").
+#
+# That trigger's threshold is SUCCESS. On the 10-16 cold rebuild the yolo build (#2443)
+# finished UNSTABLE — only because Loki was not yet accepting its audit lines, "the deploy
+# stands" — so robin_stocks never fired, nothing else ever fires it, and robinstocks was
+# simply ABSENT from the cluster for 28 days: every follower saw an unknown market session,
+# surface-prewarm failed every 10 minutes, and the uptime probe read it as UP (fixed
+# separately in yolo-uptime-probe.sh). A cold boot is exactly when UNSTABLE is likeliest,
+# because everything the pipeline reports into is itself still coming up.
+#
+# So follow-ons are taken OUT of the normal loop and handled after it: wait for the
+# upstream build to finish, give Jenkins' own trigger FOLLOWON_GRACE seconds to fire, and
+# fire the follow-on ourselves only if it did not. Checking first (rather than always
+# firing) is what avoids a duplicate build on the path where Jenkins did its job.
+# Format: space-separated "<follow-on app>:<upstream app>", both manifest app names.
+FOLLOW_ONS="${FOLLOW_ONS:-robinstocks:yolo}"
+FOLLOWON_GRACE="${FOLLOWON_GRACE:-120}"           # s for Jenkins' own trigger to show up
 POLL_INTERVAL="${POLL_INTERVAL:-10}"              # seconds between polls
 BUILD_WAIT_TIMEOUT="${BUILD_WAIT_TIMEOUT:-2400}"  # 40m, then stop waiting and move on
 QUEUE_WAIT="${QUEUE_WAIT:-180}"                   # 3m for the POST to produce a new build
@@ -214,6 +237,84 @@ deploy() {
   return 0
 }
 
+# jjob <job> <tree> — job-level JSON (inQueue lives here, not on lastBuild). Never fatal.
+jjob() {
+  [ -n "$JENKINS_CRED_VALUE" ] || return 0
+  curl -sgf --max-time 15 -u "$JENKINS_CRED_VALUE" \
+    "https://$JENKINS_HOST/job/$1/api/json?tree=$2" 2>/dev/null
+}
+
+# jfield <json> <key> — first scalar value of "key" (number, bool or bare string).
+jfield() { printf '%s' "$1" | grep -oE "\"$2\":(\"[^\"]*\"|[0-9a-z]+)" | head -1 | cut -d: -f2 | tr -d '"'; }
+
+# followon_verdict <upstream_result> <upstream_start_ms> <fo_in_queue> <fo_start_ms>
+#   -> skip     upstream did not leave a deploy standing (FAILURE/ABORTED/none): firing the
+#               follow-on on top of it would only stack a second failure — say so instead
+#   -> fired    the follow-on is queued, or has a build that started after the upstream
+#               build did (i.e. Jenkins' own trigger, or someone, already ran it)
+#   -> trigger  it has not run since the upstream build: fire it ourselves
+# Pure — no network — so tests/test-trigger-app-builds.sh drives every branch.
+followon_verdict() {
+  local up_result="$1" up_ts="${2:-0}" fo_queued="$3" fo_ts="${4:-0}"
+  case "$up_result" in SUCCESS|UNSTABLE) : ;; *) echo skip; return 0 ;; esac
+  if [ "$fo_queued" = "true" ]; then echo fired; return 0; fi
+  if [ "${fo_ts:-0}" -ge "${up_ts:-0}" ] 2>/dev/null && [ "${up_ts:-0}" -gt 0 ]; then echo fired; return 0; fi
+  echo trigger
+}
+
+# ensure_followon <app> <upstream app> — see FOLLOW-ON JOBS above. Always returns 0.
+ensure_followon() {
+  local app="$1" up_app="$2" job up_job json up_building up_result up_ts fo_json fo_ts fo_q verdict deadline
+  job="$(job_for "$app")"; up_job="$(job_for "$up_app")"
+  if [ -z "$job" ] || [ -z "$up_job" ]; then
+    echo "  WARN: follow-on $app:$up_app has no manifest row for one side — skipping."; return 0
+  fi
+  # No credential to look with: we cannot tell whether Jenkins fired it, so fire it.
+  # (trigger() needs the same credential, so in practice this branch also fails loudly.)
+  if [ -z "$JENKINS_CRED_VALUE" ]; then deploy "$app"; return 0; fi
+
+  echo "follow-on $app (job $job) after $up_app (job $up_job):"
+  # 1. The upstream must be finished — under THROTTLE=0 it is usually still running.
+  deadline=$(( $(date +%s) + BUILD_WAIT_TIMEOUT ))
+  while :; do
+    json="$(japi "$up_job" 'number,building,result,timestamp')"
+    up_building="$(jfield "$json" building)"
+    [ "$up_building" = "false" ] && break
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "  WARN: $up_job still building after ${BUILD_WAIT_TIMEOUT}s — NOT firing $job (it would race its upstream). Fire it by hand once $up_job lands."
+      return 0
+    fi
+    sleep "$POLL_INTERVAL"
+  done
+  up_result="$(jfield "$json" result)"; up_ts="$(jfield "$json" timestamp)"
+
+  # 2. Give Jenkins' own trigger its chance before deciding.
+  deadline=$(( $(date +%s) + FOLLOWON_GRACE ))
+  while :; do
+    fo_json="$(jjob "$job" 'inQueue,lastBuild[timestamp]')"
+    fo_q="$(jfield "$fo_json" inQueue)"; fo_ts="$(jfield "$fo_json" timestamp)"
+    verdict="$(followon_verdict "$up_result" "$up_ts" "${fo_q:-false}" "${fo_ts:-0}")"
+    [ "$verdict" = "trigger" ] || break
+    [ "$(date +%s)" -ge "$deadline" ] && break
+    sleep "$POLL_INTERVAL"
+  done
+
+  case "$verdict" in
+    skip)
+      echo "  WARN: $up_job last finished ${up_result:-with no result} — NOT firing $job on top of it."
+      echo "        $app will be MISSING or STALE until $up_job is fixed and $job runs (jenkins-deploy-url.sh $app)." ;;
+    fired)
+      echo "  $job already ran/queued after $up_job #$(jfield "$json" number) ($up_result) — nothing to do." ;;
+    trigger)
+      echo "  $up_job finished $up_result and Jenkins did not fire $job within ${FOLLOWON_GRACE}s — firing it."
+      deploy "$app" ;;
+  esac
+  return 0
+}
+
+# Sourced by the tests: stop here, before the deploy loop touches Jenkins.
+[ "${TAB_LIB_ONLY:-0}" = "1" ] && return 0 2>/dev/null
+
 if [ "$THROTTLE" = "0" ]; then
   echo "trigger-app-builds: THROTTLE=0 — firing all jobs at once (legacy behaviour)."
 elif [ "$MAX_PARALLEL" -gt 1 ]; then
@@ -230,6 +331,9 @@ fi
 # two could drift apart silently. That is how qcx and prop-investech ended up with working
 # Jenkins jobs that no bootstrap or DR run ever triggered. One source of truth now.
 APPS="$(awk '!/^#/ && NF>=4 {print $1}' "$MANIFEST" 2>/dev/null)"
+# Follow-ons are deployed by ensure_followon after the loop, never by it.
+FOLLOWON_APPS=" $(for f in $FOLLOW_ONS; do printf '%s ' "${f%%:*}"; done)"
+APPS="$(for a in $APPS; do case "$FOLLOWON_APPS" in *" $a "*) : ;; *) echo "$a" ;; esac; done)"
 [ -n "$APPS" ] || { echo "trigger-app-builds: no usable rows in $MANIFEST — nothing to deploy." >&2; exit 1; }
 echo "trigger-app-builds: deploying in manifest order: $(echo "$APPS" | tr '\n' ' ')"
 
@@ -258,5 +362,7 @@ else
     deploy "$app"
   done
 fi
+
+for f in $FOLLOW_ONS; do ensure_followon "${f%%:*}" "${f#*:}"; done
 
 echo "trigger-app-builds: all app build jobs triggered."

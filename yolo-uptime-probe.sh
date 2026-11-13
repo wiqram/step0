@@ -16,11 +16,24 @@
 # This probe watches what a FOLLOWER experiences, from the host:
 #   ui-down    https://www.traderyolo.com/ answers 2xx  (nginx-proxy-manager → UI)
 #   api-down   https://swagger.traderyolo.com/v1/market/session?exchange=XNYS
-#              answers 2xx AND carries `"state"` — one request that exercises the
-#              full serving depth: NPM → NodePort → api-gateway → robinstocks →
-#              quant-mongo. If that chain answers, the platform is serving; if it
-#              does not for 15 sustained minutes, no in-cluster monitor can be
-#              trusted to say so, and this script is what still speaks.
+#              answers 2xx AND carries `"state"` AND does NOT carry
+#              `"lookup_failed"` — one request that exercises the full serving
+#              depth: NPM → NodePort → api-gateway → robinstocks → quant-mongo. If
+#              that chain answers, the platform is serving; if it does not for 15
+#              sustained minutes, no in-cluster monitor can be trusted to say so,
+#              and this script is what still speaks.
+#
+# ⚠️ WHY THE NEGATIVE CHECK (found 2026-11-13). The api-gateway does NOT error when
+# robinstocks is unreachable: it degrades to a 200 with
+#   {"state":"unknown","exchange":"XNYS","reason":"lookup_failed",...}
+# (apiService/server/server.go, FRAC2-P0-1 — deliberately a closed vocabulary rather
+# than a leaked dial error). That body carries `"state"`, so the positive check alone
+# read it as UP. robinstocks was absent from the cluster for 28 days after the 10-16
+# rebuild — every follower saw an unknown market session — while this probe reported
+# api-down=0 every five minutes. `lookup_failed` is emitted ONLY when the engine's
+# calendar store could not be read (dial failure, timeout, empty state; robin_stocks
+# market_sessions/store.py); an exchange we hold no calendar for says `no_document`
+# instead, so this token never fires on a healthy chain.
 #
 # VANTAGE, honestly stated: this runs on the prod HOST, outside the cluster but
 # inside the box — it covers cluster/minikube death (the observed 08-03 mode) and
@@ -62,6 +75,7 @@ AP_LIB_ONLY=1 source "$SELFDIR/alerting-pipeline-watch.sh"
 UP_UI_URL="${UP_UI_URL:-https://www.traderyolo.com/}"
 UP_API_URL="${UP_API_URL:-https://swagger.traderyolo.com/v1/market/session?exchange=XNYS}"
 UP_API_MUST_CONTAIN="${UP_API_MUST_CONTAIN:-\"state\"}"
+UP_API_MUST_NOT_CONTAIN="${UP_API_MUST_NOT_CONTAIN:-\"lookup_failed\"}"   # see header: the degraded-200 body
 UP_HTTP_TIMEOUT="${UP_HTTP_TIMEOUT:-15}"
 UP_NEED_CONSEC="${UP_NEED_CONSEC:-3}"   # x 5-minute cron = 15 minutes sustained
 UP_COOLDOWN="${UP_COOLDOWN:-3600}"      # re-notify at most hourly while still down
@@ -69,17 +83,23 @@ UP_PERIOD_MIN="${UP_PERIOD_MIN:-5}"     # the cron period, for "sustained Nm" in
 UP_STATE="${UP_STATE:-$SELFDIR/logs/.yolo-uptime-state}"
 UP_LOG="${UP_LOG:-$SELFDIR/logs/yolo-uptime-probe.log}"
 
-# up_http_probe <url> [must_contain] -> 1 if the endpoint answered 2xx (and, when
-# given, the body contains must_contain), else 0. Never fails the script. The body
-# check is what turns "nginx answered something" into "the serving chain answered":
-# a 200 error shell from a dead backend does not carry the API's own field.
+# up_http_probe <url> [must_contain] [must_not_contain] -> 1 if the endpoint answered
+# 2xx (and, when given, the body contains must_contain and does NOT contain
+# must_not_contain), else 0. Never fails the script. The positive body check is what
+# turns "nginx answered something" into "the serving chain answered": a 200 error
+# shell from a dead backend does not carry the API's own field. The negative one
+# catches the subtler case — the API's OWN field, reporting that the layer behind it
+# is gone (see the header: a degraded 200 is still a dead backend).
 up_http_probe() {
-  local url="$1" must="${2:-}" body code
+  local url="$1" must="${2:-}" must_not="${3:-}" body code
   body="$(curl -sS -m "$UP_HTTP_TIMEOUT" -w '\n%{http_code}' "$url" 2>/dev/null)" || { echo 0; return 0; }
   code="${body##*$'\n'}"
   case "$code" in 2*) : ;; *) echo 0; return 0 ;; esac
   if [ -n "$must" ]; then
     case "$body" in *"$must"*) : ;; *) echo 0; return 0 ;; esac
+  fi
+  if [ -n "$must_not" ]; then
+    case "$body" in *"$must_not"*) echo 0; return 0 ;; esac
   fi
   echo 1
 }
@@ -111,8 +131,10 @@ if [ "$MODE" = "selftest" ]; then
   rc=0
   [ "$(up_http_probe "${UP_UI_URL%/}/definitely-not-here-uptime-selftest")" = "0" ] \
     || { echo "SELFTEST FAIL: missing path did not read DOWN"; rc=1; }
-  [ "$(up_http_probe "$UP_API_URL" "$UP_API_MUST_CONTAIN")" = "1" ] \
+  [ "$(up_http_probe "$UP_API_URL" "$UP_API_MUST_CONTAIN" "$UP_API_MUST_NOT_CONTAIN")" = "1" ] \
     || { echo "SELFTEST FAIL: real API did not read UP (is this an outage instead?)"; rc=1; }
+  [ "$(up_http_probe "$UP_API_URL" "$UP_API_MUST_CONTAIN" '"state"')" = "0" ] \
+    || { echo "SELFTEST FAIL: negative body check did not reject a forbidden token"; rc=1; }
   [ "$(up_http_probe "$UP_API_URL" '"field-that-never-appears"')" = "0" ] \
     || { echo "SELFTEST FAIL: body check did not reject a wrong body"; rc=1; }
   NOW_T=1000000
@@ -142,7 +164,7 @@ UI_UP="$(up_http_probe "$UP_UI_URL")"
 add_metric "ui-down" "$([ "$UI_UP" = "1" ] && echo 0 || echo 1)" 1 "" \
   "YOLO public UI unreachable ($UP_UI_URL)"
 
-API_UP="$(up_http_probe "$UP_API_URL" "$UP_API_MUST_CONTAIN")"
+API_UP="$(up_http_probe "$UP_API_URL" "$UP_API_MUST_CONTAIN" "$UP_API_MUST_NOT_CONTAIN")"
 add_metric "api-down" "$([ "$API_UP" = "1" ] && echo 0 || echo 1)" 1 "" \
   "YOLO API serving chain broken ($UP_API_URL — NPM->edge->robinstocks->quant-mongo)"
 
