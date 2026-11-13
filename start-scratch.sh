@@ -250,6 +250,15 @@ sudo -n "$HOME/Ideaprojects/STEP0/tailscale-access.sh" --ensure \
 # sudo — so a `sudo mkdir` here would silently fail inside an unattended bootstrap.
 docker exec minikube sh -c 'mkdir -p /mnt/grafana-data && chown -R 65534:65534 /mnt/grafana-data' \
   || echo "WARN: could not prepare /mnt/grafana-data; Grafana may fail to write its SQLite DB."
+# Same for Prometheus' durable TSDB (kube-prometheus manifests/prometheus-dataVolume.yaml ->
+# node /mnt/prometheus-data == host /mnt/minikube-mnt/prometheus-data; until 2026-11-13 it
+# was an emptyDir and every pod re-creation restarted metric history from zero).
+# Prometheus runs as uid 1000 / fsGroup 2000, and fsGroup is NOT applied to a hostPath, so
+# a root-owned dir means "permission denied" opening the TSDB lock and a crash-loop. Same
+# re-assert-every-bootstrap reasoning as above: restore-scratch's chown -R cloud:cloud
+# would leave it 1000:1000 — right uid by coincidence, wrong group.
+docker exec minikube sh -c 'mkdir -p /mnt/prometheus-data && chown -R 1000:2000 /mnt/prometheus-data && chmod 2775 /mnt/prometheus-data' \
+  || echo "WARN: could not prepare /mnt/prometheus-data; Prometheus may crash-loop on its TSDB lock."
 echo "deploying grafana prometheus"
 cd $HOME/Ideaprojects/kube-prometheus/
 kubectl apply --server-side -f manifests/setup

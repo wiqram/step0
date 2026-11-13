@@ -110,6 +110,14 @@ to a Kubernetes NodePort on `172.16.238.2`.
   PVC with `volumeName`. `verify-recovery.sh` FAILs on any new offender; genuinely
   disposable config volumes go in its `PVC_EPHEMERAL_OK` list.
 
+- **Prometheus' TSDB is durable too (2026-11-13)** — kube-prometheus `manifests/prometheus-dataVolume.yaml`
+  (PV `/mnt/prometheus-data`, retention `30d` **or** `20GB`). That file also creates the
+  **`manual` StorageClass object**, which did not exist before: plain PVC binding never
+  needed it, but prometheus-operator validates the class and refuses to reconcile without
+  it. It is no-provisioner / non-default / Immediate, so it is inert for every other claim
+  — don't delete it as "unused". `start-scratch.sh` chowns `/mnt/prometheus-data` to
+  `1000:2000` through the node on every bootstrap (fsGroup does not apply to hostPath).
+
 - **Never copy a running database.** Every restore/migration must scale the workload to 0
   first. MongoDB is the unforgiving case — WiredTiger writes are not atomic across files, so
   a live copy restores faithfully and then fails its own checksums
