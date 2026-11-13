@@ -179,6 +179,13 @@ to a Kubernetes NodePort on `172.16.238.2`.
   are trusted and a `curl` from this host proves nothing. Full detail + the rejected
   alternatives (Cloudflare Access, split DNS, `tailscale serve`, exit node):
   nginx repo `docs/edge-exposure.md`.
+- **`start-scratch.sh` pins the Kubernetes version AND the container runtime — keep both
+  (2026-11-13).** minikube 1.39 changed two defaults that each break this cluster silently or
+  loudly: Kubernetes **v1.37.0**, which kube-prometheus 0.18 does not support (`K8S_VERSION`,
+  default `v1.36.4`), and the **containerd** runtime (minikube#23562) — `--gpus all` then exits
+  14 before creating anything, and everything here assumes dockerd/cri-dockerd
+  (`--container-runtime=docker`). Path to 1.37: kube-prometheus 0.19 first, then bump
+  `K8S_VERSION` and `restore-scratch.sh`'s `K8S_APT_MINOR` together.
 - **Single host, single node.** No multi-node K8s. "private cloud" = Docker + one
   Minikube + Nginx, all co-located on `172.16.238.x`.
 - **Fixed IPs:** Minikube node `172.16.238.2` (API/NodePorts/registry:5000),
