@@ -219,6 +219,18 @@ LOKI_UP="$(ap_http_ok "$AP_LOKI_URL/ready")"
 add_metric "loki-down" "$([ "$LOKI_UP" = "1" ] && echo 0 || echo 1)" 1 "" \
   "Loki unreachable ($AP_LOKI_URL) — every YOLO Grafana rule is Loki-backed and KeepLast, so they are all silent, not red"
 
+# ---- 2b. The alert TRANSPORT itself: self-hosted ntfy (2026-11-13) -----------------
+# Everything that pages publishes to the self-hosted ntfy (ntfy-server.sh). If it dies,
+# Alertmanager and the yolo apps go silent with no error anywhere a human looks. This probe's
+# own notification still gets out: ntfy-lib.sh falls back to ntfy.sh when the self-hosted
+# push fails, which is exactly the case this probe exists for. Probed on the container's
+# fixed address, not the public name, so an NPM/DNS problem reads as what it is (the phone
+# can't reach it — verify-recovery.sh checks the public side) rather than as a dead server.
+AP_NTFY_URL="${AP_NTFY_URL:-http://172.16.238.12}"
+NTFY_UP="$(ap_http_ok "$AP_NTFY_URL/v1/health")"
+add_metric "ntfy-down" "$([ "$NTFY_UP" = "1" ] && echo 0 || echo 1)" 1 "" \
+  "Self-hosted ntfy unreachable ($AP_NTFY_URL) — Alertmanager/Grafana/yolo pushes are being LOST; this note came via the ntfy.sh fallback. ./ntfy-server.sh --status"
+
 # ---- 3 + 4. Prometheus-derived probes ---------------------------------------------
 # Skipped entirely when Prometheus is down: prometheus-down already says so, and three
 # alerts describing one outage is exactly the noise this script is built to avoid.

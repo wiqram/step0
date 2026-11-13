@@ -77,6 +77,14 @@ else
     --gateway=172.16.238.1 \
     5million
 fi
+#################ntfy (self-hosted push notifications)###########################
+# The platform's own ntfy server (2026-11-13; see ntfy-server.sh / ntfy/server.yml for why:
+# ntfy.sh's 250 msgs/day per-IP quota dropped every alert on 2026-11-13). Brought up HERE,
+# before the cluster, on purpose: it is a HOST container that must outlive the cluster, and
+# everything below that can fail wants a working alert path. Covers DR too — restore-scratch
+# calls this script. Vault/k8s parts of --ensure are best-effort here and redone below.
+"$(dirname "$SCRIPT_PATH")/ntfy-server.sh" --ensure \
+  || echo "WARN: ntfy-server --ensure failed — alerts fall back to ntfy.sh (./ntfy-server.sh --status)"
 #check if minikube is installed, if not install it with appropriate memory and cpus
 if kubectl version; then
   echo "Minikube running"
@@ -282,6 +290,13 @@ kubectl wait \
 	--for condition=Established \
 	--all CustomResourceDefinition \
 	--namespace=monitoring
+# Alertmanager authenticates to the self-hosted ntfy with a token read from a mounted Secret
+# (credentials_file — the token is never in the committed alertmanager-secret.yaml). The
+# Alertmanager CR lists that Secret under `secrets:`, so it MUST exist before manifests/ is
+# applied: without it alertmanager-main-0 sits in ContainerCreating on every cold boot.
+# manifests/setup (above) created the monitoring namespace this needs.
+"$(dirname "$SCRIPT_PATH")/ntfy-server.sh" --k8s-secret \
+  || echo "WARN: alertmanager-ntfy-token Secret not created — Alertmanager may not start (./ntfy-server.sh --k8s-secret)"
 kubectl apply -f manifests/
 #################vault###########################
 echo "deploying vault"
@@ -303,6 +318,10 @@ bash start-vault.sh
 # not worth aborting a bootstrap that still has apps to deploy.
 "$(dirname "$SCRIPT_PATH")/sync-grafana-admin.sh" \
   || echo "WARN: grafana admin sync failed; Grafana may be on its default admin/admin."
+# Re-run now that Vault is unsealed: writes the yolo publisher token to kv/ntfy/yolo
+# (the earlier call could not reach Vault yet). Idempotent; best-effort.
+"$(dirname "$SCRIPT_PATH")/ntfy-server.sh" --ensure \
+  || echo "WARN: ntfy-server --ensure (Vault sync) failed — re-run ./ntfy-server.sh --ensure"
 #################jenkins###########################
 #create a customer jenkins/inbound-agent with k8s and curl and wget pre-installed and pushed to private repo
 #if [[ "$(docker image inspect 172.16.238.2:5000/jenkins-inbound-agent-vik:cloud 2> /dev/null)" == "" ]]; then

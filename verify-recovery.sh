@@ -642,6 +642,38 @@ else
   fail "SEC-EDGE-ALLOWLIST missing ($NPM_ALLOWLIST / $NPM_ENFORCE) — the admin vhosts (NPM admin UI+API, kube-apiserver, Vault, registry catalog, Prometheus) are reachable by Host header from the whole internet. Restore from the nginx repo: git -C ~/Ideaprojects/nginx checkout -- data/nginx/custom/"
 fi
 
+# ---- Self-hosted ntfy (2026-11-13): the platform's alert transport ---------------------
+# Every unattended job, Alertmanager and the yolo apps publish here (ntfy.sh's 250/day per-IP
+# quota dropped every alert on 2026-11-13). A dead alert server is indistinguishable from a
+# quiet, healthy system — so check it is UP, PUBLIC (the phone reaches it over cellular) and
+# CLOSED: auth-default-access deny-all, proven from the docker bridge (untrusted vantage), and
+# the 403 must be ntfy's own (code 40301), not nginx's.
+section "Self-hosted ntfy (alert transport)"
+if [ "$(docker inspect -f '{{.State.Running}}' ntfy 2>/dev/null)" = "true" ]; then
+  if docker exec ntfy wget -q -O- http://localhost:80/v1/health 2>/dev/null | grep -q '"healthy":true'; then
+    pass "ntfy container running + healthy (172.16.238.12)"
+  else
+    fail "ntfy container running but /v1/health not healthy — alerts may be stalling. ./ntfy-server.sh --status"
+  fi
+  _nh="$(curl -s -m 10 -o /dev/null -w '%{http_code}' https://ntfy.traderyolo.com/v1/health 2>/dev/null)"
+  [ "$_nh" = "200" ] && pass "ntfy public health https://ntfy.traderyolo.com -> 200" \
+    || warn "ntfy public health -> ${_nh:-no answer} — the phone cannot reach it (NPM proxy host / DNS / cert?)"
+  _nd="$(docker run --rm --network bridge curlimages/curl:latest -s -m 10 --resolve ntfy.traderyolo.com:443:172.17.0.1 -d x https://ntfy.traderyolo.com/yolo-selftest 2>/dev/null)"
+  case "$_nd" in
+    *'"code":40301'*) pass "ntfy deny-all holds: unauthenticated publish from an untrusted vantage -> 403 (40301)" ;;
+    "")               warn "could not test ntfy deny-all from the docker bridge (no curl image?) — check by hand" ;;
+    *)                fail "UNAUTHENTICATED PUBLISH TO ntfy WAS NOT REFUSED (${_nd:0:80}) — anyone can push to the alert topics. Check ntfy/server.yml auth-default-access" ;;
+  esac
+  for _k in NTFY_PHONE_PASSWORD NTFY_TOKEN_STEP0 NTFY_TOKEN_ALERTMANAGER NTFY_TOKEN_YOLO; do
+    grep -qE "^$_k=." "$(dirname "${BASH_SOURCE[0]}")/.env" 2>/dev/null || warn "$_k missing from STEP0/.env — ./ntfy-server.sh --ensure"
+  done
+  kubectl -n monitoring get secret alertmanager-ntfy-token >/dev/null 2>&1 \
+    && pass "Secret monitoring/alertmanager-ntfy-token present" \
+    || warn "Secret monitoring/alertmanager-ntfy-token absent — Alertmanager cannot authenticate (./ntfy-server.sh --k8s-secret)"
+else
+  fail "ntfy container NOT running — every platform alert is falling back to (quota-limited) ntfy.sh. Start: ./ntfy-server.sh --ensure"
+fi
+
 # ---- Tailscale: off-LAN access to those same vhosts -----------------------------------
 # Deliberately NOT fatal in most branches: tailscale is an operator convenience and nothing
 # on the platform depends on it (the box dual-purpose serves the public sites regardless).
