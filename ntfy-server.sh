@@ -21,6 +21,9 @@
 #     knows it and re-issued (and .env updated) only if ntfy lost it.
 #   * the yolo token in Vault at kv/ntfy/yolo {url, internal_url, token}  (STEP0-owned path — NOT kv/yolo/*, which the
 #     yolo pipeline's vault-sync reconciles from yolo's own sops files)
+#   * ~/.ntfy/yolo.env (mode 600, outside git) for yolo's host scripts: NTFY_URL_PUBLIC,
+#     NTFY_URL_INTERNAL, NTFY_TOKEN — rewritten on every --ensure
+#   * the Kubernetes Secret monitoring/grafana-ntfy-yolo-token (Grafana env NTFY_YOLO_TOKEN)
 #   * the Kubernetes Secret monitoring/alertmanager-ntfy-token (Alertmanager reads it via
 #     credentials_file). Created by --k8s-secret, which start-scratch.sh calls AFTER
 #     manifests/setup and BEFORE manifests/ — the Alertmanager CR mounts it, so if it is
@@ -134,6 +137,20 @@ sync_vault() {
   fi
 }
 
+# Host-side mirror of the yolo publisher credential, for yolo's HOST scripts (run-heal.sh,
+# run-cycle.sh, rs-clockshift-gate.sh, …) that run outside the cluster and so cannot use the
+# vault-agent injector. OUTSIDE every git repo, mode 600, rewritten from .env on every
+# --ensure — so a token rotation propagates, and a rebuild (which restores .env from the DR
+# archive) regenerates it. Requested by the yolo session (master-prod), 2026-11-13.
+YOLO_HOST_ENV="${YOLO_HOST_ENV:-$HOME/.ntfy/yolo.env}"
+host_file() {
+  local tok; tok="$(env_val NTFY_TOKEN_YOLO)"; [ -n "$tok" ] || return 0
+  mkdir -p "$(dirname "$YOLO_HOST_ENV")"; chmod 700 "$(dirname "$YOLO_HOST_ENV")"
+  local tmp; tmp="$(mktemp "$YOLO_HOST_ENV.XXXXXX")"; chmod 600 "$tmp"
+  printf '# Written by STEP0 ntfy-server.sh --ensure — do not edit; edits are overwritten.\nNTFY_URL_PUBLIC=%s\nNTFY_URL_INTERNAL=%s\nNTFY_TOKEN=%s\n' "$BASE_URL" "$INTERNAL_URL" "$tok" > "$tmp"
+  if ! cmp -s "$tmp" "$YOLO_HOST_ENV" 2>/dev/null; then mv "$tmp" "$YOLO_HOST_ENV"; info "wrote $YOLO_HOST_ENV"; else rm -f "$tmp"; fi
+}
+
 # monitoring/alertmanager-ntfy-token — mounted by the Alertmanager CR (secrets:) and read
 # via credentials_file, so the token never appears in the committed alertmanager-secret.yaml.
 k8s_secret() {
@@ -143,6 +160,15 @@ k8s_secret() {
   kubectl -n monitoring create secret generic alertmanager-ntfy-token --from-file=token=<(printf '%s' "$tok") \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null 2>&1 \
     && info "Secret monitoring/alertmanager-ntfy-token in place" || warn "could not apply monitoring/alertmanager-ntfy-token"
+  # monitoring/grafana-ntfy-yolo-token — Grafana (kube-prometheus) exposes it as env
+  # NTFY_YOLO_TOKEN (secretKeyRef, optional: true, so it can never block Grafana starting);
+  # yolo's grafana-alerting contact point uses $__env{NTFY_YOLO_TOKEN}. Grafana deliberately
+  # does NOT use the vault-agent injector (observability must boot with Vault sealed), hence a
+  # plain Secret from .env rather than kv/ntfy/yolo.
+  local ytok; ytok="$(env_val NTFY_TOKEN_YOLO)"
+  [ -n "$ytok" ] && kubectl -n monitoring create secret generic grafana-ntfy-yolo-token --from-file=token=<(printf '%s' "$ytok") \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null 2>&1 \
+    && info "Secret monitoring/grafana-ntfy-yolo-token in place" || warn "could not apply monitoring/grafana-ntfy-yolo-token"
 }
 
 status() {
@@ -156,7 +182,7 @@ status() {
 }
 
 case "${1:-}" in
-  --install|--ensure) up && ensure_auth && sync_vault && k8s_secret ;;
+  --install|--ensure) up && ensure_auth && host_file && sync_vault && k8s_secret ;;
   --k8s-secret)       k8s_secret ;;
   --status)           status ;;
   *) echo "usage: $0 --install | --ensure | --k8s-secret | --status" >&2; exit 2 ;;
