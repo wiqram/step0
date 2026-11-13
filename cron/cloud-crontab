@@ -64,6 +64,16 @@
 # To resume: uncomment the line below. Nothing else re-adds it — there is no
 # install-cron.sh in this repo, so this crontab is the only source.
 # 17 */12 * * * /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/run-cycle.sh >> /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/logs/cron.log 2>&1
+# YOLO Auto-Heal Agent — failure-triggered, every 15 min (see ops/agent/README.md)
+# ADOPTED FROM THE LIVE CRONTAB 2026-11-13: it was added there by hand (operator ask
+# 2026-08-31, "trigger auto healing agents whenever any pod or job fails") and never
+# written back here, so verify-recovery.sh reported drift and the next install-cron.sh or
+# DR restore would have silently DELETED it. Reconciled to the live line, verbatim.
+# Not covered by the 2026-08-03 pause above, and deliberately so: that pause was about
+# agents COMMITTING to the repo. This runner has no git verb and no deploy URL
+# (run-heal.sh header, "WHAT IT DELIBERATELY CANNOT DO") — it acts on running things
+# with a closed verb list and escalates the rest to NEEDS_HUMAN.md.
+7,22,37,52 * * * * /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/run-heal.sh >> /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/logs/heal-cron.log 2>&1
 # dyingpaleblue Improvement Agent - one scoped cycle every 3h (see ops/agent/README.md)
 # PAUSED 2026-08-08 by operator request — see the Predictonomy note above. The
 # dyingpaleblue Improvement Agent no longer runs on a schedule.
