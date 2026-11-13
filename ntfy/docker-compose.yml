@@ -1,0 +1,36 @@
+# ntfy/docker-compose.yml — self-hosted ntfy for the whole platform (2026-11-13).
+# Managed by ../ntfy-server.sh (--install / --ensure / --status); see ntfy/server.yml for why.
+#
+# A HOST-LEVEL container, deliberately NOT a Kubernetes workload: the alert server must
+# outlive the thing it reports on. cluster-autostart, alerting-pipeline-watch and the
+# yolo uptime probe all exist to say "the cluster is down" — they cannot rely on a
+# notification server that died with it. Same reasoning that keeps nginx-proxy-manager
+# outside the cluster.
+#
+# Data (cache.db + user.db) is on the shared volume, so the weekly DR archive carries it
+# and a restore brings back the same users and tokens that STEP0/.env refers to.
+services:
+  ntfy:
+    image: binwiederhier/ntfy:v2.37.2
+    container_name: ntfy
+    command: serve --config /etc/ntfy/server.yml
+    restart: unless-stopped
+    volumes:
+      - ./server.yml:/etc/ntfy/server.yml:ro
+      - /mnt/minikube-mnt/ntfy:/var/lib/ntfy
+    environment:
+      - TZ=UTC
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --tries=1 -O- http://localhost:80/v1/health | grep -q '\"healthy\":true'"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+    networks:
+      5million:
+        # Fixed IP next to nginx-proxy-manager (.10) and its DB (.11); NPM forwards
+        # ntfy.traderyolo.com here. Changing it means changing that NPM proxy host.
+        ipv4_address: 172.16.238.12
+
+networks:
+  5million:
+    external: true

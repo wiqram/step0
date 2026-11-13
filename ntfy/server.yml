@@ -1,0 +1,48 @@
+# ntfy/server.yml — the platform's self-hosted push-notification server (2026-11-13).
+# Run by ntfy/docker-compose.yml; managed by ../ntfy-server.sh. NO SECRETS IN THIS FILE —
+# users, tokens and ACLs live in the auth DB (/var/lib/ntfy/user.db), and the generated
+# credentials live in STEP0/.env (gitignored, swept by the weekly DR archive).
+#
+# WHY SELF-HOSTED: ntfy.sh's anonymous tier allows 250 messages/day PER SOURCE IP, and every
+# publisher on this box (Alertmanager, Grafana's yolo alerting, the yolo apps, STEP0's cron
+# jobs) shares that one IP. On 2026-11-13 Alertmanager alone attempted 529 notifications in
+# 24h, the quota was gone by 09:34Z, and from then until 00:00Z every alert was DROPPED
+# (HTTP 429, code 42908) — a dead alert channel looks exactly like a healthy system.
+# A self-hosted server has no such quota, keeps alert contents off a world-readable public
+# server, and stores every message even when delivery to the phone is delayed.
+
+base-url: "https://ntfy.traderyolo.com"
+listen-http: ":80"
+
+# NPM (172.16.238.10) terminates TLS and forwards; trust its X-Forwarded-For for visitor IPs.
+behind-proxy: true
+
+# Message cache: what lets a phone that was offline (or an iPhone that only got a poll
+# request) fetch the real message later. BOUNDED by cache-duration — ntfy prunes older
+# messages itself, so cache.db cannot grow without limit (STEP0 durability rule).
+cache-file: "/var/lib/ntfy/cache.db"
+cache-duration: "72h"
+
+# Auth: nothing is readable or writable without credentials. The server is on a public
+# vhost (the phone must reach it over cellular), so deny-all is the only sane default.
+auth-file: "/var/lib/ntfy/user.db"
+auth-default-access: "deny-all"
+enable-signup: false
+enable-login: true
+
+# iOS: Apple only allows instant pushes through a central APNs-connected server, so each
+# message publishes a CONTENT-FREE poll request ("New message" + an id) to ntfy.sh, and the
+# iPhone then fetches the real message from THIS server. Those poll requests still count
+# against ntfy.sh's 250/day for this IP — but when they are throttled the message is NOT
+# lost (it is in cache.db); the phone just shows it late. If that ever bites, set
+# upstream-access-token (an ntfy.sh account token) — see ntfy docs "iOS instant notifications".
+upstream-base-url: "https://ntfy.sh"
+
+# Every in-cluster publisher reaches this server through the public name, hairpins through
+# the router and arrives as THIS host's public IP — so to ntfy they are ONE visitor sharing
+# one 60-request burst bucket. A crash-day burst from Alertmanager + Grafana + yolo would then
+# 429 HERE. Exempt the host's own public IP, the 5million docker network and loopback.
+# (Tokens are still required — this exempts rate limiting only, never authentication.)
+visitor-request-limit-exempt-hosts: "213.48.246.115,172.16.0.0/16,127.0.0.1"
+
+# No attachments: alerts are text. (No attachment-cache-dir => attachments disabled.)
