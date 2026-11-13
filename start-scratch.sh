@@ -109,20 +109,22 @@ else
   # is fatal on a box with less RAM: `minikube start --memory 65536` on a 32G host refuses to
   # start, and a hardcoded system-reserved silently mis-sizes Allocatable either way. This
   # box is running on reduced RAM after the 2026-08-06 memory-corruption crash, so the two
-  # numbers are DERIVED. The reference case is preserved exactly: a 96G host still computes
-  # --memory 65536 and system-reserved 31Gi, so nothing changes when the RAM goes back in.
+  # numbers are DERIVED. Reference case (HOST_RESERVE_GI=16 since 2026-11-13; was 30): a 96G
+  # host (MemTotal reads 94Gi) now computes --memory 78Gi and system-reserved 17Gi, i.e. the
+  # cluster gets 14Gi MORE than the hand-tuned 65536 / 31Gi once the RAM goes back in.
   #
   # The invariant is the one reasoned out above, unchanged:
   #   Allocatable = HOST_GI - SYS_RES - KUBE_RES(2Gi) - EVICT(1Gi)  ==  MK_GI - 4
   #   => SYS_RES  = HOST_GI - MK_GI + 1
-  # Check against the hand-tuned values it replaces: 94 - 64 + 1 = 31Gi. Exact.
+  # Check against the hand-tuned values it replaced (30Gi reserve): 94 - 64 + 1 = 31Gi. Exact.
   #
   # Override either with MINIKUBE_MEM_GI / MINIKUBE_CPUS in the environment.
   HOST_GI=$(( $(awk '/^MemTotal:/{print $2}' /proc/meminfo) / 1024 / 1024 ))
-  # Leave the host its share: 30Gi on a big box (OS + docker + nginx-proxy-manager +
-  # IntelliJ + Chrome + Jenkins build spikes), otherwise a third, never less than 8Gi.
+  # Leave the host its share: 16Gi on a big box (OS + docker + nginx-proxy-manager +
+  # IntelliJ + Chrome + Jenkins build spikes; lowered from 30Gi on 2026-11-13), otherwise a
+  # third, never less than 8Gi. Below 80Gi (this box at 64G RAM) the 16 is not used at all.
   if [ "$HOST_GI" -ge 80 ]; then
-    HOST_RESERVE_GI=30
+    HOST_RESERVE_GI=16
   else
     HOST_RESERVE_GI=$(( HOST_GI / 3 ))
     if [ "$HOST_RESERVE_GI" -lt 8 ]; then HOST_RESERVE_GI=8; fi
