@@ -153,7 +153,15 @@ else
   #   the SAME json.log, and promtail re-read whole files -> every yolo log line stored 2-3x in Loki.
   #   The rule is kubelet limit > docker max-size, so docker is the only rotator. The flag covers a
   #   cluster CREATED by this line; tune-kubelet-log-rotation.sh (below) covers an existing one.
-  minikube start --cpus "$MK_CPUS" --memory "$(( MK_GI * 1024 ))" --disk-size 40g --driver=docker --network 5million --gpus all --mount-string="/mnt/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.system-reserved=cpu=1,memory=${SYS_RES_GI}Gi --extra-config=kubelet.kube-reserved=cpu=1,memory=2Gi --extra-config=kubelet.eviction-hard="memory.available<1Gi,nodefs.available<10%" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=kubelet.container-log-max-size=200Mi --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
+  # --kubernetes-version is PINNED (2026-11-13). Until then this line passed none, so the
+  #   cluster got whatever the installed minikube defaults to — and minikube 1.39 defaults to
+  #   v1.37.0, which kube-prometheus 0.18 (our customised monitoring + alerting stack) does NOT
+  #   support (its compatibility matrix stops at 1.36; 1.37 needs kube-prometheus 0.19).
+  #   Upgrading minikube must never silently move the cluster past what the alerting stack
+  #   supports. To go to 1.37: upgrade kube-prometheus to 0.19 FIRST, then bump this, and move
+  #   restore-scratch.sh's K8S_APT_MINOR (kubectl skew is +/-1 minor) in the same commit.
+  K8S_VERSION="${K8S_VERSION:-v1.36.4}"
+  minikube start --kubernetes-version="$K8S_VERSION" --cpus "$MK_CPUS" --memory "$(( MK_GI * 1024 ))" --disk-size 40g --driver=docker --network 5million --gpus all --mount-string="/mnt/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.system-reserved=cpu=1,memory=${SYS_RES_GI}Gi --extra-config=kubelet.kube-reserved=cpu=1,memory=2Gi --extra-config=kubelet.eviction-hard="memory.available<1Gi,nodefs.available<10%" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=kubelet.container-log-max-size=200Mi --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
   # Pre-2026-08-07 line (hardcoded for the 96G host), kept for reference:
   #minikube start --cpus 16 --memory 65536 --disk-size 40g --driver=docker --network 5million --gpus all --mount-string="/mnt/minikube-mnt/:/mnt" --mount --insecure-registry="172.16.238.2:5000" --extra-config=kubelet.system-reserved=cpu=1,memory=31Gi --extra-config=kubelet.kube-reserved=cpu=1,memory=2Gi --extra-config=kubelet.eviction-hard="memory.available<1Gi,nodefs.available<10%" --extra-config=kubelet.housekeeping-interval=10s --extra-config=kubelet.authentication-token-webhook=true --extra-config=kubelet.authorization-mode=Webhook --extra-config=scheduler.bind-address=0.0.0.0 --extra-config=controller-manager.bind-address=0.0.0.0
   # Previous line (kept for reference): no kubelet reservations/eviction -> scheduler over-commits the 32G cgroup cap.

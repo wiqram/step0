@@ -367,15 +367,14 @@ JSON
 
   # kubectl (pinned-stable via official pkg repo).
   #
-  # THIS PIN MUST TRACK WHAT MINIKUBE ACTUALLY DEPLOYS. start-scratch.sh passes no
-  # --kubernetes-version, so the API server is whatever the installed minikube defaults to
-  # (minikube v1.38.1 -> k8s v1.35.1; confirmed against the prod node's own cached
-  # preload tarball). kubectl's supported skew is +/-1 minor: this was pinned to v1.31
+  # THIS PIN MUST TRACK WHAT START-SCRATCH DEPLOYS. Since 2026-11-13 start-scratch.sh pins
+  # --kubernetes-version (K8S_VERSION, v1.36.4 — kube-prometheus 0.18 stops at 1.36); before
+  # that it took minikube's default (minikube v1.38.1 -> k8s v1.35.1). kubectl's supported skew is +/-1 minor: this was pinned to v1.31
   # against a v1.35 server — four minors out — which does not fail loudly, it fails as
   # unknown fields being dropped and subresources not resolving.
   # When you bump minikube, re-check with:
   #   minikube start --help | grep -A2 kubernetes-version    # or the release's constants.go
-  K8S_APT_MINOR="${K8S_APT_MINOR:-v1.35}"
+  K8S_APT_MINOR="${K8S_APT_MINOR:-v1.36}"
   if ! command -v kubectl >/dev/null 2>&1; then
     run "sudo mkdir -p /etc/apt/keyrings"
     run "curl -fsSL https://pkgs.k8s.io/core:/stable:/$K8S_APT_MINOR/deb/Release.key | sudo gpg --dearmor --yes -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg"
