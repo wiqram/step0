@@ -35,6 +35,11 @@ useful for *why* something is shaped the way it is, not as current-state documen
 - `superpowers/plans/` — the executable plans (restore-scratch, per-app age keys, agent deploy triggers, WD Cloud NFS off-site backup)
 - `superpowers/specs/` — their design docs, plus dev-box kube access and platform alerting
 
+## Current handoff
+
+- [`HANDOFF-2026-11-14-platform-upgrades.md`](./HANDOFF-2026-11-14-platform-upgrades.md) — **start here**:
+  as-built versions after the 2026-11-13/14 upgrade pass, the traps that bit, and the open items.
+
 ## Historical handoffs
 
 Point-in-time notes kept for the reasoning they contain. They describe a cluster state that
