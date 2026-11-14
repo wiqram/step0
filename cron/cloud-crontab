@@ -132,3 +132,6 @@ CRON_TZ=Europe/London
 # and rode along in every weekly DR archive. Daily run; logrotate itself decides when the
 # weekly rotation is due. 04:45 lands before the Monday 05:00 root DR backup.
 45 4 * * * /usr/sbin/logrotate -s /home/cloud/Ideaprojects/STEP0/logs/.npm-host-logs.logrotate-state /home/cloud/Ideaprojects/STEP0/logrotate/npm-host-logs.conf >> /home/cloud/Ideaprojects/STEP0/logs/npm-host-logs.logrotate.log 2>&1
+# YOLO heal watchdog (added live by the yolo agents 2026-11-14, adopted here so install-cron
+# does not delete it). Owned by IG-Trading-Microservices ops/agent/.
+*/10 * * * * /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/heal-watchdog.sh >> /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/logs/watchdog.log 2>&1
