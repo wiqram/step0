@@ -674,6 +674,42 @@ else
   fail "ntfy container NOT running — every platform alert is falling back to (quota-limited) ntfy.sh. Start: ./ntfy-server.sh --ensure"
 fi
 
+# ---- Vault injection fail-CLOSED guard (2026-11-14) ------------------------------------
+# The injector webhook is failurePolicy=Ignore, so a pod created while the injector is down is
+# admitted with agent-inject=true but WITHOUT its secrets and runs bare (six yolo CronJob pods
+# after the 2026-11-14 crash). vault repo k8s/injection-required-policy.yaml is a
+# ValidatingAdmissionPolicy that refuses such pods in yolo. Nothing else surfaces its absence —
+# everything stays green until the next crash — so prove it is PRESENT and actually DENIES: a
+# server-side dry-run of a bare pod (labelled so the injector's objectSelector skips it) must be
+# refused by the policy. Mutates nothing (--dry-run=server persists no object).
+section "Vault injection fail-closed guard (yolo)"
+if kubectl get validatingadmissionpolicy vault-injection-required >/dev/null 2>&1 \
+   && kubectl get validatingadmissionpolicybinding vault-injection-required-yolo -o jsonpath='{.spec.validationActions}' 2>/dev/null | grep -q Deny; then
+  _vi="$(kubectl create --dry-run=server -f - 2>&1 <<'YAML'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: verify-bare-injection-probe
+  namespace: yolo
+  labels: {app.kubernetes.io/name: vault-agent-injector}
+  annotations: {vault.hashicorp.com/agent-inject: "true"}
+spec:
+  containers: [{name: c, image: busybox, command: [sleep, "1"]}]
+YAML
+)"
+  case "$_vi" in
+    *vault-injection-required*denied*) pass "bare pod wanting injection is DENIED in yolo (fail-closed holds)" ;;
+    *"created (server dry run)"*)      fail "a pod with agent-inject=true and NO injection was ADMITTED in yolo — the fail-closed guard is not enforcing. Re-apply: kubectl apply -f ~/Ideaprojects/vault/k8s/injection-required-policy.yaml" ;;
+    *)                                 warn "could not prove the injection guard denies (${_vi:0:100}) — check by hand" ;;
+  esac
+else
+  fail "vault-injection-required policy/binding missing or not Deny — a pod created while the injector is down will run WITHOUT its secrets. Re-apply: kubectl apply -f ~/Ideaprojects/vault/k8s/injection-required-policy.yaml (start-vault.sh does this)"
+fi
+# Pods that ARE live but bare (admitted before the guard, or in a namespace it does not cover).
+_bare="$(kubectl get pods -A --field-selector=status.phase!=Failed,status.phase!=Succeeded -o jsonpath='{range .items[*]}{.metadata.namespace}{"/"}{.metadata.name}{"|"}{.metadata.annotations.vault\.hashicorp\.com/agent-inject}{"|"}{.metadata.annotations.vault\.hashicorp\.com/agent-inject-status}{"\n"}{end}' 2>/dev/null | awk -F'|' '$2=="true" && $3!="injected"{print $1}')"
+if [ -z "$_bare" ]; then pass "no live pod wants Vault injection without having it"
+else fail "live pod(s) with agent-inject=true but NOT injected (running without secrets): $(echo $_bare | tr '\n' ' ') — kubectl rollout restart the owner"; fi
+
 # ---- Tailscale: off-LAN access to those same vhosts -----------------------------------
 # Deliberately NOT fatal in most branches: tailscale is an operator convenience and nothing
 # on the platform depends on it (the box dual-purpose serves the public sites regardless).
