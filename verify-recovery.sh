@@ -903,6 +903,36 @@ if [ -d "$SNAP_ROOT" ]; then
       [ -z "$_o" ] && _o="$(find "$1" \( "${_pat[@]}" \) -printf "$_fmt" 2>/dev/null)"
       printf '%s\n' "$_o"
     }
+    # _vr_empty_store_dump <archive> — 0 only if the dump is of a genuinely EMPTY store:
+    # (1) the snapshot job's MANIFEST.txt beside it has a "collection counts:" block with at
+    #     least one collection and every count 0, AND
+    # (2) the mongodump archive itself contains no document records. Archive layout: magic,
+    #     prelude BSON docs, then per collection a header doc {db, collection, EOF:false}, the
+    #     documents, a 0xFFFFFFFF terminator, and an EOF header with a CRC. A data document is
+    #     any body doc without the archive's own `EOF` / `metadata` / `concurrent_collections`
+    #     keys. Any doubt (no manifest, not a mongo archive, unparsable) => 1, i.e. still FAIL.
+    _vr_empty_store_dump() {
+      local _f="$1" _m
+      _m="$(dirname "$_f")/MANIFEST.txt"
+      case "$_f" in *.archive.gz) ;; *) return 1 ;; esac
+      [ -r "$_m" ] && [ -r "$_f" ] || return 1
+      awk '/^collection counts:/{on=1;next} on&&/^[[:space:]]+[^:]+:[[:space:]]*[0-9]+[[:space:]]*$/{n++; if ($NF+0!=0) bad=1; next} on&&NF{on=0}
+           END{exit !(n>0 && !bad)}' "$_m" || return 1
+      zcat "$_f" 2>/dev/null | python3 -I -c '
+import sys, struct
+b = sys.stdin.buffer.read()
+if len(b) < 8 or struct.unpack("<I", b[:4])[0] != 0x8199e26d: sys.exit(1)
+i, data = 4, 0
+while i + 4 <= len(b):
+    n = struct.unpack("<i", b[i:i+4])[0]
+    if n == -1: i += 4; continue
+    if n < 5 or i + n > len(b): sys.exit(1)
+    d = b[i+4:i+n]
+    if not any(k in d for k in (b"\x08EOF\x00", b"\x02metadata\x00", b"\x10concurrent_collections\x00")):
+        data += 1
+    i += n
+sys.exit(0 if data == 0 else 1)'
+    }
     _a="$(_vr_dumps "$_d" | sort -k1,1rn | head -1)"
     if [ -z "$_a" ]; then
       fail "$_db: no dump file (*.archive.gz/*.dump/*.sql/*.tar.gz) under $_d — for Mongo the raw datastore dirs in the weekly tar are NOT a valid restore source, so this database may have no recoverable backup"
@@ -921,7 +951,14 @@ if [ -d "$SNAP_ROOT" ]; then
     if [ -n "$SNAP_JOBS" ] && ! printf '%s\n' "$SNAP_JOBS" | grep -qx "$_db"; then
       _live=0
     fi
-    if [ "${_sz:-0}" -lt 1024 ]; then
+    if [ "${_sz:-0}" -lt 1024 ] && _vr_empty_store_dump "$_path"; then
+      # A dump of an EMPTY store is legitimately tiny (yolo's assistant store while AIACT-06
+      # is dark: one collection, 0 documents, 431 bytes). Pass it ONLY when two independent
+      # sources agree there was nothing to dump — the job's MANIFEST.txt lists every
+      # collection at 0 AND the archive itself holds no document records. The moment the
+      # store has data, a dump that comes out empty fails both tests and the FAIL below fires.
+      pass "$_db: DB snapshot ${_age}d old, ${_sz}B — the store is EMPTY (MANIFEST all-zero, archive holds 0 documents), so a tiny dump is correct"
+    elif [ "${_sz:-0}" -lt 1024 ]; then
       fail "$_db: newest snapshot $(basename "$_path") is ${_sz:-0} bytes — an empty dump restores nothing"
     elif [ "$_live" = 0 ]; then
       info "$_db: no db-snapshot-$_db CronJob targets this tree — retired database, ${_age}d old snapshot kept for history (not a failure)"
