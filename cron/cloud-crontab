@@ -113,6 +113,10 @@
 # job had been running daily and its cap was correctly sized the whole time.
 # 00:30 still lands before the Monday 05:00 root backup.
 CRON_TZ=Europe/London
+# host-tmp-guard.sh (2026-11-16): hourly reaper for /tmp + Claude Code scratch (build caches,
+# dead sessions, puppeteer/mktemp litter). /tmp was RAM (tmpfs, 50% of RAM) and 24Gi of agent
+# scratch in it drove the desktop into swap. Allowlist-only deletes; see the script header.
+17 * * * * /home/cloud/Ideaprojects/STEP0/host-tmp-guard.sh >> /home/cloud/Ideaprojects/STEP0/logs/host-tmp-guard.log 2>&1
 30 */6 * * * /home/cloud/Ideaprojects/STEP0/reduce-node-docker-cache.sh >> /home/cloud/Ideaprojects/STEP0/logs/reduce-node-docker-cache.log 2>&1
 
 # Registry blob prune — weekly, Sunday 04:00. Until 2026-08-07 prune-registry.sh existed

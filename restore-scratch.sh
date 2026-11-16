@@ -933,7 +933,7 @@ phase8_automation() {
   #     of pipeline logs incl. follower emails) is reachable from the whole bridge network
   #     after any Docker restart, with nothing to say so. See loki-nodeport-guard.sh.
   if [ "$DRY_RUN" = 1 ]; then
-    echo "  DRYRUN> sudo $SCRIPT_DIR/10gbe-link-watchdog.sh --install ; sudo $SCRIPT_DIR/enable-devbox-kube-access.sh --install ; sudo $SCRIPT_DIR/loki-nodeport-guard.sh --install ; sudo $SCRIPT_DIR/docker-runtime-upgrade.sh --hold ; sudo $SCRIPT_DIR/tailscale-access.sh --install"
+    echo "  DRYRUN> sudo $SCRIPT_DIR/10gbe-link-watchdog.sh --install ; sudo $SCRIPT_DIR/enable-devbox-kube-access.sh --install ; sudo $SCRIPT_DIR/loki-nodeport-guard.sh --install ; sudo $SCRIPT_DIR/docker-runtime-upgrade.sh --hold ; sudo $SCRIPT_DIR/tailscale-access.sh --install ; $SCRIPT_DIR/host-tmp-guard.sh --install-settings ; sudo $SCRIPT_DIR/host-tmp-guard.sh --install-disk-tmp"
   else
     sudo "$SCRIPT_DIR/10gbe-link-watchdog.sh" --install >/dev/null 2>&1 \
       && log "10gbe-link-watchdog.service installed" || log "WARN: 10gbe-link-watchdog --install failed (re-run by hand)."
@@ -947,6 +947,13 @@ phase8_automation() {
     # with them every pod. `--hold`, NOT `--install`: the Saturday auto-upgrade timer was retired
     # on 2026-11-13 by operator decision (docker is upgraded by hand), and --install would bring
     # it back on every rebuild. --hold also removes the timer if a restored /etc carries it.
+    # host-tmp-guard (2026-11-16): /tmp on the NVMe instead of RAM (fstab bind, live from the
+    # next boot) + Claude Code scratch to disk. Without it a rebuilt box is back to a 50%-of-RAM
+    # tmpfs that agent scratch fills until the desktop swaps. Hourly reaper is in cloud-crontab.
+    "$SCRIPT_DIR/host-tmp-guard.sh" --install-settings >/dev/null 2>&1 \
+      && log "Claude Code scratch -> disk (CLAUDE_CODE_TMPDIR)" || log "WARN: host-tmp-guard --install-settings failed (re-run by hand)."
+    sudo "$SCRIPT_DIR/host-tmp-guard.sh" --install-disk-tmp >/dev/null 2>&1 \
+      && log "disk-backed /tmp configured (active after reboot)" || log "WARN: host-tmp-guard --install-disk-tmp failed — /tmp stays RAM-backed. Re-run: sudo $SCRIPT_DIR/host-tmp-guard.sh --install-disk-tmp"
     sudo "$SCRIPT_DIR/docker-runtime-upgrade.sh" --hold >/dev/null 2>&1 \
       && log "docker/containerd held (docker-runtime-upgrade --hold; no auto-upgrade timer)" \
       || log "WARN: docker-runtime-upgrade --hold failed — docker-ce is UNHELD; an ad-hoc apt upgrade will restart the cluster. Re-run: sudo $SCRIPT_DIR/docker-runtime-upgrade.sh --hold"

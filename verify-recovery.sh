@@ -642,6 +642,21 @@ else
   fail "SEC-EDGE-ALLOWLIST missing ($NPM_ALLOWLIST / $NPM_ENFORCE) — the admin vhosts (NPM admin UI+API, kube-apiserver, Vault, registry catalog, Prometheus) are reachable by Host header from the whole internet. Restore from the nginx repo: git -C ~/Ideaprojects/nginx checkout -- data/nginx/custom/"
 fi
 
+# ---- Host /tmp vs RAM (2026-11-16, host-tmp-guard.sh) ------------------------------------
+# Stock Ubuntu /tmp is a tmpfs sized at 50% of RAM, ON TOP of minikube's cgroup. On 2026-11-16
+# 24Gi of agent scratch in it drove the desktop 27/29Gi into swap. WARN only: a slow desktop,
+# not a broken platform.
+section "Host /tmp (RAM vs disk)"
+_tmpfs=$(findmnt -n -o FSTYPE /tmp 2>/dev/null)
+if [ "$_tmpfs" != tmpfs ]; then pass "/tmp is disk-backed ($_tmpfs)"
+elif grep -qE '^[^#]*[[:space:]]/tmp[[:space:]]' /etc/fstab; then warn "/tmp disk bind is in /etc/fstab but not active — reboot to apply"
+elif [ -f /etc/systemd/system/tmp.mount.d/50-size-cap.conf ]; then pass "/tmp tmpfs is capped ($(grep -o 'size=[^,]*' /etc/systemd/system/tmp.mount.d/50-size-cap.conf))"
+else warn "/tmp is an UNCAPPED tmpfs (50% of RAM) — fix: sudo ./host-tmp-guard.sh --install-disk-tmp, then reboot"; fi
+if [ "$(jq -r '.env.CLAUDE_CODE_TMPDIR // empty' "$HOME/.claude/settings.json" 2>/dev/null)" ]; then pass "Claude Code scratch on disk (CLAUDE_CODE_TMPDIR set)"
+else warn "CLAUDE_CODE_TMPDIR unset — Claude Code session scratch lands in /tmp. Fix: ./host-tmp-guard.sh --install-settings"; fi
+cloud_crontab | grep -q 'host-tmp-guard.sh' && pass "host-tmp-guard reaper scheduled" \
+  || warn "host-tmp-guard reaper not in the live cloud crontab — ./install-cron.sh --cloud"
+
 # ---- Self-hosted ntfy (2026-11-13): the platform's alert transport ---------------------
 # Every unattended job, Alertmanager and the yolo apps publish here (ntfy.sh's 250/day per-IP
 # quota dropped every alert on 2026-11-13). A dead alert server is indistinguishable from a
