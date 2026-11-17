@@ -225,8 +225,8 @@ alert_if_full() {
   # shellcheck source=ntfy-lib.sh
   . "$SCRIPT_DIR/ntfy-lib.sh"
   local top; top=$(du -xsh /tmp/* /tmp/.[!.]* 2>/dev/null | sort -h | tail -3 | tr '\t\n' ' ;')
-  ntfy_push "$NTFY_TOPIC_RESOURCE_CRUNCH" "prod /tmp ${pct}% full (RAM-backed)" \
-    "host /tmp is ${pct}% of $(df -h --output=size /tmp | tail -1 | tr -d ' ') after reaping. Largest: ${top}. Each GB here is a GB of RAM or swap. See host-tmp-guard.sh --status." \
+  ntfy_push "$NTFY_TOPIC_RESOURCE_CRUNCH" "prod /tmp ${pct}% full ($(findmnt -n -o FSTYPE /tmp))" \
+    "host /tmp is ${pct}% of $(df -h --output=size /tmp | tail -1 | tr -d ' ') after reaping (on a disk-backed /tmp this is the /home partition). Largest: ${top}. See host-tmp-guard.sh --status." \
     high "warning"
   echo "$now" > "$STATE_FILE"
 }
@@ -287,7 +287,7 @@ install_disk_tmp() {
 }
 
 status() {
-  echo "/tmp:   $(df -h --output=used,size,pcent /tmp | tail -1)   (stock = 50% of RAM)"
+  echo "/tmp:   $(df -h --output=used,size,pcent /tmp | tail -1)   ($(findmnt -n -o FSTYPE /tmp); tmpfs = RAM, sized 50% of it by default)"
   free -h | awk '/Swap/{print "swap:   "$3" used of "$2}'
   local cur; cur=$(jq -r '.env.CLAUDE_CODE_TMPDIR // "UNSET"' "$CLAUDE_SETTINGS" 2>/dev/null)
   echo "layer1: CLAUDE_CODE_TMPDIR=$cur  $([ "$cur" = "$CLAUDE_DISK_TMP" ] && echo OK || echo "-> ./host-tmp-guard.sh --install-settings")"
