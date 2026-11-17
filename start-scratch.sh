@@ -263,6 +263,17 @@ sudo -n "$HOME/Ideaprojects/STEP0/enable-devbox-kube-access.sh" || echo "devbox-
 # tailscale, so it must never be able to abort a bootstrap (set -e is on).
 sudo -n "$HOME/Ideaprojects/STEP0/tailscale-access.sh" --ensure \
   || echo "tailscale-access: skipped (not installed, or no passwordless sudo — './tailscale-access.sh --status' to check)"
+# host-tmp-guard (2026-11-16): keep agent scratch and /tmp off RAM. --install-settings is
+# user-level and idempotent (CLAUDE_CODE_TMPDIR in ~/.claude/settings.json), so it is safe on
+# a prepped box. The disk-backed /tmp itself is an fstab change that needs root + a reboot, so
+# on THIS path it is only reported, never applied (restore-scratch.sh phase 8 installs it).
+# Best-effort: a slow desktop must never abort a bootstrap (set -e is on).
+"$HOME/Ideaprojects/STEP0/host-tmp-guard.sh" --install-settings \
+  || echo "host-tmp-guard: --install-settings skipped (jq missing?)"
+if [ "$(findmnt -n -o FSTYPE /tmp 2>/dev/null)" = tmpfs ] && ! grep -qE '^[^#]*[[:space:]]/tmp[[:space:]]' /etc/fstab \
+   && [ ! -f /etc/systemd/system/tmp.mount.d/50-size-cap.conf ]; then
+  echo "WARN host-tmp-guard: /tmp is an UNCAPPED RAM tmpfs — run: sudo $HOME/Ideaprojects/STEP0/host-tmp-guard.sh --install-disk-tmp  (then reboot)"
+fi
 ###########x`######grafana-prometheus###########################
 # Grafana's /var/lib/grafana is a DURABLE hostPath PV (kube-prometheus
 # manifests/grafana-dataVolume.yaml -> node /mnt/grafana-data == host

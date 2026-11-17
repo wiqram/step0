@@ -1064,6 +1064,10 @@ NEXT — required before app deploys:
      each agent's .env. To re-arm manually: ./seed-agent-deploy-urls.sh
 
 MANUAL host-level steps NOT auto-reconstructed (credentials / can't be scripted safely):
+  0. REBOOT ONCE when the restore is otherwise done: phase 8 wrote the fstab bind that puts
+     /tmp on the NVMe (/home/host-tmp) instead of a 50%-of-RAM tmpfs, but it is never swapped
+     live (desktop sockets live in /tmp). Until then `verify-recovery.sh` WARNs "pending
+     reboot". After it: `findmnt /tmp` shows /dev/nvme0n1p4[/host-tmp]; `./host-tmp-guard.sh --status`.
   A. GitHub auth (REQUIRED before phase 5 clones): the gh token is in the OS keyring, not
      the backup. If phase 5 clones failed, run `gh auth login` (or drop a PAT) and re-run
      --from-phase 5.

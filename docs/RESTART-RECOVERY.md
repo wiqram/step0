@@ -44,6 +44,14 @@ do not, and apps must be re-deployed).
    The unseal key stays on the host (`~/.vault/cluster-keys.json`) — never copied into the cluster.
 4. **`check-backup.sh`** (cron `15 1 * * *` UTC) verifies the 01:00 `predictonomy-postgres-backup`
    ran; ntfy-alerts on failure. (App-level, but listed here as part of the post-reboot picture.)
+5. **`/tmp` is on DISK, not RAM** (since 2026-11-17): `/etc/fstab` binds `/home/host-tmp`
+   (NVMe) onto `/tmp`, so a reboot no longer empties it and a full `/tmp` no longer swaps the
+   desktop out. It is bounded instead by `host-tmp-guard.sh` (hourly cloud cron: idle build
+   caches, dead Claude session scratch, puppeteer/`mktemp` litter — allowlist only) and
+   systemd-tmpfiles' 10-day rule. Claude Code scratch goes to `~/.cache/claude-tmp`
+   (`CLAUDE_CODE_TMPDIR`). Check: `findmnt /tmp` → `/dev/nvme0n1p4[/host-tmp]`;
+   `./host-tmp-guard.sh --status`. Slowness/swap is paged by Alertmanager
+   (`HostSwapAlmostFull`, `HostMemoryStalling`). Rollback: `sudo cp /etc/fstab.pre-disk-tmp /etc/fstab`, reboot.
 
 **Healthy end-state to confirm:**
 ```bash

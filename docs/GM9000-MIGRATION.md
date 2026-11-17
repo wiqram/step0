@@ -728,6 +728,9 @@ Run through all of these; the migration is done when every line passes.
       hostname/DNS/public-IP, vault unsealed, all three crons).
 - [ ] `kubectl get po -A` — all Running/Completed; no CrashLoop/Pending.
 - [ ] `kubectl top po -A` returns numbers (metrics-server owns `v1beta1.metrics.k8s.io`).
+- [ ] `/tmp` is disk-backed after the post-restore reboot: `findmnt /tmp` shows
+      `/dev/nvme0n1p4[/host-tmp]` (not `tmpfs`) and `./host-tmp-guard.sh --status` reports
+      both layers OK (restore phase 8 installs them; see `host-tmp-guard.sh`).
 - [ ] `kubectl get apiservice v1beta1.metrics.k8s.io v1beta1.custom.metrics.k8s.io` —
       first owned by `kube-system/metrics-server`, second by prometheus-adapter.
 - [ ] `kubectl -n vault exec vault-0 -- vault status` → `Sealed false`; a known kv path
