@@ -27,10 +27,18 @@ roll=$(printf '%s\n' \
   "gs://b/private-cloud-01-05-27.tgz" | pick_latest_archive)
 assert_eq "$roll" "gs://b/private-cloud-01-05-27.tgz" "pick_latest_archive handles year rollover"
 
-# manifest: 12 repos; spot-check the feature branch.
+# manifest: 14 repos. The branches are what each repo's JENKINS JOB deploys (verified against the
+# job configs in 0c01802), not whatever is checked out locally — update both together.
 n=$(restore_repo_manifest | grep -c 'github.com/wiqram/')
-assert_eq "$n" "12" "manifest lists 12 repos"
-dpb=$(restore_repo_manifest | awk '/dyingpaleblue/{print $3}')
-assert_eq "$dpb" "fix-migrate-postgres-readiness" "dyingpaleblue pinned to feature branch"
+assert_eq "$n" "14" "manifest lists 14 repos"
+branch_of() { restore_repo_manifest | awk -v r="/$1 " 'index($0, r) {print $3}'; }
+# spot-check the non-`main` branches: a stale one clones, builds and deploys but is missing what prod runs.
+assert_eq "$(branch_of ollama)" "Claude-agent-update" "ollama pinned to its deploy branch"
+assert_eq "$(branch_of Predictonomy)" "Claude-agent-updates" "Predictonomy pinned to its deploy branch (not master)"
+assert_eq "$(branch_of IG-Trading-Microservices)" "Claude-agent-update" "IG-Trading-Microservices pinned to its deploy branch"
+assert_eq "$(branch_of dyingpaleblue)" "main" "dyingpaleblue on main (feature branch merged)"
+# the QUIET failure: a live site absent from the list is never cloned (aisucks/propinvestech, 2026-08-18)
+assert_eq "$(branch_of aisucks)" "main" "aisucks present in manifest"
+assert_eq "$(branch_of propinvestech)" "main" "propinvestech present in manifest"
 
 exit $fail

@@ -54,7 +54,7 @@ assert_contains "$out" "Jenkins build triggers fired" "without SKIP_APP_BUILDS t
 # Drive the REAL script into its first die(): phase 0 rejects an unexpected $HOME,
 # which happens before any mutation (the only prior step is a mkdir -p of a directory
 # that already exists). This exercises the shipped STARTED push and die() path.
-out="$(HOME=/tmp/not-cloud NTFY_DRY_RUN=1 bash "$REPO/restore-scratch.sh" 2>&1 >/dev/null)"; rc=$?
+out="$(RESTORE_PHASE_MARKER="$(mktemp -u)" HOME=/tmp/not-cloud NTFY_DRY_RUN=1 bash "$REPO/restore-scratch.sh" 2>&1 >/dev/null)"; rc=$?
 assert_contains "$out" "yolo-private-cloud-restore-scratch" "restore-scratch posts to its own channel"
 assert_contains "$out" "restore-scratch STARTED"            "announces the DR run"
 assert_contains "$out" "restore-scratch FAILED"             "die() pushes a failure"
@@ -63,11 +63,11 @@ assert_contains "$out" "--from-phase"                       "failure message say
 assert_missing  "$out" "ENDED early"                        "die() suppresses the EXIT-trap duplicate"
 
 # --dry-run must page nobody: it exists to be re-read repeatedly.
-out="$(NTFY_DRY_RUN=1 bash "$REPO/restore-scratch.sh" --dry-run 2>&1 >/dev/null)"
+out="$(RESTORE_PHASE_MARKER="$(mktemp -u)" NTFY_DRY_RUN=1 bash "$REPO/restore-scratch.sh" --dry-run 2>&1 >/dev/null)"
 assert_missing "$out" "yolo-private-cloud-restore-scratch" "--dry-run sends nothing"
 
 # --help exits before the EXIT trap is armed, so it must not push either.
-out="$(NTFY_DRY_RUN=1 bash "$REPO/restore-scratch.sh" --help 2>&1 >/dev/null)"
+out="$(RESTORE_PHASE_MARKER="$(mktemp -u)" NTFY_DRY_RUN=1 bash "$REPO/restore-scratch.sh" --help 2>&1 >/dev/null)"
 assert_missing "$out" "yolo-private-cloud-restore-scratch" "--help sends nothing"
 
 exit $fail

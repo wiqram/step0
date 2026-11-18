@@ -32,7 +32,8 @@ assert_eq "$(cat "$tmp/count")" "1" "ensure_line is idempotent"
 marker="$HOME/.yolo-dev-restore-phase"
 marker_before="$(cat "$marker" 2>/dev/null || echo ABSENT)"
 profile_hash_before="$(md5sum "$HOME/.profile" 2>/dev/null | cut -d' ' -f1)"
-if FROM_PHASE_OUT="$(bash "$SCRIPT" --dry-run --from-phase 0 2>&1)"; then
+# DEV_USER: the script insists on running as the dev-box user (vik); this test must pass on any host.
+if FROM_PHASE_OUT="$(DEV_USER="$(whoami)" bash "$SCRIPT" --dry-run --from-phase 0 2>&1)"; then
   echo "ok: --dry-run exits 0"
 else
   echo "FAIL: --dry-run exited nonzero"; echo "$FROM_PHASE_OUT" | tail -5; fail=1

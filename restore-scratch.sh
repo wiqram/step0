@@ -29,7 +29,9 @@ if [ -r "$SCRIPT_DIR/ntfy-lib.sh" ]; then source "$SCRIPT_DIR/ntfy-lib.sh"; else
   ntfy_push() { :; }; NTFY_TOPIC_RESTORE_SCRATCH=""
 fi
 
-MARKER="/mnt/minikube-backups/.restore-phase"   # last COMPLETED phase number
+# RESTORE_PHASE_MARKER: test seam only — tests must not read this host's REAL marker (a box that was
+# already restored holds 9, so a "fresh box" test would resume past every phase and never die).
+MARKER="${RESTORE_PHASE_MARKER:-/mnt/minikube-backups/.restore-phase}"   # last COMPLETED phase number
 DRY_RUN=0
 FROM_PHASE=""
 LOG_DIR="$SCRIPT_DIR/logs"
