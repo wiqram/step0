@@ -657,6 +657,16 @@ else warn "CLAUDE_CODE_TMPDIR unset — Claude Code session scratch lands in /tm
 cloud_crontab | grep -q 'host-tmp-guard.sh' && pass "host-tmp-guard reaper scheduled" \
   || warn "host-tmp-guard reaper not in the live cloud crontab — ./install-cron.sh --cloud"
 
+# ---- Agent memory guard (2026-11-18, agent-memory-guard.sh) -------------------------------
+# One unlimited `docker run` (python, ~46 GiB) froze the host 12 min on 2026-11-18. WARN, not FAIL:
+# the platform still serves, but the box is one runaway agent from a hard reset.
+section "Agent memory guard (IntelliJ cap + docker shim)"
+if [ -x "$VR_SELFDIR/agent-memory-guard.sh" ]; then
+  "$VR_SELFDIR/agent-memory-guard.sh" --status 2>&1 | while IFS= read -r _l; do
+    case "$_l" in PASS*) pass "${_l#PASS }";; FAIL*) warn "${_l#FAIL } (./agent-memory-guard.sh --install --live)";; WARN*) warn "${_l#WARN }";; esac
+  done
+else warn "agent-memory-guard.sh missing"; fi
+
 # ---- Self-hosted ntfy (2026-11-13): the platform's alert transport ---------------------
 # Every unattended job, Alertmanager and the yolo apps publish here (ntfy.sh's 250/day per-IP
 # quota dropped every alert on 2026-11-13). A dead alert server is indistinguishable from a

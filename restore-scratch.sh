@@ -954,6 +954,11 @@ phase8_automation() {
       && log "Claude Code scratch -> disk (CLAUDE_CODE_TMPDIR)" || log "WARN: host-tmp-guard --install-settings failed (re-run by hand)."
     sudo "$SCRIPT_DIR/host-tmp-guard.sh" --install-disk-tmp >/dev/null 2>&1 \
       && log "disk-backed /tmp configured (active after reboot)" || log "WARN: host-tmp-guard --install-disk-tmp failed — /tmp stays RAM-backed. Re-run: sudo $SCRIPT_DIR/host-tmp-guard.sh --install-disk-tmp"
+    # agent-memory-guard (2026-11-18): IntelliJ scope MemoryMax + docker --memory shim. Without it a
+    # rebuilt box is back to unbounded agents: one runaway `docker run` froze the host 12 min.
+    "$SCRIPT_DIR/agent-memory-guard.sh" --install >/dev/null 2>&1 \
+      && log "agent memory guard installed (IntelliJ scope cap + docker shim)" \
+      || log "WARN: agent-memory-guard --install failed — agents are UNBOUNDED. Re-run: $SCRIPT_DIR/agent-memory-guard.sh --install --live"
     sudo "$SCRIPT_DIR/docker-runtime-upgrade.sh" --hold >/dev/null 2>&1 \
       && log "docker/containerd held (docker-runtime-upgrade --hold; no auto-upgrade timer)" \
       || log "WARN: docker-runtime-upgrade --hold failed — docker-ce is UNHELD; an ad-hoc apt upgrade will restart the cluster. Re-run: sudo $SCRIPT_DIR/docker-runtime-upgrade.sh --hold"
