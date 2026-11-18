@@ -20,9 +20,13 @@
 #                   to `docker run|create` that has none, so a runaway dies ALONE in its own
 #                   cgroup (exit 137). Fail-open; skips minikube/privileged/GPU containers.
 #                   AGENT_DOCKER_MEM=16g overrides, AGENT_DOCKER_NO_LIMIT=1 bypasses.
-# No root needed (user manager + ~/.local/bin). Prod is 61G with the cluster at ~25-30G, hence 20G.
+#   3. shared budget (ROOT, optional) — /etc/systemd/system/agent-docker.slice (MemoryMax=12G,
+#                   MemorySwapMax=0). The shim puts every agent container in it via --cgroup-parent, so
+#                   N containers share ONE 12G budget instead of N x 8g. Cheap to skip: the shim only
+#                   adds --cgroup-parent when the unit file exists. `sudo ./agent-memory-guard.sh --install-slice`.
+# Layers 1-2 need no root (user manager + ~/.local/bin). Prod is 61G with the cluster at ~25-30G, hence 20G.
 #
-# --install [--live] (default: files only; --live also set-property --runtime on the running scope)
+# --install-slice (sudo) · --install [--live] (default: files only; --live also set-property --runtime on the running scope)
 # --status (exit 1 on a missing layer) · --uninstall · --dry-run
 ####################################
 set -u
@@ -30,6 +34,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UD="$HOME/.config/systemd/user"
 SCOPE_D="$UD/snap.intellij-idea.intellij-idea-.scope.d"; SCOPE_F="$SCOPE_D/memory-cap.conf"
 GNOME_D="$UD/org.gnome.Shell@ubuntu.service.d";          GNOME_F="$GNOME_D/oomd-avoid.conf"
+SLICE_F=/etc/systemd/system/agent-docker.slice; SLICE_MAX="${AGENT_SLICE_MAX:-12G}"
 SHIM="$HOME/.local/bin/docker"; SHIM_SRC="$SCRIPT_DIR/agent-guard/docker-shim"
 CAP_MAX="${AGENT_SCOPE_MAX:-20G}"; CAP_SWAP="${AGENT_SCOPE_SWAP:-4G}"
 MODE="${1:---status}"; LIVE=0; DRY=0
@@ -77,8 +82,22 @@ do_status() {
   if grep -q '^MemoryMax=' "$SCOPE_F" 2>/dev/null; then echo "PASS scope drop-in present"; else echo "FAIL scope drop-in missing ($SCOPE_F)"; bad=1; fi
   if grep -q 'ManagedOOMPreference=avoid' "$GNOME_F" 2>/dev/null; then echo "PASS gnome-shell oomd-avoid present"; else echo "FAIL gnome-shell oomd-avoid missing"; bad=1; fi
   if cmp -s "$SHIM_SRC" "$SHIM" 2>/dev/null; then echo "PASS docker shim installed and current"; else echo "FAIL docker shim missing/stale ($SHIM)"; bad=1; fi
+  if [ -f "$SLICE_F" ]; then echo "PASS shared agent-docker.slice budget present"; else echo "WARN no shared agent-docker.slice (containers capped per-container only) — sudo ./agent-memory-guard.sh --install-slice"; fi
   [ "$(command -v docker)" = "$SHIM" ] && echo "PASS shim first on PATH" || echo "WARN shim not first on this shell's PATH ($(command -v docker))"
   return $bad
+}
+
+do_install_slice() {
+  [ "$(id -u)" = 0 ] || { echo "needs root: sudo $0 --install-slice" >&2; return 1; }
+  cat > "$SLICE_F" <<EOC
+# Managed by STEP0/agent-memory-guard.sh — shared memory budget for ALL agent-launched containers.
+[Unit]
+Description=Agent docker containers (shared memory budget; see STEP0/agent-memory-guard.sh)
+[Slice]
+MemoryMax=$SLICE_MAX
+MemorySwapMax=0
+EOC
+  systemctl daemon-reload && echo "installed $SLICE_F (MemoryMax=$SLICE_MAX, no swap)"
 }
 
 do_uninstall() {
@@ -87,7 +106,7 @@ do_uninstall() {
 }
 
 case "$MODE" in
-  --install) do_install;; --status) do_status;; --uninstall) do_uninstall;;
+  --install) do_install;; --install-slice) do_install_slice;; --status) do_status;; --uninstall) do_uninstall;;
   --dry-run) DRY=1; do_install;;
   *) sed -n '2,/^####/p' "$0" | sed -n '1,40p' >&2; exit 2;;
 esac

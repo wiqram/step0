@@ -933,7 +933,7 @@ phase8_automation() {
   #     of pipeline logs incl. follower emails) is reachable from the whole bridge network
   #     after any Docker restart, with nothing to say so. See loki-nodeport-guard.sh.
   if [ "$DRY_RUN" = 1 ]; then
-    echo "  DRYRUN> sudo $SCRIPT_DIR/10gbe-link-watchdog.sh --install ; sudo $SCRIPT_DIR/enable-devbox-kube-access.sh --install ; sudo $SCRIPT_DIR/loki-nodeport-guard.sh --install ; sudo $SCRIPT_DIR/docker-runtime-upgrade.sh --hold ; sudo $SCRIPT_DIR/tailscale-access.sh --install ; $SCRIPT_DIR/host-tmp-guard.sh --install-settings ; sudo $SCRIPT_DIR/host-tmp-guard.sh --install-disk-tmp"
+    echo "  DRYRUN> sudo $SCRIPT_DIR/10gbe-link-watchdog.sh --install ; sudo $SCRIPT_DIR/agent-memory-guard.sh --install-slice ; $SCRIPT_DIR/agent-memory-guard.sh --install ; sudo $SCRIPT_DIR/enable-devbox-kube-access.sh --install ; sudo $SCRIPT_DIR/loki-nodeport-guard.sh --install ; sudo $SCRIPT_DIR/docker-runtime-upgrade.sh --hold ; sudo $SCRIPT_DIR/tailscale-access.sh --install ; $SCRIPT_DIR/host-tmp-guard.sh --install-settings ; sudo $SCRIPT_DIR/host-tmp-guard.sh --install-disk-tmp"
   else
     sudo "$SCRIPT_DIR/10gbe-link-watchdog.sh" --install >/dev/null 2>&1 \
       && log "10gbe-link-watchdog.service installed" || log "WARN: 10gbe-link-watchdog --install failed (re-run by hand)."
@@ -956,6 +956,9 @@ phase8_automation() {
       && log "disk-backed /tmp configured (active after reboot)" || log "WARN: host-tmp-guard --install-disk-tmp failed — /tmp stays RAM-backed. Re-run: sudo $SCRIPT_DIR/host-tmp-guard.sh --install-disk-tmp"
     # agent-memory-guard (2026-11-18): IntelliJ scope MemoryMax + docker --memory shim. Without it a
     # rebuilt box is back to unbounded agents: one runaway `docker run` froze the host 12 min.
+    sudo "$SCRIPT_DIR/agent-memory-guard.sh" --install-slice >/dev/null 2>&1 \
+      && log "agent-docker.slice shared budget installed" \
+      || log "WARN: agent-memory-guard --install-slice failed (per-container caps still apply). Re-run: sudo $SCRIPT_DIR/agent-memory-guard.sh --install-slice"
     "$SCRIPT_DIR/agent-memory-guard.sh" --install >/dev/null 2>&1 \
       && log "agent memory guard installed (IntelliJ scope cap + docker shim)" \
       || log "WARN: agent-memory-guard --install failed — agents are UNBOUNDED. Re-run: $SCRIPT_DIR/agent-memory-guard.sh --install --live"

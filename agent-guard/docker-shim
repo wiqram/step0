@@ -41,4 +41,6 @@ done
 
 inject=("--memory=$MEM")
 [ $has_swap = 0 ] && inject+=("--memory-swap=$MEM")   # swap == mem => no swap, fails fast instead of thrashing
+# shared budget across ALL agent containers (root-installed slice; harmless to omit)
+[ -f /etc/systemd/system/agent-docker.slice ] && inject+=("--cgroup-parent=agent-docker.slice")
 exec "$REAL" "${@:1:$idx}" "${inject[@]}" "${@:$((idx+1))}"
