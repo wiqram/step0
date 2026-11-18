@@ -1,0 +1,19 @@
+#!/usr/bin/python3 -I
+# Managed by STEP0/edge-hardening.sh (installed to /usr/local/sbin/yolo-f2b-ignore).
+# fail2ban ignorecommand: exit 0 = IGNORE (never ban), exit 1 = bannable.
+# FAIL-SAFE: any error, or an unreadable/empty Cloudflare list, means "never ban" — banning a Cloudflare edge
+# address would take every Cloudflare-fronted site down. The CF list is read LIVE from the generated
+# cloudflare_geo.conf, so --refresh-cf is picked up with no root and no fail2ban reload.
+import sys, ipaddress
+CF = "/home/cloud/Ideaprojects/nginx/data/nginx/custom/cloudflare_geo.conf"
+STATIC = ["127.0.0.0/8", "::1/128", "213.48.246.115/32", "192.168.50.0/24", "10.10.10.0/30",
+          "172.16.0.0/12", "100.64.0.0/10"]
+try:
+    ip = ipaddress.ip_address(sys.argv[1])
+    cf = [ipaddress.ip_network(l.split()[0]) for l in open(CF) if l[:1].isdigit() or l[:1] in "23abcdefABCDEF"]
+    if not cf:
+        sys.exit(0)
+    nets = [ipaddress.ip_network(n) for n in STATIC] + cf
+    sys.exit(0 if any(ip in n for n in nets if n.version == ip.version) else 1)
+except Exception:
+    sys.exit(0)

@@ -935,7 +935,7 @@ phase8_automation() {
   #     of pipeline logs incl. follower emails) is reachable from the whole bridge network
   #     after any Docker restart, with nothing to say so. See loki-nodeport-guard.sh.
   if [ "$DRY_RUN" = 1 ]; then
-    echo "  DRYRUN> sudo $SCRIPT_DIR/10gbe-link-watchdog.sh --install ; sudo $SCRIPT_DIR/agent-memory-guard.sh --install-slice ; $SCRIPT_DIR/agent-memory-guard.sh --install ; sudo $SCRIPT_DIR/enable-devbox-kube-access.sh --install ; sudo $SCRIPT_DIR/loki-nodeport-guard.sh --install ; sudo $SCRIPT_DIR/docker-runtime-upgrade.sh --hold ; sudo $SCRIPT_DIR/tailscale-access.sh --install ; $SCRIPT_DIR/host-tmp-guard.sh --install-settings ; sudo $SCRIPT_DIR/host-tmp-guard.sh --install-disk-tmp"
+    echo "  DRYRUN> sudo $SCRIPT_DIR/10gbe-link-watchdog.sh --install ; sudo $SCRIPT_DIR/agent-memory-guard.sh --install-slice ; sudo $SCRIPT_DIR/edge-hardening.sh --install-rpcbind ; sudo $SCRIPT_DIR/edge-hardening.sh --install-fail2ban ; $SCRIPT_DIR/agent-memory-guard.sh --install ; sudo $SCRIPT_DIR/enable-devbox-kube-access.sh --install ; sudo $SCRIPT_DIR/loki-nodeport-guard.sh --install ; sudo $SCRIPT_DIR/docker-runtime-upgrade.sh --hold ; sudo $SCRIPT_DIR/tailscale-access.sh --install ; $SCRIPT_DIR/host-tmp-guard.sh --install-settings ; sudo $SCRIPT_DIR/host-tmp-guard.sh --install-disk-tmp"
   else
     sudo "$SCRIPT_DIR/10gbe-link-watchdog.sh" --install >/dev/null 2>&1 \
       && log "10gbe-link-watchdog.service installed" || log "WARN: 10gbe-link-watchdog --install failed (re-run by hand)."
@@ -956,6 +956,17 @@ phase8_automation() {
       && log "Claude Code scratch -> disk (CLAUDE_CODE_TMPDIR)" || log "WARN: host-tmp-guard --install-settings failed (re-run by hand)."
     sudo "$SCRIPT_DIR/host-tmp-guard.sh" --install-disk-tmp >/dev/null 2>&1 \
       && log "disk-backed /tmp configured (active after reboot)" || log "WARN: host-tmp-guard --install-disk-tmp failed — /tmp stays RAM-backed. Re-run: sudo $SCRIPT_DIR/host-tmp-guard.sh --install-disk-tmp"
+    # edge-hardening (2026-11-18): host layers of the edge hardening — rpcbind :111 firewalled to loopback+LAN
+    # (NOT disabled: the WD backup NAS mount is NFSv3) and the fail2ban npm-scanner jail (bans secret-path
+    # scanners at DOCKER-USER, Cloudflare/ourselves/LAN exempt). The NGINX side (real-IP/XFF fix, Cloudflare
+    # origin lock, loopback-only :81, default-444) is not installed here: it rides in the nginx repo's
+    # committed confs + compose and the restored NPM DB, applied when start-scratch brings NPM up.
+    sudo "$SCRIPT_DIR/edge-hardening.sh" --install-rpcbind >/dev/null 2>&1 \
+      && log "rpcbind :111 firewalled (edge-hardening)" \
+      || log "WARN: edge-hardening --install-rpcbind failed — :111 is open to every interface. Re-run: sudo $SCRIPT_DIR/edge-hardening.sh --install-rpcbind"
+    sudo "$SCRIPT_DIR/edge-hardening.sh" --install-fail2ban >/dev/null 2>&1 \
+      && log "fail2ban npm-scanner jail installed (edge-hardening)" \
+      || log "WARN: edge-hardening --install-fail2ban failed — no scanner banning. Re-run: sudo $SCRIPT_DIR/edge-hardening.sh --install-fail2ban"
     # agent-memory-guard (2026-11-18): IntelliJ scope MemoryMax + docker --memory shim. Without it a
     # rebuilt box is back to unbounded agents: one runaway `docker run` froze the host 12 min.
     sudo "$SCRIPT_DIR/agent-memory-guard.sh" --install-slice >/dev/null 2>&1 \

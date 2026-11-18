@@ -657,6 +657,20 @@ else warn "CLAUDE_CODE_TMPDIR unset — Claude Code session scratch lands in /tm
 cloud_crontab | grep -q 'host-tmp-guard.sh' && pass "host-tmp-guard reaper scheduled" \
   || warn "host-tmp-guard reaper not in the live cloud crontab — ./install-cron.sh --cloud"
 
+# ---- Edge hardening (2026-11-18, edge-hardening.sh) --------------------------------------------
+# The X-Real-IP forgery (a container got HTTP 200 from Vault by sending X-Real-IP: 213.48.246.115), XFF
+# spoofing, the Cloudflare origin bypass, the published NPM admin port, rpcbind :111 and secret-path
+# scanning. FAIL is deliberate for the ones that re-open a hole or can 403 real visitors; the script's own
+# FAIL/WARN severity is kept. Read-only; the forge probe runs from the minikube node (a private peer).
+section "Edge hardening (real-IP trust, XFF, Cloudflare origin lock, :81, rpcbind, fail2ban)"
+if [ -x "$VR_SELFDIR/edge-hardening.sh" ]; then
+  "$VR_SELFDIR/edge-hardening.sh" --status 2>&1 | while IFS= read -r _l; do
+    case "$_l" in PASS*) pass "${_l#PASS }";; FAIL*) fail "${_l#FAIL }";; WARN*) warn "${_l#WARN }";; esac
+  done
+else warn "edge-hardening.sh missing"; fi
+cloud_crontab | grep -q 'edge-hardening.sh --refresh-cf' && pass "Cloudflare range refresh scheduled" \
+  || warn "Cloudflare range refresh not in the live cloud crontab — ./install-cron.sh --cloud"
+
 # ---- Agent memory guard (2026-11-18, agent-memory-guard.sh) -------------------------------
 # One unlimited `docker run` (python, ~46 GiB) froze the host 12 min on 2026-11-18. WARN, not FAIL:
 # the platform still serves, but the box is one runaway agent from a hard reset.

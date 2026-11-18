@@ -1,0 +1,19 @@
+# Managed by STEP0/edge-hardening.sh (installed to /etc/fail2ban/jail.d/npm-scanner.local).
+# See edge-hardening.sh for the design (and why Cloudflare is exempt). @LOGDIR@ is substituted at install.
+[sshd]
+# the stock Debian sshd jail is out of scope here
+enabled = false
+
+[npm-scanner]
+enabled       = true
+filter        = npm-scanner
+backend       = polling
+logpath       = @LOGDIR@/proxy_host-*.log
+                @LOGDIR@/default-host_access.log
+maxretry      = 3
+findtime      = 10m
+bantime       = 24h
+ignoreip      = 127.0.0.0/8 ::1 213.48.246.115 192.168.50.0/24 10.10.10.0/30 172.16.0.0/12 100.64.0.0/10
+ignorecommand = /usr/local/sbin/yolo-f2b-ignore <ip>
+# DOCKER-USER, not INPUT: NPM is a container, so scanner traffic is FORWARDED (INPUT would match nothing).
+action        = iptables-allports[name=npm-scanner, chain=DOCKER-USER, blocktype=DROP]
