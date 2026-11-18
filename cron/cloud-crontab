@@ -142,6 +142,10 @@ CRON_TZ=Europe/London
 # ntfy yolo-private-cloud-resource-crunch if the refresh fails or the files go >45 days old. Fails safe:
 # bad fetch / bad validation / failing `nginx -t` keeps the previous files.
 23 5 * * 0 /home/cloud/Ideaprojects/STEP0/edge-hardening.sh --refresh-cf --notify >> /home/cloud/Ideaprojects/STEP0/logs/edge-hardening.log 2>&1
+# Edge-hardening DRIFT watch: re-runs edge-hardening.sh --status and pages (debounced, +cleared note) only on
+# FAIL — NPM recreated with a wildcard :81, an overwritten conf losing the XFF/real-IP fix, a locked vhost that
+# left Cloudflare, fail2ban/rpcbind guard down. Other agents ship changes to this host continuously.
+*/15 * * * * /home/cloud/Ideaprojects/STEP0/edge-hardening.sh --watch >> /home/cloud/Ideaprojects/STEP0/logs/edge-hardening.log 2>&1
 # YOLO heal watchdog (added live by the yolo agents 2026-11-14, adopted here so install-cron
 # does not delete it). Owned by IG-Trading-Microservices ops/agent/.
 */10 * * * * /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/heal-watchdog.sh >> /home/cloud/IdeaProjects/IG-Trading-Microservices/ops/agent/logs/watchdog.log 2>&1

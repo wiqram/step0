@@ -286,6 +286,32 @@ install_all() { # root: host layers + best-effort nginx-side ensures
   if npm_up; then refresh_cf || true; ensure_default_444 || true; else say "NPM not up yet — run '$0 --refresh-cf' and '--ensure-default-444' after it starts (the nginx repo already carries the committed conf + generated CF files)"; fi
 }
 
+# ---- drift watch (cron, every 15 min) ----------------------------------------------------------------
+# Re-runs --status and pages ONLY on FAIL lines (WARNs are for humans running --status/verify-recovery). The
+# hardening can silently regress while other agents ship: NPM recreated with '81:81', a regenerated/overwritten
+# custom conf losing the XFF fix, a locked vhost leaving Cloudflare. Debounced: one page per distinct failure
+# set per 6 h, plus one "cleared" note. State: logs/.edge-hardening-state (delete to re-arm).
+watch_drift() {
+  local st="$SCRIPT_DIR/logs/.edge-hardening-state" out fails sig now last lastsig
+  mkdir -p "$SCRIPT_DIR/logs"
+  out=$(do_status 2>&1); fails=$(grep '^FAIL' <<<"$out"); now=$(date +%s)
+  sig=$(printf '%s' "$fails" | md5sum | cut -c1-12)
+  last=0; lastsig=ok; [ -f "$st" ] && read -r last lastsig < "$st"
+  if [ -n "$fails" ]; then
+    if [ "$sig" != "$lastsig" ] || [ $((now-${last:-0})) -ge 21600 ]; then
+      command -v ntfy_push >/dev/null 2>&1 && ntfy_push "$NTFY_TOPIC_RESOURCE_CRUNCH" "Edge hardening DRIFT on private-cloud" \
+        "$(head -c 900 <<<"$fails") — run: STEP0/edge-hardening.sh --status; docs/architecture.md section 3 Edge hardening" high rotating_light
+      echo "$now $sig" > "$st"
+    fi
+    echo "$fails"; return 1
+  fi
+  if [ "$lastsig" != ok ]; then
+    command -v ntfy_push >/dev/null 2>&1 && ntfy_push "$NTFY_TOPIC_RESOURCE_CRUNCH" "Edge hardening cleared" "All edge-hardening checks pass again." default white_check_mark
+    echo "$now ok" > "$st"
+  fi
+  echo "edge hardening: no drift"; return 0
+}
+
 # test seam: tests/test-edge-hardening.sh sources this file for the pure helpers
 [ "${EDGE_LIB_ONLY:-0}" = 1 ] && return 0 2>/dev/null
 
@@ -300,10 +326,11 @@ case "$MODE" in
     exit $rc;;
   --install) install_all;;
   --status) do_status;;
+  --watch) watch_drift;;
   --install-rpcbind) rpc_install;;
   --install-fail2ban) f2b_install;;
   --ensure-default-444) ensure_default_444;;
   --apply-rpcbind-guard) rpc_apply;;
   --remove-rpcbind-guard) rpc_remove;;
-  *) echo "usage: $0 --install | --status | --refresh-cf [--notify] | --install-rpcbind | --install-fail2ban | --ensure-default-444 | --dry-run" >&2; exit 2;;
+  *) echo "usage: $0 --install | --status | --watch | --refresh-cf [--notify] | --install-rpcbind | --install-fail2ban | --ensure-default-444 | --dry-run" >&2; exit 2;;
 esac
